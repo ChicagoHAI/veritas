@@ -1,0 +1,117 @@
+# Generalization Evaluation
+
+You are evaluating whether the findings of this research project generalize beyond the original experimental setting.
+
+## Repository Path
+{{ repo_path }}
+
+{% if has_plan %}
+## Plan File
+{{ plan_path }}
+{% endif %}
+
+## Output Directory
+{{ output_dir }}
+
+## Your Task
+
+Test whether the reported findings generalize to:
+- New models not used in the original work
+- New data instances not in the original dataset
+- Similar but different tasks (for proposed methods)
+
+## Checklist Items
+
+Evaluate each as PASS, FAIL, or NA:
+
+### GT1: Model Generalization
+The finding should be predictable on new models not used in the original work.
+- **PASS**: Finding holds on at least one model not in original paper
+- **FAIL**: Finding does not hold on any tested new models
+- **NA**: Not applicable (e.g., single-model study by design)
+
+### GT2: Data Generalization
+The finding should be predictable on new data instances.
+- **PASS**: Finding holds on new data not in original dataset
+- **FAIL**: Finding does not hold on new data
+- **NA**: Not applicable
+
+### GT3: Method Generalization
+If a new method was proposed, it should apply to similar tasks.
+- **PASS**: Method works on at least one similar task
+- **FAIL**: Method fails on similar tasks
+- **NA**: No new method proposed
+
+## Evaluation Rules
+
+- **Maximum 3 trial examples per item** - don't exhaustively test
+- **One successful example = PASS** - you only need one working case
+- **Models/data must not appear in the original paper**
+- **Document each test case clearly**
+
+## Evaluation Process
+
+1. Identify the core findings/claims from the paper/documentation
+2. Identify models/datasets used in original work
+3. Select test cases for each generalization dimension
+4. Run tests (up to 3 per dimension)
+5. Document results clearly
+
+## Output Requirements
+
+Save your evaluation to `{{ output_dir }}/generalization_evaluation.json`:
+
+```json
+{
+  "Checklist": {
+    "GT1": "PASS or FAIL or NA",
+    "GT2": "PASS or FAIL or NA",
+    "GT3": "PASS or FAIL or NA"
+  },
+  "Rationale": {
+    "GT1": "Explanation with tested examples",
+    "GT2": "Explanation with tested examples",
+    "GT3": "Explanation with tested examples"
+  },
+  "OriginalSetup": {
+    "models": ["list of models used"],
+    "datasets": ["list of datasets used"],
+    "methods": ["methods proposed if any"]
+  },
+  "GeneralizationTests": {
+    "GT1": [
+      {
+        "test_model": "model name",
+        "result": "success or failure",
+        "metrics": {"key": "value"},
+        "notes": "observations"
+      }
+    ],
+    "GT2": [
+      {
+        "test_data": "data description",
+        "result": "success or failure",
+        "metrics": {"key": "value"},
+        "notes": "observations"
+      }
+    ],
+    "GT3": [
+      {
+        "test_task": "task description",
+        "result": "success or failure",
+        "notes": "observations"
+      }
+    ]
+  }
+}
+```
+
+## Important Notes
+
+- Be systematic but not exhaustive
+- Choose reasonable test cases (similar difficulty, domain)
+- Document why you chose each test case
+- Record both successes and failures
+- Consider compute/time constraints
+
+Begin your evaluation now. Start by understanding the original experimental setup.

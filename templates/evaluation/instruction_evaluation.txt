@@ -1,0 +1,117 @@
+# Instruction Following Evaluation
+
+You are evaluating whether the implementation correctly follows the original research goals and instructions.
+
+## Repository Path
+{{ repo_path }}
+
+{% if has_plan %}
+## Plan File
+{{ plan_path }}
+{% endif %}
+
+## Output Directory
+{{ output_dir }}
+
+## Your Task
+
+Evaluate the alignment between stated goals/instructions and the actual implementation.
+
+## Checklist Items
+
+Evaluate each as PASS or FAIL:
+
+### TS1: Goal Alignment
+The implementation goal should align with the original research goal.
+- **PASS**: Implementation clearly serves the stated research objective
+- **FAIL**: Implementation deviates from or ignores the stated objective
+
+### TS2: Plan Adherence
+The methodology should cover all required analyses from the plan.
+- **PASS**: All plan steps are implemented
+- **FAIL**: Plan steps are skipped or significantly modified without justification
+- **Note**: If no Plan file exists, mark as FAIL with reason "No Plan file found"
+
+### TS3: Hypothesis Coverage
+All hypotheses from the plan should be tested.
+- **PASS**: Each hypothesis has corresponding experiments/tests
+- **FAIL**: Some hypotheses are not tested
+- **Note**: If no hypotheses stated, mark as NA
+
+### TS4: Component Matching
+Implementation components should match their described functions.
+- **PASS**: Each function/module does what its name/docstring claims
+- **FAIL**: Mismatches between names/docs and actual behavior
+
+## Evaluation Process
+
+1. Identify the stated goal from README or plan
+2. List all planned steps/hypotheses
+3. Map each planned item to implementation
+4. Verify component behavior matches description
+5. Document any deviations
+
+## Output Requirements
+
+Save your evaluation to `{{ output_dir }}/instruction_evaluation.json`:
+
+```json
+{
+  "Checklist": {
+    "TS1": "PASS or FAIL",
+    "TS2": "PASS or FAIL",
+    "TS3": "PASS or FAIL or NA",
+    "TS4": "PASS or FAIL"
+  },
+  "Rationale": {
+    "TS1": "Explanation with evidence",
+    "TS2": "Explanation with evidence",
+    "TS3": "Explanation with evidence",
+    "TS4": "Explanation with evidence"
+  },
+  "GoalAnalysis": {
+    "stated_goal": "The research objective",
+    "implemented_goal": "What the code actually does",
+    "alignment": "high/medium/low"
+  },
+  "PlanCoverage": {
+    "plan_exists": true,
+    "total_steps": 0,
+    "implemented_steps": 0,
+    "missing_steps": ["list"],
+    "extra_steps": ["list"]
+  },
+  "HypothesisCoverage": {
+    "hypotheses": [
+      {
+        "hypothesis": "Statement",
+        "tested": true,
+        "test_location": "file:line"
+      }
+    ]
+  },
+  "ComponentAnalysis": [
+    {
+      "component": "function/module name",
+      "described_function": "What docs say it does",
+      "actual_function": "What it actually does",
+      "match": true
+    }
+  ]
+}
+```
+
+## Special Cases
+
+- **No Plan File**: If no plan.md or planning document exists, TS1 and TS2 should be marked FAIL with the note "No Plan file found"
+- **No Hypotheses**: If the project doesn't have explicit hypotheses, TS3 should be marked NA
+- **AI-Generated Work**: This evaluation is particularly relevant for AI-agent-generated projects
+
+## Important Notes
+
+- Be objective - focus on factual alignment, not quality
+- Document specific evidence for each finding
+- Consider implicit vs. explicit goals
+- Note any justified deviations (explained changes are acceptable)
+
+Begin your evaluation now. Start by reading the plan file and README.

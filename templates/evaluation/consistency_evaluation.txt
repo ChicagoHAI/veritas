@@ -1,0 +1,109 @@
+# Consistency Evaluation
+
+You are evaluating the internal consistency of a research project - ensuring alignment between documentation, code, and claims.
+
+## Repository Path
+{{ repo_path }}
+
+{% if has_plan %}
+## Plan File
+{{ plan_path }}
+{% endif %}
+
+## Output Directory
+{{ output_dir }}
+
+## Your Task
+
+Analyze the consistency between:
+- Code implementation and its documentation
+- Reported results and actual outputs
+- Plan/methodology and implementation
+- Claims and supporting evidence
+
+## Checklist Items
+
+Evaluate each item as PASS or FAIL:
+
+### CS1: Results vs Conclusion
+All evaluable conclusions in the documentation (README, REPORT.md, etc.) must match what the code actually produces.
+- **PASS**: Every stated result can be traced to code that produces that output
+- **FAIL**: Any conclusion is unsupported by or contradicts actual code output
+
+### CS2: Implementation Follows Plan
+If a plan exists, implementation should reflect the planned steps.
+- **PASS**: Each plan step has corresponding implementation
+- **FAIL**: Plan steps are missing or implemented differently without explanation
+
+### CS3: Effect Size
+Reported effects should be non-trivial relative to baseline or natural variability.
+- **PASS**: Results show meaningful differences, not noise
+- **FAIL**: Effects are within expected random variation or trivially small
+
+### CS4: Justification
+Key design choices and intermediate conclusions should be explicitly justified.
+- **PASS**: Major decisions (architecture, hyperparameters, etc.) have documented rationale
+- **FAIL**: Important choices are made without explanation
+
+### CS5: Statistical Significance
+Key results should report uncertainty measures or statistical tests.
+- **PASS**: Results include confidence intervals, p-values, or multiple runs
+- **FAIL**: Single point estimates without uncertainty quantification
+
+## Evaluation Process
+
+1. Read all documentation files (README, REPORT, plan.md, etc.)
+2. Identify all claims and stated results
+3. Trace each claim to supporting code/data
+4. Check for contradictions or unsupported statements
+5. Verify effect sizes are meaningful
+6. Check for statistical rigor
+
+## Output Requirements
+
+Save your evaluation to `{{ output_dir }}/consistency_evaluation.json`:
+
+```json
+{
+  "Checklist": {
+    "CS1": "PASS or FAIL",
+    "CS2": "PASS or FAIL",
+    "CS3": "PASS or FAIL",
+    "CS4": "PASS or FAIL",
+    "CS5": "PASS or FAIL"
+  },
+  "Rationale": {
+    "CS1": "Specific explanation with evidence",
+    "CS2": "Specific explanation with evidence",
+    "CS3": "Specific explanation with evidence",
+    "CS4": "Specific explanation with evidence",
+    "CS5": "Specific explanation with evidence"
+  },
+  "ClaimTracing": [
+    {
+      "claim": "Statement from documentation",
+      "source_file": "README.md",
+      "supporting_code": "path/to/code.py:line",
+      "verified": true,
+      "notes": "Verification details"
+    }
+  ],
+  "Inconsistencies": [
+    {
+      "description": "Description of inconsistency",
+      "location1": "file1.md",
+      "location2": "file2.py",
+      "severity": "high/medium/low"
+    }
+  ]
+}
+```
+
+## Important Notes
+
+- Focus on factual verification, not subjective quality judgments
+- Document specific evidence for each finding
+- Consider both explicit claims and implicit assumptions
+- Check numerical values carefully
+
+Begin your evaluation now. Start by reading the README and any documentation files.
