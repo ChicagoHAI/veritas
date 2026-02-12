@@ -197,16 +197,26 @@ class PlanExtractor:
         # This is a simplified implementation
         # A full implementation would use an AI to identify relevant quotes
         for key in ["objective", "hypothesis", "methodology"]:
-            if key in plan and "text" in plan[key]:
-                search_text = plan[key].get("text", plan[key].get("items", [""])[0] if isinstance(plan[key].get("items"), list) else "")
-                if search_text:
-                    for page in pages:
-                        if search_text[:50].lower() in page["text"].lower():
-                            plan[key]["evidence"] = [{
-                                "page": page["number"],
-                                "quote": search_text[:200]
-                            }]
-                            break
+            if key not in plan:
+                continue
+
+            entry = plan[key]
+            search_text = None
+
+            if "text" in entry:
+                search_text = entry["text"]
+            elif "items" in entry and isinstance(entry["items"], list) and entry["items"]:
+                first_item = entry["items"][0]
+                search_text = first_item if isinstance(first_item, str) else str(first_item)
+
+            if search_text:
+                for page in pages:
+                    if search_text[:50].lower() in page["text"].lower():
+                        entry["evidence"] = [{
+                            "page": page["number"],
+                            "quote": search_text[:200]
+                        }]
+                        break
 
         return plan
 
