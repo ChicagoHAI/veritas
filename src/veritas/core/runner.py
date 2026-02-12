@@ -203,7 +203,7 @@ class ReplicationRunner:
         """Invoke Claude CLI to run evaluation."""
         try:
             # Write prompt to temp file
-            prompt_file = self.config.output_dir / "current_prompt.txt"
+            prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
 
             # Build command
@@ -276,7 +276,7 @@ class ReplicationRunner:
     ) -> bool:
         """Invoke Gemini CLI to run evaluation."""
         try:
-            prompt_file = self.config.output_dir / "current_prompt.txt"
+            prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
 
             cmd = ["gemini", "-p", str(prompt_file)]
