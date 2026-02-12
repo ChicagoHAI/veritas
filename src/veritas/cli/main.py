@@ -155,7 +155,7 @@ def extract_plan(
         if output is None:
             output = paper.parent / f"{paper.stem}_plan.md"
 
-        output.write_text(plan)
+        output.write_text(plan, encoding='utf-8')
         console.print(f"[green]Plan saved to:[/green] {output}")
 
     except Exception as e:
