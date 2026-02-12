@@ -300,31 +300,17 @@ class ReplicationRunner:
 
     def _extract_json_result(self, output: str, output_path: Path) -> bool:
         """Extract JSON result from provider output."""
-        try:
-            # Try to find JSON in the output
-            import re
+        data = extract_json_from_text(output)
+        if data is not None:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
 
-            # Look for JSON block
-            json_match = re.search(r'\{[\s\S]*"Checklist"[\s\S]*\}', output)
-            if json_match:
-                json_str = json_match.group()
-                # Validate it's proper JSON
-                data = json.loads(json_str)
+        # If no JSON found, check if output file was created directly
+        if output_path.exists():
+            return True
 
-                # Save to output path
-                with open(output_path, 'w') as f:
-                    json.dump(data, f, indent=2)
-
-                return True
-
-            # If no JSON found, check if output file was created directly
-            if output_path.exists():
-                return True
-
-            return False
-
-        except json.JSONDecodeError:
-            return False
+        return False
 
     def _generate_report(
         self,
