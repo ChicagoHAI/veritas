@@ -12,6 +12,7 @@ from veritas.core.config import Config
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
+from veritas.utils.json_utils import extract_json_from_text
 
 
 @dataclass
