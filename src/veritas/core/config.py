@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Optional, List
 
 
+# All valid AI providers
+VALID_PROVIDERS = ["claude", "codex", "gemini"]
+
 # All available evaluation types
 ALL_EVALUATIONS = [
     "code",           # Code quality evaluation
@@ -56,6 +59,10 @@ class Config:
         for e in self.evaluations:
             if e not in ALL_EVALUATIONS:
                 raise ValueError(f"Unknown evaluation type: {e}. Valid options: {ALL_EVALUATIONS}")
+
+        # Validate provider
+        if self.provider.lower() not in VALID_PROVIDERS:
+            raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
 
     @property
     def has_paper(self) -> bool:
