@@ -176,7 +176,7 @@ def report(
         "--output", "-o",
         help="Output path for the report",
     ),
-    format: str = typer.Option(
+    output_format: str = typer.Option(
         "all",
         "--format", "-f",
         help="Output format: md, pdf, or all",
@@ -197,8 +197,8 @@ def report(
         report_path, pdf_path = generator.generate(
             evaluation_dir=evaluation_dir,
             output_path=output,
-            generate_pdf=(format in ["pdf", "all"]),
-            generate_md=(format in ["md", "all"]),
+            generate_pdf=(output_format in ["pdf", "all"]),
+            generate_md=(output_format in ["md", "all"]),
         )
 
         if report_path:
