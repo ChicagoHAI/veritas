@@ -38,40 +38,11 @@ class PlanExtractor:
 
     def _read_pdf(self, paper_path: Path) -> tuple[str, List[Dict]]:
         """Read text content from PDF."""
-        try:
-            import pdfplumber
+        from veritas.utils.pdf import read_pdf, read_pdf_pages
 
-            text_parts = []
-            pages = []
-
-            with pdfplumber.open(paper_path) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    page_text = page.extract_text() or ""
-                    text_parts.append(page_text)
-                    pages.append({
-                        "number": i + 1,
-                        "text": page_text
-                    })
-
-            return "\n\n".join(text_parts), pages
-
-        except ImportError:
-            # Fallback to pypdf
-            from pypdf import PdfReader
-
-            reader = PdfReader(paper_path)
-            text_parts = []
-            pages = []
-
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text() or ""
-                text_parts.append(page_text)
-                pages.append({
-                    "number": i + 1,
-                    "text": page_text
-                })
-
-            return "\n\n".join(text_parts), pages
+        text = read_pdf(paper_path)
+        pages = read_pdf_pages(paper_path)
+        return text, pages
 
     def _extract_plan_structure(
         self,
