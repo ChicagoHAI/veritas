@@ -99,7 +99,7 @@ class ReplicationRunner:
                 with_evidence=True
             )
             plan_path = self.config.output_dir / "extracted_plan.md"
-            plan_path.write_text(plan_content)
+            plan_path.write_text(plan_content, encoding='utf-8')
             return plan_path
 
         return None
@@ -138,7 +138,7 @@ class ReplicationRunner:
 
             # Save the prompt for reference
             prompt_path = self.config.output_dir / f"{eval_name}_prompt.txt"
-            prompt_path.write_text(prompt)
+            prompt_path.write_text(prompt, encoding='utf-8')
 
             # Run the evaluation via AI provider
             output_json_path = self.config.output_dir / f"{eval_name}_evaluation.json"
@@ -151,7 +151,7 @@ class ReplicationRunner:
 
             if success and output_json_path.exists():
                 # Parse the results
-                with open(output_json_path) as f:
+                with open(output_json_path, encoding='utf-8') as f:
                     data = json.load(f)
 
                 return EvaluationResult(
@@ -204,7 +204,7 @@ class ReplicationRunner:
         try:
             # Write prompt to temp file
             prompt_file = self.config.output_dir / "current_prompt.txt"
-            prompt_file.write_text(prompt)
+            prompt_file.write_text(prompt, encoding='utf-8')
 
             # Build command
             cmd = [
@@ -277,7 +277,7 @@ class ReplicationRunner:
         """Invoke Gemini CLI to run evaluation."""
         try:
             prompt_file = self.config.output_dir / "current_prompt.txt"
-            prompt_file.write_text(prompt)
+            prompt_file.write_text(prompt, encoding='utf-8')
 
             cmd = ["gemini", "-p", str(prompt_file)]
 
