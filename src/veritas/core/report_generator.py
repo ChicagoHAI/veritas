@@ -488,7 +488,15 @@ class ReportGenerator:
 """
         content = md_content
 
-        # Convert headers
+        # Step 1: Remove emoji before any processing
+        content = re.sub(r'[✅❌⚠️➖]', '', content)
+
+        # Step 2: Escape special LaTeX characters in raw markdown
+        content = content.replace('&', '\\&')
+        content = content.replace('%', '\\%')
+        content = content.replace('_', '\\_')
+
+        # Step 3: Convert markdown to LaTeX commands
         content = re.sub(r'^# (.+)$', r'\\section*{\1}', content, flags=re.MULTILINE)
         content = re.sub(r'^## (.+)$', r'\\subsection*{\1}', content, flags=re.MULTILINE)
         content = re.sub(r'^### (.+)$', r'\\subsubsection*{\1}', content, flags=re.MULTILINE)
@@ -521,14 +529,6 @@ class ReportGenerator:
             new_lines.append('\\end{itemize}')
 
         content = '\n'.join(new_lines)
-
-        # Escape special characters
-        content = content.replace('%', '\\%')
-        content = content.replace('_', '\\_')
-        content = content.replace('&', '\\&')
-
-        # Handle emoji (remove for LaTeX)
-        content = re.sub(r'[✅❌⚠️➖]', '', content)
 
         latex += content
         latex += r"""
