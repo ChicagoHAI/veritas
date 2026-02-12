@@ -20,9 +20,9 @@ class EvaluationResult:
     """Result of a single evaluation."""
     name: str
     success: bool
-    checklist: Dict[str, str] = None
-    rationale: Dict[str, str] = None
-    metrics: Dict[str, Any] = None
+    checklist: Optional[Dict[str, str]] = None
+    rationale: Optional[Dict[str, str]] = None
+    metrics: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     output_path: Optional[Path] = None
 
@@ -31,7 +31,7 @@ class EvaluationResult:
 class RunResult:
     """Result of the full replication run."""
     success: bool
-    evaluations: List[EvaluationResult] = None
+    evaluations: Optional[List[EvaluationResult]] = None
     report_path: Optional[Path] = None
     pdf_path: Optional[Path] = None
     error: Optional[str] = None
