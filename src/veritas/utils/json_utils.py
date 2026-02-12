@@ -8,14 +8,14 @@ from typing import Any, Optional
 
 def load_json(path: Path) -> dict:
     """Load JSON from file."""
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
 def save_json(data: dict, path: Path, indent: int = 2):
     """Save dict to JSON file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=indent)
 
 
