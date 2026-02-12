@@ -48,7 +48,7 @@ class ReportGenerator:
 
         if generate_md:
             md_path = output_path.with_suffix(".md")
-            md_path.write_text(md_content)
+            md_path.write_text(md_content, encoding='utf-8')
 
         if generate_pdf:
             pdf_path = output_path.with_suffix(".pdf")
@@ -91,7 +91,7 @@ class ReportGenerator:
 
         # Write outputs
         md_path = output_dir / "replication_report.md"
-        md_path.write_text(md_content)
+        md_path.write_text(md_content, encoding='utf-8')
 
         pdf_path = None
         if generate_pdf:
@@ -117,7 +117,7 @@ class ReportGenerator:
             filepath = evaluation_dir / filename
             if filepath.exists():
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding='utf-8') as f:
                         data = json.load(f)
                     results[eval_name] = {
                         "success": True,
@@ -411,7 +411,7 @@ class ReportGenerator:
         # Try pandoc first
         try:
             md_file = working_dir / "temp_report.md"
-            md_file.write_text(md_content)
+            md_file.write_text(md_content, encoding='utf-8')
 
             subprocess.run(
                 ["pandoc", str(md_file), "-o", str(output_path),
@@ -448,7 +448,7 @@ class ReportGenerator:
         latex_content = self._markdown_to_latex(md_content)
 
         tex_file = working_dir / "temp_report.tex"
-        tex_file.write_text(latex_content)
+        tex_file.write_text(latex_content, encoding='utf-8')
 
         try:
             subprocess.run(
