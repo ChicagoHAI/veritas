@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from veritas.core.config import Config, ALL_EVALUATIONS
+from veritas.core.config import Config, ALL_EVALUATIONS, VALID_PROVIDERS
 
 
 class TestConfig:
@@ -86,3 +86,20 @@ class TestConfig:
 
         config_with_plan = Config(repo_path=repo, plan_path=plan)
         assert config_with_plan.has_plan
+
+    def test_invalid_provider(self, tmp_path):
+        """Test that invalid provider raises error."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            Config(repo_path=repo, provider="invalid_provider")
+
+    def test_valid_providers(self, tmp_path):
+        """Test that all valid providers are accepted."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        for provider in VALID_PROVIDERS:
+            config = Config(repo_path=repo, provider=provider)
+            assert config.provider == provider
