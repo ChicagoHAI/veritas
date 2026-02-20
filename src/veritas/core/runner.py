@@ -2,9 +2,7 @@
 
 import json
 import subprocess
-import os
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -12,7 +10,6 @@ from veritas.core.config import Config
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.json_utils import extract_json_from_text
 
 
 @dataclass
@@ -223,13 +220,7 @@ class ReplicationRunner:
                 text=True,
             )
 
-            # Check for JSON output in response
-            if result.returncode == 0:
-                # Try to extract JSON from output
-                output = result.stdout
-                return self._extract_json_result(output, output_path)
-
-            return False
+            return result.returncode == 0
 
         except subprocess.TimeoutExpired:
             print(f"  Timeout after {self.config.timeout}s")
@@ -260,10 +251,7 @@ class ReplicationRunner:
                 text=True,
             )
 
-            if result.returncode == 0:
-                return self._extract_json_result(result.stdout, output_path)
-
-            return False
+            return result.returncode == 0
 
         except Exception as e:
             print(f"  Error invoking Codex: {e}")
@@ -290,28 +278,11 @@ class ReplicationRunner:
                 text=True,
             )
 
-            if result.returncode == 0:
-                return self._extract_json_result(result.stdout, output_path)
-
-            return False
+            return result.returncode == 0
 
         except Exception as e:
             print(f"  Error invoking Gemini: {e}")
             return False
-
-    def _extract_json_result(self, output: str, output_path: Path) -> bool:
-        """Extract JSON result from provider output."""
-        data = extract_json_from_text(output)
-        if data is not None:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-
-        # If no JSON found, check if output file was created directly
-        if output_path.exists():
-            return True
-
-        return False
 
     def _generate_report(
         self,
