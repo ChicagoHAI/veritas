@@ -211,6 +211,7 @@ class ReplicationRunner:
                 "claude",
                 "-p", str(prompt_file),
                 "--output-format", "text",
+                "--dangerously-skip-permissions",
             ]
 
             # Run with timeout
@@ -248,7 +249,7 @@ class ReplicationRunner:
     ) -> bool:
         """Invoke Codex CLI to run evaluation."""
         try:
-            cmd = ["codex", "exec", "--stdin"]
+            cmd = ["codex", "exec", "--full-auto", "--stdin"]
 
             result = subprocess.run(
                 cmd,
