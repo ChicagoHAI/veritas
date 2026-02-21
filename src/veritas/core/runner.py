@@ -140,14 +140,14 @@ class ReplicationRunner:
             # Run the evaluation via AI provider
             output_json_path = self.config.output_dir / f"{eval_name}_evaluation.json"
 
-            success = self._invoke_provider(
+            stdout = self._invoke_provider(
                 prompt=prompt,
                 working_dir=self.config.repo_path,
                 output_path=output_json_path,
             )
 
-            if success and output_json_path.exists():
-                # Parse the results
+            if stdout and output_json_path.exists():
+                # Parse the results from the file the provider wrote
                 with open(output_json_path, encoding='utf-8') as f:
                     data = json.load(f)
 
@@ -159,11 +159,19 @@ class ReplicationRunner:
                     metrics=data.get("Metrics", {}),
                     output_path=output_json_path,
                 )
-            else:
+            elif stdout is None:
+                print(f"  Provider returned failure for {eval_name}")
                 return EvaluationResult(
                     name=eval_name,
                     success=False,
-                    error="Evaluation did not produce expected output",
+                    error="Provider invocation failed (check logs above for details)",
+                )
+            else:
+                print(f"  Provider succeeded but {output_json_path.name} not found")
+                return EvaluationResult(
+                    name=eval_name,
+                    success=False,
+                    error=f"Evaluation did not produce expected output file: {output_json_path.name}",
                 )
 
         except Exception as e:
@@ -178,7 +186,7 @@ class ReplicationRunner:
         prompt: str,
         working_dir: Path,
         output_path: Path,
-    ) -> bool:
+    ) -> Optional[str]:
         """Invoke the AI provider to run the evaluation."""
         provider = self.config.provider.lower()
 
@@ -196,8 +204,11 @@ class ReplicationRunner:
         prompt: str,
         working_dir: Path,
         output_path: Path,
-    ) -> bool:
-        """Invoke Claude CLI to run evaluation."""
+    ) -> Optional[str]:
+        """Invoke Claude CLI to run evaluation.
+
+        Returns stdout on success, None on failure.
+        """
         try:
             # Write prompt to temp file
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
@@ -217,28 +228,31 @@ class ReplicationRunner:
                 cwd=working_dir,
                 timeout=self.config.timeout,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
             )
 
-            return result.returncode == 0
+            return result.stdout if result.returncode == 0 else None
 
         except subprocess.TimeoutExpired:
             print(f"  Timeout after {self.config.timeout}s")
-            return False
+            return None
         except FileNotFoundError:
             print("  Claude CLI not found. Please install claude-code.")
-            return False
+            return None
         except Exception as e:
             print(f"  Error invoking Claude: {e}")
-            return False
+            return None
 
     def _invoke_codex(
         self,
         prompt: str,
         working_dir: Path,
         output_path: Path,
-    ) -> bool:
-        """Invoke Codex CLI to run evaluation."""
+    ) -> Optional[str]:
+        """Invoke Codex CLI to run evaluation.
+
+        Returns stdout on success, None on failure.
+        """
         try:
             cmd = ["codex", "exec", "--full-auto", "--stdin"]
 
@@ -248,22 +262,25 @@ class ReplicationRunner:
                 input=prompt,
                 timeout=self.config.timeout,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
             )
 
-            return result.returncode == 0
+            return result.stdout if result.returncode == 0 else None
 
         except Exception as e:
             print(f"  Error invoking Codex: {e}")
-            return False
+            return None
 
     def _invoke_gemini(
         self,
         prompt: str,
         working_dir: Path,
         output_path: Path,
-    ) -> bool:
-        """Invoke Gemini CLI to run evaluation."""
+    ) -> Optional[str]:
+        """Invoke Gemini CLI to run evaluation.
+
+        Returns stdout on success, None on failure.
+        """
         try:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
@@ -275,14 +292,14 @@ class ReplicationRunner:
                 cwd=working_dir,
                 timeout=self.config.timeout,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
             )
 
-            return result.returncode == 0
+            return result.stdout if result.returncode == 0 else None
 
         except Exception as e:
             print(f"  Error invoking Gemini: {e}")
-            return False
+            return None
 
     def _generate_report(
         self,
