@@ -396,6 +396,7 @@ class ReportGenerator:
                 recommendations.append("Set random seeds and ensure deterministic execution")
 
         if recommendations:
+            section += "\n"  # Ensure blank line before list for pandoc
             for i, rec in enumerate(recommendations, 1):
                 section += f"{i}. {rec}\n"
         else:
@@ -406,25 +407,66 @@ class ReportGenerator:
 
         return section
 
+    def _preprocess_markdown_for_pdf(self, md_content: str) -> str:
+        """Pre-process markdown for PDF rendering via pdflatex.
+
+        Replaces emoji characters that can't be rendered by pdflatex's
+        default Computer Modern font, which would break table rendering.
+        """
+        replacements = {
+            "✅": "[PASS]",
+            "❌": "[FAIL]",
+            "⚠️": "[WARN]",
+            "⚠": "[WARN]",
+            "➖": "[-]",
+        }
+        result = md_content
+        for emoji, text in replacements.items():
+            result = result.replace(emoji, text)
+        return result
+
+    def _get_latex_header(self) -> str:
+        """Return LaTeX preamble for PDF rendering fixes."""
+        return (
+            "\\usepackage{microtype}\n"
+            "\\usepackage{url}\n"
+            "\\urlstyle{same}\n"
+            "\\emergencystretch=3em\n"
+            "\\setlength{\\parskip}{0.5em}\n"
+        )
+
     def _generate_pdf(self, md_content: str, output_path: Path, working_dir: Path):
         """Generate PDF from markdown content."""
+        # Pre-process markdown for PDF rendering
+        pdf_md_content = self._preprocess_markdown_for_pdf(md_content)
+
         # Try pandoc first
         try:
             md_file = working_dir / "temp_report.md"
-            md_file.write_text(md_content, encoding='utf-8')
+            md_file.write_text(pdf_md_content, encoding='utf-8')
+
+            header_file = working_dir / "temp_header.tex"
+            header_file.write_text(self._get_latex_header(), encoding='utf-8')
 
             subprocess.run(
                 ["pandoc", str(md_file), "-o", str(output_path),
                  "--pdf-engine=pdflatex",
-                 "-V", "geometry:margin=1in"],
+                 "-V", "geometry:margin=1in",
+                 "-V", "colorlinks=true",
+                 "--include-in-header", str(header_file)],
                 check=True,
                 capture_output=True,
             )
 
             md_file.unlink()
+            header_file.unlink()
             return
 
         except (subprocess.CalledProcessError, FileNotFoundError):
+            # Clean up temp files on failure
+            for f in [working_dir / "temp_report.md", working_dir / "temp_header.tex"]:
+                if f.exists():
+                    f.unlink()
             pass
 
         # Try markdown-pdf or other tools
@@ -482,24 +524,68 @@ class ReportGenerator:
 \usepackage{hyperref}
 \usepackage{longtable}
 \usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{url}
+\urlstyle{same}
+\emergencystretch=3em
+\setlength{\parskip}{0.5em}
 
 \begin{document}
 
 """
-        content = md_content
+        # Pre-process: replace emoji with text
+        content = self._preprocess_markdown_for_pdf(md_content)
 
-        # Step 1: Remove emoji before any processing
-        content = re.sub(r'[✅❌⚠️➖]', '', content)
+        # Step 1: Extract and convert tables before escaping
+        table_blocks = []
+        table_pattern = re.compile(
+            r'(^\|.+\|$\n^\|[-| :]+\|$\n(?:^\|.+\|$\n?)+)',
+            re.MULTILINE
+        )
+
+        def convert_table(match):
+            table_md = match.group(0)
+            rows = table_md.strip().split('\n')
+            # First row is header, second is separator, rest are data
+            header_cells = [c.strip() for c in rows[0].strip('|').split('|')]
+            num_cols = len(header_cells)
+            col_spec = 'l' * num_cols
+
+            table_latex = '\\begin{longtable}{' + col_spec + '}\n'
+            table_latex += '\\toprule\n'
+            table_latex += ' & '.join(header_cells) + ' \\\\\n'
+            table_latex += '\\midrule\n'
+
+            for row in rows[2:]:  # skip header and separator
+                if row.strip():
+                    cells = [c.strip() for c in row.strip('|').split('|')]
+                    table_latex += ' & '.join(cells) + ' \\\\\n'
+
+            table_latex += '\\bottomrule\n'
+            table_latex += '\\end{longtable}'
+
+            placeholder = f'%%TABLE_{len(table_blocks)}%%'
+            table_blocks.append(table_latex)
+            return placeholder
+
+        content = table_pattern.sub(convert_table, content)
 
         # Step 2: Escape special LaTeX characters in raw markdown
         content = content.replace('&', '\\&')
         content = content.replace('%', '\\%')
         content = content.replace('_', '\\_')
 
-        # Step 3: Convert markdown to LaTeX commands
+        # Step 3: Restore table blocks (already properly formatted)
+        for i, table_latex in enumerate(table_blocks):
+            content = content.replace(f'%%TABLE\\_{i}%%', table_latex)
+
+        # Step 4: Convert markdown to LaTeX commands
         content = re.sub(r'^# (.+)$', r'\\section*{\1}', content, flags=re.MULTILINE)
         content = re.sub(r'^## (.+)$', r'\\subsection*{\1}', content, flags=re.MULTILINE)
         content = re.sub(r'^### (.+)$', r'\\subsubsection*{\1}', content, flags=re.MULTILINE)
+
+        # Convert horizontal rules to LaTeX
+        content = re.sub(r'^---$', r'\\bigskip\\hrule\\bigskip', content, flags=re.MULTILINE)
 
         # Convert bold
         content = re.sub(r'\*\*(.+?)\*\*', r'\\textbf{\1}', content)
@@ -507,24 +593,45 @@ class ReportGenerator:
         # Convert italic
         content = re.sub(r'\*(.+?)\*', r'\\textit{\1}', content)
 
-        # Convert bullet points
-        content = re.sub(r'^- (.+)$', r'\\item \1', content, flags=re.MULTILINE)
-
-        # Wrap lists
-        lines = content.split('\n')
+        # Convert numbered lists
+        numbered_pattern = re.compile(r'^\d+\.\s+(.+)$', re.MULTILINE)
+        content_lines = content.split('\n')
+        in_enum = False
         in_list = False
         new_lines = []
-        for line in lines:
-            if line.strip().startswith('\\item'):
+        for line in content_lines:
+            stripped = line.strip()
+            is_numbered = bool(re.match(r'^\d+\.\s+', stripped))
+            is_bullet = stripped.startswith('- ')
+
+            if is_numbered:
+                item_text = re.sub(r'^\d+\.\s+', '', stripped)
+                if not in_enum:
+                    if in_list:
+                        new_lines.append('\\end{itemize}')
+                        in_list = False
+                    new_lines.append('\\begin{enumerate}')
+                    in_enum = True
+                new_lines.append(f'\\item {item_text}')
+            elif is_bullet:
+                item_text = stripped[2:]
                 if not in_list:
+                    if in_enum:
+                        new_lines.append('\\end{enumerate}')
+                        in_enum = False
                     new_lines.append('\\begin{itemize}')
                     in_list = True
-                new_lines.append(line)
+                new_lines.append(f'\\item {item_text}')
             else:
+                if in_enum:
+                    new_lines.append('\\end{enumerate}')
+                    in_enum = False
                 if in_list:
                     new_lines.append('\\end{itemize}')
                     in_list = False
                 new_lines.append(line)
+        if in_enum:
+            new_lines.append('\\end{enumerate}')
         if in_list:
             new_lines.append('\\end{itemize}')
 
