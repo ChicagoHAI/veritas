@@ -229,6 +229,7 @@ class ReplicationRunner:
                 timeout=self.config.timeout,
                 capture_output=True,
                 encoding='utf-8',
+                shell=True,
             )
 
             return result.stdout if result.returncode == 0 else None
@@ -254,7 +255,7 @@ class ReplicationRunner:
         Returns stdout on success, None on failure.
         """
         try:
-            cmd = ["codex", "exec", "--full-auto", "--stdin"]
+            cmd = ["codex", "exec", "--full-auto", "-"]
 
             result = subprocess.run(
                 cmd,
@@ -263,6 +264,7 @@ class ReplicationRunner:
                 timeout=self.config.timeout,
                 capture_output=True,
                 encoding='utf-8',
+                shell=True,
             )
 
             return result.stdout if result.returncode == 0 else None
@@ -293,6 +295,7 @@ class ReplicationRunner:
                 timeout=self.config.timeout,
                 capture_output=True,
                 encoding='utf-8',
+                shell=True,
             )
 
             return result.stdout if result.returncode == 0 else None
