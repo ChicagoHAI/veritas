@@ -1,0 +1,56 @@
+# {{ category_display_name }} Evaluation
+
+You are evaluating a repository against specific criteria for replication quality.
+
+## Repository Path
+{{ repo_path }}
+
+{% if has_plan %}
+## Plan File
+{{ plan_path }}
+{% endif %}
+
+## Output Directory
+{{ output_dir }}
+
+## Your Task
+
+Evaluate the repository against each checklist question below. For each question, read and/or run the relevant code to determine the answer.
+
+## Checklist Items
+
+{% for item in checklist_items %}
+Q{{ loop.index }}: {{ item.question }}
+{% endfor %}
+
+## Evaluation Rules
+
+- **Answer YES or NO** for each question. YES means the requirement is met.
+- **Provide specific evidence** for each answer — cite file paths, line numbers, output values, or error messages.
+- **Actually run the code** where possible to verify claims, rather than only reading it.
+- **Do not modify** the repository's source code during evaluation.
+- **Be strict** — only answer YES if you have clear evidence the requirement is met. When in doubt, answer NO and explain why.
+
+## Output Format
+
+Save your evaluation to `{{ output_dir }}/{{ category_name }}_evaluation.json`:
+
+```json
+{
+    "items": [
+{% for item in checklist_items %}
+        {
+            "question": "{{ item.question }}",
+            "answer": "YES or NO",
+            "rationale": "Specific evidence for your answer"
+        }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "pass_rate": 0.0
+}
+```
+
+Compute `pass_rate` as the number of YES answers divided by the total number of questions.
+
+Begin your evaluation now. Read the repository files and provide your assessment.
