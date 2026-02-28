@@ -12,6 +12,15 @@ from veritas.core.config import Config
 class ReportGenerator:
     """Generates comprehensive replication reports."""
 
+    # Display names for each evaluation category
+    EVAL_DISPLAY_NAMES = {
+        "code": "Code Quality",
+        "consistency": "Consistency",
+        "generalization": "Generalization",
+        "replication": "Replicability",
+        "instruction": "Instruction Following",
+    }
+
     def generate(
         self,
         evaluation_dir: Path,
@@ -31,13 +40,9 @@ class ReportGenerator:
         Returns:
             Tuple of (markdown_path, pdf_path)
         """
-        # Collect all evaluation results
         results = self._collect_results(evaluation_dir)
-
-        # Generate markdown report
         md_content = self._generate_markdown_report(results)
 
-        # Determine output paths
         if output_path is None:
             output_path = evaluation_dir / "replication_report.md"
         else:
@@ -75,21 +80,17 @@ class ReportGenerator:
         Returns:
             Tuple of (markdown_path, pdf_path)
         """
-        # Convert results to dict format
         results_dict = {}
         for result in results:
             results_dict[result.name] = {
                 "success": result.success,
-                "checklist": result.checklist or {},
-                "rationale": result.rationale or {},
-                "metrics": result.metrics or {},
+                "items": result.items or [],
+                "pass_rate": result.pass_rate,
                 "error": result.error,
             }
 
-        # Generate report
         md_content = self._generate_markdown_report(results_dict)
 
-        # Write outputs
         md_path = output_dir / "replication_report.md"
         md_path.write_text(md_content, encoding='utf-8')
 
@@ -101,10 +102,9 @@ class ReportGenerator:
         return md_path, pdf_path
 
     def _collect_results(self, evaluation_dir: Path) -> Dict[str, Any]:
-        """Collect all evaluation JSON results."""
+        """Collect all evaluation JSON results in the new items+pass_rate format."""
         results = {}
 
-        # Map of expected files
         eval_files = {
             "code": "code_evaluation.json",
             "consistency": "consistency_evaluation.json",
@@ -121,15 +121,11 @@ class ReportGenerator:
                         data = json.load(f)
                     results[eval_name] = {
                         "success": True,
-                        "checklist": data.get("Checklist", {}),
-                        "rationale": data.get("Rationale", {}),
-                        "metrics": data.get("Metrics", {}),
+                        "items": data.get("items", []),
+                        "pass_rate": data.get("pass_rate"),
                     }
                 except Exception as e:
-                    results[eval_name] = {
-                        "success": False,
-                        "error": str(e),
-                    }
+                    results[eval_name] = {"success": False, "error": str(e)}
 
         return results
 
@@ -137,18 +133,17 @@ class ReportGenerator:
         """Generate the markdown report content."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Calculate overall score
-        total_checks = 0
-        passed_checks = 0
+        # Calculate overall score from all items across categories
+        total_items = 0
+        passed_items = 0
         for eval_data in results.values():
-            if eval_data.get("success") and eval_data.get("checklist"):
-                for value in eval_data["checklist"].values():
-                    if value != "NA":
-                        total_checks += 1
-                        if value == "PASS":
-                            passed_checks += 1
+            if eval_data.get("success") and eval_data.get("items"):
+                for item in eval_data["items"]:
+                    total_items += 1
+                    if item.get("answer", "").upper() == "YES":
+                        passed_items += 1
 
-        overall_score = (passed_checks / total_checks * 100) if total_checks > 0 else 0
+        overall_score = (passed_items / total_items * 100) if total_items > 0 else 0
 
         # Build report
         report = f"""# Replication Report
@@ -159,246 +154,135 @@ class ReportGenerator:
 
 ## Executive Summary
 
-**Overall Replicability Score: {overall_score:.1f}%** ({passed_checks}/{total_checks} checks passed)
+**Overall Replicability Score: {overall_score:.1f}%** ({passed_items}/{total_items} checks passed)
 
 """
         # Score interpretation
         if overall_score >= 80:
-            report += "✅ **High Replicability** - The project demonstrates strong reproducibility practices.\n\n"
+            report += "**High Replicability** - The project demonstrates strong reproducibility practices.\n\n"
         elif overall_score >= 60:
-            report += "⚠️ **Moderate Replicability** - Some areas need improvement for full reproducibility.\n\n"
+            report += "**Moderate Replicability** - Some areas need improvement for full reproducibility.\n\n"
         else:
-            report += "❌ **Low Replicability** - Significant issues identified that hinder reproduction.\n\n"
+            report += "**Low Replicability** - Significant issues identified that hinder reproduction.\n\n"
 
         # Summary table
         report += "### Quick Summary\n\n"
-        report += "| Evaluation | Status | Passed | Total |\n"
-        report += "|------------|--------|--------|-------|\n"
+        report += "| Evaluation | Pass Rate | Passed | Total |\n"
+        report += "|------------|-----------|--------|-------|\n"
 
-        eval_names = {
-            "code": "Code Quality",
-            "consistency": "Consistency",
-            "generalization": "Generalization",
-            "replication": "Replicability",
-            "instruction": "Instruction Following",
-        }
-
-        for eval_type, display_name in eval_names.items():
+        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
             if eval_type in results:
                 data = results[eval_type]
-                if data.get("success") and data.get("checklist"):
-                    checklist = data["checklist"]
-                    passed = sum(1 for v in checklist.values() if v == "PASS")
-                    total = sum(1 for v in checklist.values() if v != "NA")
-                    status = "✅" if passed == total else "⚠️" if passed > 0 else "❌"
-                    report += f"| {display_name} | {status} | {passed} | {total} |\n"
+                if data.get("success") and data.get("items"):
+                    items = data["items"]
+                    total = len(items)
+                    passed = sum(1 for it in items if it.get("answer", "").upper() == "YES")
+                    pct = (passed / total * 100) if total > 0 else 0
+                    report += f"| {display_name} | {pct:.1f}% | {passed} | {total} |\n"
+                elif data.get("success"):
+                    report += f"| {display_name} | - | 0 | 0 |\n"
                 else:
-                    report += f"| {display_name} | ❌ | - | - |\n"
+                    report += f"| {display_name} | FAIL | - | - |\n"
 
         report += "\n---\n\n"
 
-        # Detailed sections
-        report += self._generate_code_section(results.get("code", {}))
-        report += self._generate_consistency_section(results.get("consistency", {}))
-        report += self._generate_generalization_section(results.get("generalization", {}))
-        report += self._generate_replication_section(results.get("replication", {}))
-        report += self._generate_instruction_section(results.get("instruction", {}))
+        # Detailed sections using generic method
+        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
+            if eval_type in results:
+                report += self._generate_category_section(display_name, results[eval_type])
 
         # Recommendations
         report += self._generate_recommendations(results)
 
         return report
 
-    def _generate_code_section(self, data: Dict) -> str:
-        """Generate code quality section."""
-        section = "## Code Quality Assessment\n\n"
+    def _generate_category_section(self, display_name: str, data: Dict) -> str:
+        """Generate a report section for a single evaluation category.
 
+        Args:
+            display_name: Human-readable category name (e.g. "Code Quality")
+            data: Dict with success, items, pass_rate, and optionally error
+
+        Returns:
+            Markdown string for the section
+        """
         if not data.get("success"):
-            section += f"❌ Evaluation failed: {data.get('error', 'Unknown error')}\n\n"
+            error = data.get("error", "Unknown error")
+            section = f"## {display_name}\n\n"
+            section += f"[ERROR] Evaluation failed: {error}\n\n"
             return section
 
-        checklist = data.get("checklist", {})
-        rationale = data.get("rationale", {})
-        metrics = data.get("metrics", {})
-
-        items = {
-            "C1": "All core analysis code is runnable",
-            "C2": "All implementations are correct",
-            "C3": "No redundant code",
-            "C4": "No irrelevant code",
-        }
-
-        for key, description in items.items():
-            status = checklist.get(key, "N/A")
-            icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "➖"
-            section += f"- {icon} **{key}**: {description} - **{status}**\n"
-            if key in rationale:
-                section += f"  - {rationale[key]}\n"
-
-        if metrics:
-            section += "\n### Metrics\n\n"
-            section += f"- Runnable: {metrics.get('runnable_pct', 'N/A')}%\n"
-            section += f"- Incorrect: {metrics.get('incorrect_pct', 'N/A')}%\n"
-            section += f"- Redundant: {metrics.get('redundant_pct', 'N/A')}%\n"
-            section += f"- Irrelevant: {metrics.get('irrelevant_pct', 'N/A')}%\n"
-            section += f"- Total blocks analyzed: {metrics.get('total_blocks', 'N/A')}\n"
-
-        section += "\n"
-        return section
-
-    def _generate_consistency_section(self, data: Dict) -> str:
-        """Generate consistency section."""
-        section = "## Consistency Analysis\n\n"
-
-        if not data.get("success"):
-            section += f"❌ Evaluation failed: {data.get('error', 'Unknown error')}\n\n"
+        items = data.get("items", [])
+        if not items:
+            section = f"## {display_name}\n\n"
+            section += "No checklist items generated.\n\n"
             return section
 
-        checklist = data.get("checklist", {})
-        rationale = data.get("rationale", {})
+        total = len(items)
+        passed = sum(1 for it in items if it.get("answer", "").upper() == "YES")
+        pass_rate = data.get("pass_rate")
+        if pass_rate is not None:
+            pct = pass_rate * 100
+        else:
+            pct = (passed / total * 100) if total > 0 else 0
 
-        items = {
-            "CS1": "Results match conclusions",
-            "CS2": "Implementation follows plan",
-            "CS3": "Effect sizes are non-trivial",
-            "CS4": "Design choices are justified",
-            "CS5": "Statistical significance reported",
-        }
+        section = f"## {display_name} — {pct:.1f}% ({passed}/{total})\n\n"
 
-        for key, description in items.items():
-            status = checklist.get(key, "N/A")
-            icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "➖"
-            section += f"- {icon} **{key}**: {description} - **{status}**\n"
-            if key in rationale:
-                section += f"  - {rationale[key]}\n"
-
-        section += "\n"
-        return section
-
-    def _generate_generalization_section(self, data: Dict) -> str:
-        """Generate generalization section."""
-        section = "## Generalization Results\n\n"
-
-        if not data.get("success"):
-            section += f"❌ Evaluation failed: {data.get('error', 'Unknown error')}\n\n"
-            return section
-
-        checklist = data.get("checklist", {})
-        rationale = data.get("rationale", {})
-
-        items = {
-            "GT1": "Model generalization",
-            "GT2": "Data generalization",
-            "GT3": "Method generalization",
-        }
-
-        for key, description in items.items():
-            status = checklist.get(key, "N/A")
-            icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "➖"
-            section += f"- {icon} **{key}**: {description} - **{status}**\n"
-            if key in rationale:
-                section += f"  - {rationale[key]}\n"
-
-        section += "\n"
-        return section
-
-    def _generate_replication_section(self, data: Dict) -> str:
-        """Generate replication section."""
-        section = "## Replicability Assessment\n\n"
-
-        if not data.get("success"):
-            section += f"❌ Evaluation failed: {data.get('error', 'Unknown error')}\n\n"
-            return section
-
-        checklist = data.get("checklist", {})
-        rationale = data.get("rationale", {})
-
-        items = {
-            "RP1": "Implementation reconstructable from documentation",
-            "RP2": "Environment reproducible",
-            "RP3": "Results deterministic and stable",
-        }
-
-        for key, description in items.items():
-            status = checklist.get(key, "N/A")
-            icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "➖"
-            section += f"- {icon} **{key}**: {description} - **{status}**\n"
-            if key in rationale:
-                section += f"  - {rationale[key]}\n"
-
-        section += "\n"
-        return section
-
-    def _generate_instruction_section(self, data: Dict) -> str:
-        """Generate instruction following section."""
-        section = "## Instruction Following\n\n"
-
-        if not data.get("success"):
-            section += f"❌ Evaluation failed: {data.get('error', 'Unknown error')}\n\n"
-            return section
-
-        checklist = data.get("checklist", {})
-        rationale = data.get("rationale", {})
-
-        items = {
-            "TS1": "Goals align with research objectives",
-            "TS2": "Methodology covers required analyses",
-            "TS3": "All hypotheses tested",
-            "TS4": "Components match described functions",
-        }
-
-        for key, description in items.items():
-            status = checklist.get(key, "N/A")
-            icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "➖"
-            section += f"- {icon} **{key}**: {description} - **{status}**\n"
-            if key in rationale:
-                section += f"  - {rationale[key]}\n"
+        for item in items:
+            question = item.get("question", "")
+            answer = item.get("answer", "").upper()
+            rationale = item.get("rationale", "")
+            tag = "[YES]" if answer == "YES" else "[NO]"
+            section += f"- {tag} {question}\n"
+            if answer != "YES" and rationale:
+                section += f"  - {rationale}\n"
 
         section += "\n"
         return section
 
     def _generate_recommendations(self, results: Dict) -> str:
-        """Generate recommendations based on failed checks."""
+        """Generate recommendations based on failed checklist items."""
         section = "## Recommendations\n\n"
 
         recommendations = []
 
-        # Code recommendations
-        if "code" in results and results["code"].get("success"):
-            checklist = results["code"].get("checklist", {})
-            if checklist.get("C1") == "FAIL":
-                recommendations.append("Fix code execution errors to ensure all code is runnable")
-            if checklist.get("C2") == "FAIL":
-                recommendations.append("Review and correct implementation logic errors")
-            if checklist.get("C3") == "FAIL":
-                recommendations.append("Remove duplicate/redundant code blocks")
-            if checklist.get("C4") == "FAIL":
-                recommendations.append("Remove code that doesn't contribute to project goals")
+        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
+            if eval_type not in results:
+                continue
+            data = results[eval_type]
+            if not data.get("success"):
+                continue
 
-        # Consistency recommendations
-        if "consistency" in results and results["consistency"].get("success"):
-            checklist = results["consistency"].get("checklist", {})
-            if checklist.get("CS1") == "FAIL":
-                recommendations.append("Ensure conclusions are supported by actual results")
-            if checklist.get("CS2") == "FAIL":
-                recommendations.append("Align implementation with documented plan")
-            if checklist.get("CS5") == "FAIL":
-                recommendations.append("Add statistical significance tests and uncertainty measures")
+            items = data.get("items", [])
+            pass_rate = data.get("pass_rate")
 
-        # Replication recommendations
-        if "replication" in results and results["replication"].get("success"):
-            checklist = results["replication"].get("checklist", {})
-            if checklist.get("RP1") == "FAIL":
-                recommendations.append("Improve documentation to enable reconstruction without guesswork")
-            if checklist.get("RP2") == "FAIL":
-                recommendations.append("Document environment setup with exact package versions")
-            if checklist.get("RP3") == "FAIL":
-                recommendations.append("Set random seeds and ensure deterministic execution")
+            # Identify categories with failures
+            failed_items = [it for it in items if it.get("answer", "").upper() != "YES"]
+            if not failed_items:
+                continue
+
+            if pass_rate is not None and pass_rate < 0.5:
+                recommendations.append(
+                    f"**{display_name}** has a low pass rate ({pass_rate * 100:.0f}%). "
+                    f"Address the following failed checks:"
+                )
+            elif failed_items:
+                recommendations.append(
+                    f"**{display_name}** has {len(failed_items)} failed check(s):"
+                )
+
+            for it in failed_items:
+                q = it.get("question", "Unknown")
+                r = it.get("rationale", "")
+                detail = f"  - {q}"
+                if r:
+                    detail += f" — {r}"
+                recommendations.append(detail)
 
         if recommendations:
-            section += "\n"  # Ensure blank line before list for pandoc
-            for i, rec in enumerate(recommendations, 1):
-                section += f"{i}. {rec}\n"
+            section += "\n"
+            for rec in recommendations:
+                section += f"{rec}\n"
         else:
             section += "No critical recommendations - the project demonstrates good reproducibility practices.\n"
 
@@ -414,8 +298,8 @@ class ReportGenerator:
         default Computer Modern font, which would break table rendering.
         """
         replacements = {
-            "✅": "[PASS]",
-            "❌": "[FAIL]",
+            "✅": "[YES]",
+            "❌": "[NO]",
             "⚠️": "[WARN]",
             "⚠": "[WARN]",
             "➖": "[-]",

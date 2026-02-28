@@ -7,24 +7,25 @@ from veritas.core.report_generator import ReportGenerator
 
 
 class TestReportGenerator:
-    """Tests for ReportGenerator class."""
-
     def test_collect_results(self, tmp_path):
-        """Test collecting results from JSON files."""
-        # Create evaluation directory with JSON files
+        """Test collecting results from new-format JSON files."""
         eval_dir = tmp_path / "evaluation"
         eval_dir.mkdir()
 
         code_result = {
-            "Checklist": {"C1": "PASS", "C2": "PASS", "C3": "FAIL", "C4": "PASS"},
-            "Rationale": {"C1": "All code runs", "C2": "Logic correct", "C3": "Some duplication", "C4": "All relevant"},
-            "Metrics": {"runnable_pct": 100, "total_blocks": 10}
+            "items": [
+                {"question": "Does code run?", "answer": "YES", "rationale": "OK"},
+                {"question": "Is it correct?", "answer": "NO", "rationale": "Bug found"},
+            ],
+            "pass_rate": 0.5,
         }
         (eval_dir / "code_evaluation.json").write_text(json.dumps(code_result))
 
         consistency_result = {
-            "Checklist": {"CS1": "PASS", "CS2": "FAIL", "CS3": "PASS", "CS4": "PASS", "CS5": "NA"},
-            "Rationale": {"CS1": "Results match", "CS2": "Plan differs", "CS3": "Effects significant", "CS4": "Justified", "CS5": "Not applicable"}
+            "items": [
+                {"question": "Results match?", "answer": "YES", "rationale": "Verified"},
+            ],
+            "pass_rate": 1.0,
         }
         (eval_dir / "consistency_evaluation.json").write_text(json.dumps(consistency_result))
 
@@ -33,90 +34,103 @@ class TestReportGenerator:
 
         assert "code" in results
         assert results["code"]["success"] is True
-        assert results["code"]["checklist"]["C1"] == "PASS"
-        assert results["code"]["checklist"]["C3"] == "FAIL"
+        assert len(results["code"]["items"]) == 2
+        assert results["code"]["pass_rate"] == 0.5
 
-        assert "consistency" in results
-        assert results["consistency"]["checklist"]["CS2"] == "FAIL"
-
-    def test_generate_markdown_report(self, tmp_path):
-        """Test markdown report generation."""
+    def test_generate_markdown_report(self):
         results = {
             "code": {
                 "success": True,
-                "checklist": {"C1": "PASS", "C2": "PASS", "C3": "PASS", "C4": "PASS"},
-                "rationale": {"C1": "All runs", "C2": "Correct", "C3": "No duplication", "C4": "Relevant"},
-                "metrics": {"runnable_pct": 100}
+                "items": [
+                    {"question": "Q1?", "answer": "YES", "rationale": "OK"},
+                    {"question": "Q2?", "answer": "YES", "rationale": "OK"},
+                ],
+                "pass_rate": 1.0,
             },
             "consistency": {
                 "success": True,
-                "checklist": {"CS1": "PASS", "CS2": "PASS", "CS3": "FAIL", "CS4": "PASS", "CS5": "PASS"},
-                "rationale": {}
-            }
+                "items": [
+                    {"question": "Q3?", "answer": "NO", "rationale": "Bad"},
+                ],
+                "pass_rate": 0.0,
+            },
         }
 
         generator = ReportGenerator()
         report = generator._generate_markdown_report(results)
 
         assert "# Replication Report" in report
-        assert "Executive Summary" in report
+        assert "Q1?" in report
+        assert "Q3?" in report
         assert "Code Quality" in report
         assert "Consistency" in report
-        assert "PASS" in report
 
-    def test_score_calculation(self, tmp_path):
-        """Test that score is calculated correctly."""
+    def test_score_calculation(self):
         results = {
             "code": {
                 "success": True,
-                "checklist": {"C1": "PASS", "C2": "PASS", "C3": "FAIL", "C4": "PASS"},
-                "rationale": {},
-                "metrics": {}
+                "items": [
+                    {"question": "Q1?", "answer": "YES", "rationale": ""},
+                    {"question": "Q2?", "answer": "YES", "rationale": ""},
+                    {"question": "Q3?", "answer": "NO", "rationale": ""},
+                    {"question": "Q4?", "answer": "YES", "rationale": ""},
+                ],
+                "pass_rate": 0.75,
             }
         }
 
         generator = ReportGenerator()
         report = generator._generate_markdown_report(results)
-
-        # 3/4 = 75%
         assert "75.0%" in report
 
-    def test_na_not_counted(self, tmp_path):
-        """Test that NA items are not counted in score."""
-        results = {
-            "generalization": {
-                "success": True,
-                "checklist": {"GT1": "PASS", "GT2": "PASS", "GT3": "NA"},
-                "rationale": {},
-                "metrics": {}
-            }
-        }
-
+    def test_category_section_pass_rate(self):
         generator = ReportGenerator()
-        report = generator._generate_markdown_report(results)
+        data = {
+            "success": True,
+            "items": [
+                {"question": "Q1?", "answer": "YES", "rationale": "OK"},
+                {"question": "Q2?", "answer": "NO", "rationale": "Bad"},
+                {"question": "Q3?", "answer": "YES", "rationale": "OK"},
+            ],
+            "pass_rate": 0.667,
+        }
+        section = generator._generate_category_section("Code Quality", data)
+        assert "66.7%" in section
+        assert "2/3" in section
 
-        # 2/2 = 100% (GT3 NA not counted)
-        assert "100.0%" in report
+    def test_failed_category(self):
+        generator = ReportGenerator()
+        data = {"success": False, "error": "Provider timeout"}
+        section = generator._generate_category_section("Code Quality", data)
+        assert "ERROR" in section
+        assert "Provider timeout" in section
 
-    def test_generate_recommendations(self, tmp_path):
-        """Test recommendation generation for failed checks."""
+    def test_empty_items_category(self):
+        generator = ReportGenerator()
+        data = {"success": True, "items": [], "pass_rate": None}
+        section = generator._generate_category_section("Generalization", data)
+        assert "No checklist items" in section
+
+    def test_generate_recommendations(self):
         results = {
             "code": {
                 "success": True,
-                "checklist": {"C1": "FAIL", "C2": "PASS", "C3": "PASS", "C4": "PASS"},
-                "rationale": {},
-                "metrics": {}
+                "items": [
+                    {"question": "Does code run?", "answer": "NO", "rationale": "Crash"},
+                    {"question": "Is it correct?", "answer": "NO", "rationale": "Wrong"},
+                ],
+                "pass_rate": 0.0,
             },
             "replication": {
                 "success": True,
-                "checklist": {"RP1": "PASS", "RP2": "FAIL", "RP3": "FAIL"},
-                "rationale": {},
-                "metrics": {}
-            }
+                "items": [
+                    {"question": "Deps documented?", "answer": "YES", "rationale": "OK"},
+                ],
+                "pass_rate": 1.0,
+            },
         }
 
         generator = ReportGenerator()
-        recommendations = generator._generate_recommendations(results)
-
-        assert "code execution errors" in recommendations.lower()
-        assert "environment" in recommendations.lower() or "random seeds" in recommendations.lower()
+        recs = generator._generate_recommendations(results)
+        # Should recommend fixing code issues
+        assert "code" in recs.lower() or "fail" in recs.lower()
