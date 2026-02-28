@@ -3,119 +3,111 @@
 import pytest
 from pathlib import Path
 from veritas.templates.prompt_generator import PromptGenerator
+from veritas.core.checklist import ChecklistItem
 
 
 class TestPromptGenerator:
     """Tests for PromptGenerator class."""
 
-    def test_generate_code_evaluation_prompt(self, tmp_path):
-        """Test code evaluation prompt generation."""
+    def test_generate_checklist_prompt_with_paper(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         output = tmp_path / "output"
+        output.mkdir()
 
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="code",
+        gen = PromptGenerator()
+        prompt = gen.generate_checklist_prompt(
             repo_path=repo,
-            output_dir=output
+            output_dir=output,
+            paper_text="This paper studies sentiment analysis using BERT.",
         )
+        assert "sentiment analysis" in prompt
+        assert str(repo.absolute()) in prompt
+        assert "checklist" in prompt.lower()
+        assert "Code Quality" in prompt
+        assert "Consistency" in prompt
+        assert "Paper Content" in prompt
 
-        assert "Code" in prompt or "code" in prompt
-        assert str(repo) in prompt
-        assert "C1" in prompt
-        assert "C2" in prompt
-        assert "C3" in prompt
-        assert "C4" in prompt
-        assert "Runnable" in prompt or "runnable" in prompt
-
-    def test_generate_consistency_evaluation_prompt(self, tmp_path):
-        """Test consistency evaluation prompt generation."""
+    def test_generate_checklist_prompt_without_paper(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
 
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="consistency",
-            repo_path=repo
+        gen = PromptGenerator()
+        prompt = gen.generate_checklist_prompt(
+            repo_path=repo,
+            output_dir=output,
         )
+        assert str(repo.absolute()) in prompt
+        assert "checklist" in prompt.lower()
+        assert "No paper was provided" in prompt
+        assert "Paper Content" not in prompt
 
-        assert "Consistency" in prompt or "consistency" in prompt
-        assert "CS1" in prompt
-        assert "CS5" in prompt
-
-    def test_generate_generalization_evaluation_prompt(self, tmp_path):
-        """Test generalization evaluation prompt generation."""
+    def test_generate_scoring_prompt(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
 
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="generalization",
-            repo_path=repo
+        gen = PromptGenerator()
+        items = [
+            ChecklistItem(question="Does train.py run?", category="code"),
+            ChecklistItem(question="Is the optimizer Adam?", category="code"),
+        ]
+        prompt = gen.generate_scoring_prompt(
+            category_name="code",
+            checklist_items=items,
+            repo_path=repo,
+            plan_path=None,
+            output_dir=output,
         )
+        assert "Does train.py run?" in prompt
+        assert "Is the optimizer Adam?" in prompt
+        assert "code_evaluation.json" in prompt
+        assert str(repo.absolute()) in prompt
+        assert "Code Quality" in prompt
 
-        assert "Generalization" in prompt or "generalization" in prompt
-        assert "GT1" in prompt
-        assert "GT2" in prompt
-        assert "GT3" in prompt
-
-    def test_generate_replication_evaluation_prompt(self, tmp_path):
-        """Test replication evaluation prompt generation."""
+    def test_generate_scoring_prompt_with_plan(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
-
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="replication",
-            repo_path=repo
-        )
-
-        assert "Replication" in prompt or "replication" in prompt
-        assert "RP1" in prompt
-        assert "RP2" in prompt
-        assert "RP3" in prompt
-
-    def test_generate_instruction_evaluation_prompt(self, tmp_path):
-        """Test instruction evaluation prompt generation."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="instruction",
-            repo_path=repo
-        )
-
-        assert "Instruction" in prompt or "instruction" in prompt
-        assert "TS1" in prompt
-        assert "TS4" in prompt
-
-    def test_invalid_evaluation_type(self, tmp_path):
-        """Test that invalid evaluation type raises error."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-
-        generator = PromptGenerator()
-
-        with pytest.raises(ValueError, match="Unknown evaluation type"):
-            generator.generate_evaluation_prompt(
-                eval_type="invalid",
-                repo_path=repo
-            )
-
-    def test_prompt_includes_plan_path(self, tmp_path):
-        """Test that plan path is included when provided."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
         plan = tmp_path / "plan.md"
-        plan.write_text("# Research Plan")
+        plan.write_text("# Plan")
 
-        generator = PromptGenerator()
-        prompt = generator.generate_evaluation_prompt(
-            eval_type="code",
+        gen = PromptGenerator()
+        items = [ChecklistItem(question="Q1?", category="consistency")]
+
+        prompt = gen.generate_scoring_prompt(
+            category_name="consistency",
+            checklist_items=items,
             repo_path=repo,
-            plan_path=plan
+            plan_path=plan,
+            output_dir=output,
         )
+        assert str(plan.absolute()) in prompt
 
-        assert str(plan) in prompt
+    def test_scoring_prompt_category_display_names(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        gen = PromptGenerator()
+        for category, display in [
+            ("code", "Code Quality"),
+            ("consistency", "Consistency"),
+            ("generalization", "Generalization"),
+            ("replication", "Replicability"),
+            ("instruction", "Instruction Following"),
+        ]:
+            items = [ChecklistItem(question="Q?", category=category)]
+            prompt = gen.generate_scoring_prompt(
+                category_name=category,
+                checklist_items=items,
+                repo_path=repo,
+                plan_path=None,
+                output_dir=output,
+            )
+            assert display in prompt
