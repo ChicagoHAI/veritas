@@ -39,6 +39,12 @@ class Config:
     # Runtime settings
     verbose: bool = False
 
+    # Docker / replication settings
+    use_docker: bool = True
+    docker_image: str = "veritas-replicator:latest"
+    replication_timeout: int = 3600
+    gpu: bool = True
+
     def __post_init__(self):
         # Convert paths to Path objects
         self.repo_path = Path(self.repo_path)
