@@ -67,6 +67,7 @@ class ReportGenerator:
         config: Config,
         output_dir: Path,
         generate_pdf: bool = True,
+        evidence=None,
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """
         Generate report from EvaluationResult objects.
@@ -76,6 +77,7 @@ class ReportGenerator:
             config: Configuration object
             output_dir: Output directory
             generate_pdf: Whether to generate PDF
+            evidence: Optional ExecutionEvidence from replication phase
 
         Returns:
             Tuple of (markdown_path, pdf_path)
@@ -89,7 +91,7 @@ class ReportGenerator:
                 "error": result.error,
             }
 
-        md_content = self._generate_markdown_report(results_dict)
+        md_content = self._generate_markdown_report(results_dict, evidence=evidence)
 
         md_path = output_dir / "replication_report.md"
         md_path.write_text(md_content, encoding='utf-8')
@@ -129,7 +131,7 @@ class ReportGenerator:
 
         return results
 
-    def _generate_markdown_report(self, results: Dict[str, Any]) -> str:
+    def _generate_markdown_report(self, results: Dict[str, Any], evidence=None) -> str:
         """Generate the markdown report content."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -164,6 +166,10 @@ class ReportGenerator:
             report += "**Moderate Replicability** - Some areas need improvement for full reproducibility.\n\n"
         else:
             report += "**Low Replicability** - Significant issues identified that hinder reproduction.\n\n"
+
+        # Replication evidence section (if available)
+        if evidence:
+            report += self._generate_replication_section(evidence)
 
         # Summary table
         report += "### Quick Summary\n\n"
@@ -236,6 +242,56 @@ class ReportGenerator:
             section += f"- {tag} {question}\n"
             if answer != "YES" and rationale:
                 section += f"  - {rationale}\n"
+
+        section += "\n"
+        return section
+
+    def _generate_replication_section(self, evidence) -> str:
+        """Generate the Replication Attempt section."""
+        section = "## Replication Attempt\n\n"
+
+        # Environment
+        env = evidence.environment
+        env_parts = []
+        if env.get("python_version"):
+            env_parts.append(f"Python {env['python_version']}")
+        if env.get("gpu_model"):
+            env_parts.append(f"GPU: {env['gpu_model']}")
+        elif env.get("gpu_available"):
+            env_parts.append("GPU: Available")
+        else:
+            env_parts.append("GPU: None")
+
+        pkgs = env.get("key_packages", {})
+        if pkgs:
+            pkg_strs = [f"{k} {v}" for k, v in list(pkgs.items())[:5]]
+            env_parts.append(f"Packages: {', '.join(pkg_strs)}")
+
+        section += f"**Environment:** {', '.join(env_parts)}\n"
+        section += f"**Duration:** {evidence.total_duration_seconds:.0f}s\n"
+        section += f"**Steps completed:** {evidence.steps_succeeded}/{evidence.steps_attempted}\n\n"
+
+        # Steps table
+        section += "| Step | Description | Result | Duration |\n"
+        section += "|------|-------------|--------|----------|\n"
+
+        for step in evidence.step_outcomes:
+            status = "Success" if step.succeeded else "Failed"
+            section += f"| {step.step_id} | {step.description} | {status} | {step.duration_seconds:.0f}s |\n"
+
+        section += "\n"
+
+        # Failures detail
+        failures = [s for s in evidence.step_outcomes if not s.succeeded]
+        if failures:
+            section += "### Failures\n\n"
+            for step in failures:
+                section += f"**Step {step.step_id} — {step.description}**\n"
+                if step.stderr:
+                    section += f"```\n{step.stderr[:1000]}\n```\n"
+                if step.suggested_fix:
+                    section += f"Suggested fix: {step.suggested_fix}\n"
+                section += "\n"
 
         section += "\n"
         return section

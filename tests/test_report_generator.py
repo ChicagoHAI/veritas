@@ -4,6 +4,7 @@ import json
 import pytest
 from pathlib import Path
 from veritas.core.report_generator import ReportGenerator
+from veritas.core.models import ExecutionEvidence, StepOutcome
 
 
 class TestReportGenerator:
@@ -134,3 +135,46 @@ class TestReportGenerator:
         recs = generator._generate_recommendations(results)
         # Should recommend fixing code issues
         assert "code" in recs.lower() or "fail" in recs.lower()
+
+
+class TestReportWithEvidence:
+    def test_report_includes_replication_section(self):
+        generator = ReportGenerator()
+        evidence = ExecutionEvidence(
+            environment={"python_version": "3.12.0", "gpu_available": True, "gpu_model": "A100"},
+            step_outcomes=[
+                StepOutcome(step_id=1, description="Install deps", command_executed="pip install",
+                            exit_code=0, stdout="OK", stderr="", output_files=[],
+                            duration_seconds=45.0, suggested_fix=None, code_modified=False, notes=""),
+                StepOutcome(step_id=2, description="Run training", command_executed="python train.py",
+                            exit_code=1, stdout="", stderr="FileNotFoundError", output_files=[],
+                            duration_seconds=2.0, suggested_fix="Fix checkpoint path",
+                            code_modified=False, notes=""),
+            ],
+        )
+        results = {
+            "code": {
+                "success": True,
+                "items": [{"question": "Does it run?", "answer": "NO", "rationale": "Step 2 failed"}],
+                "pass_rate": 0.0,
+            }
+        }
+        md = generator._generate_markdown_report(results, evidence=evidence)
+        assert "Replication Attempt" in md
+        assert "Install deps" in md
+        assert "Run training" in md
+        assert "FileNotFoundError" in md
+        assert "Fix checkpoint path" in md
+        assert "1/2" in md or "1 / 2" in md
+
+    def test_report_without_evidence_has_no_replication_section(self):
+        generator = ReportGenerator()
+        results = {
+            "code": {
+                "success": True,
+                "items": [{"question": "Does it run?", "answer": "YES", "rationale": "OK"}],
+                "pass_rate": 1.0,
+            }
+        }
+        md = generator._generate_markdown_report(results, evidence=None)
+        assert "Replication Attempt" not in md
