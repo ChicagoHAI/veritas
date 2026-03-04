@@ -1,10 +1,15 @@
 """Generate prompts for evaluation agents."""
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from veritas.core.checklist import ChecklistItem
+
+if TYPE_CHECKING:
+    from veritas.core.models import ExecutionEvidence, ReplicationPlan
 
 
 CATEGORY_DISPLAY_NAMES = {
@@ -17,7 +22,7 @@ CATEGORY_DISPLAY_NAMES = {
 
 
 class PromptGenerator:
-    """Generates prompts for checklist generation and scoring."""
+    """Generates prompts for checklist generation, replication, and scoring."""
 
     def __init__(self, templates_dir: Optional[Path] = None):
         if templates_dir is None:
@@ -37,16 +42,7 @@ class PromptGenerator:
         output_dir: Path,
         paper_text: Optional[str] = None,
     ) -> str:
-        """Generate prompt for personalized checklist generation.
-
-        Args:
-            repo_path: Path to the repository being evaluated
-            output_dir: Directory for output files
-            paper_text: Extracted text from the paper PDF (optional)
-
-        Returns:
-            Complete prompt string for checklist generation
-        """
+        """Generate prompt for personalized checklist generation."""
         template = self.env.get_template("checklist_generation.md")
 
         context = {
@@ -64,19 +60,9 @@ class PromptGenerator:
         repo_path: Path,
         plan_path: Optional[Path],
         output_dir: Path,
+        evidence: Optional[ExecutionEvidence] = None,
     ) -> str:
-        """Generate prompt for scoring a category's checklist items.
-
-        Args:
-            category_name: Category key (code, consistency, etc.)
-            checklist_items: List of ChecklistItem for this category
-            repo_path: Path to the repository
-            plan_path: Path to plan file (if available)
-            output_dir: Directory for output files
-
-        Returns:
-            Complete prompt string for scoring
-        """
+        """Generate prompt for scoring a category's checklist items."""
         template = self.env.get_template("evaluation/scoring.txt")
 
         context = {
@@ -87,5 +73,36 @@ class PromptGenerator:
             "plan_path": str(plan_path.absolute()) if plan_path else None,
             "output_dir": str(output_dir.absolute()),
             "has_plan": plan_path is not None and plan_path.exists(),
+            "has_evidence": evidence is not None,
+            "evidence": evidence,
+        }
+        return template.render(**context)
+
+    def generate_replication_plan_prompt(
+        self,
+        repo_path: Path,
+        output_dir: Path,
+        checklist_items: List[ChecklistItem],
+        paper_text: Optional[str] = None,
+    ) -> str:
+        """Generate prompt for creating a replication plan."""
+        template = self.env.get_template("replication/plan_generation.md")
+        context = {
+            "repo_path": str(repo_path.absolute()),
+            "output_dir": str(output_dir.absolute()),
+            "has_paper": paper_text is not None,
+            "paper_text": paper_text or "",
+            "checklist_items": checklist_items,
+        }
+        return template.render(**context)
+
+    def generate_replication_session_prompt(
+        self,
+        replication_plan: ReplicationPlan,
+    ) -> str:
+        """Generate session instructions for the replication agent."""
+        template = self.env.get_template("replication/session_instructions.md")
+        context = {
+            "replication_plan": replication_plan,
         }
         return template.render(**context)
