@@ -22,6 +22,7 @@ class TestChecklistPipelineIntegration:
         config = Config(
             repo_path=repo, paper_path=paper, output_dir=output,
             evaluations=["code", "consistency"], generate_pdf=False,
+            use_docker=False,
         )
         runner = ReplicationRunner(config)
 
@@ -35,6 +36,11 @@ class TestChecklistPipelineIntegration:
                     {"question": "Do results match the paper's claims?"},
                 ],
             }
+        })
+
+        replication_plan_response = json.dumps({
+            "environment": {"language": "python"},
+            "steps": [{"id": 1, "description": "Run train.py", "command_hint": "python train.py", "expected_outcome": "OK"}],
         })
 
         code_scoring = json.dumps({
@@ -61,9 +67,12 @@ class TestChecklistPipelineIntegration:
                 output_path.write_text(checklist_response)
                 return checklist_response
             elif call_count == 2:
+                output_path.write_text(replication_plan_response)
+                return replication_plan_response
+            elif call_count == 3:
                 output_path.write_text(code_scoring)
                 return code_scoring
-            elif call_count == 3:
+            elif call_count == 4:
                 output_path.write_text(consistency_scoring)
                 return consistency_scoring
             return None
@@ -90,6 +99,7 @@ class TestChecklistPipelineIntegration:
         config = Config(
             repo_path=repo, output_dir=output,
             evaluations=["code"], generate_pdf=False,
+            use_docker=False,
         )
         runner = ReplicationRunner(config)
 
@@ -97,6 +107,11 @@ class TestChecklistPipelineIntegration:
             "categories": {
                 "code": [{"question": "Does main.py execute?"}],
             }
+        })
+
+        replication_plan_response = json.dumps({
+            "environment": {"language": "python"},
+            "steps": [{"id": 1, "description": "Run main.py", "command_hint": "python main.py", "expected_outcome": "OK"}],
         })
 
         code_scoring = json.dumps({
@@ -115,6 +130,9 @@ class TestChecklistPipelineIntegration:
                 output_path.write_text(checklist_response)
                 return checklist_response
             elif call_count == 2:
+                output_path.write_text(replication_plan_response)
+                return replication_plan_response
+            elif call_count == 3:
                 output_path.write_text(code_scoring)
                 return code_scoring
             return None

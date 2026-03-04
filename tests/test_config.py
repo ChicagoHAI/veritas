@@ -103,3 +103,25 @@ class TestConfig:
         for provider in VALID_PROVIDERS:
             config = Config(repo_path=repo, provider=provider)
             assert config.provider == provider
+
+
+class TestDockerConfig:
+    def test_default_docker_settings(self, tmp_path):
+        config = Config(repo_path=tmp_path)
+        assert config.use_docker is True
+        assert config.docker_image == "veritas-replicator:latest"
+        assert config.replication_timeout == 3600
+        assert config.gpu is True
+
+    def test_custom_docker_settings(self, tmp_path):
+        config = Config(
+            repo_path=tmp_path,
+            use_docker=False,
+            docker_image="custom:v1",
+            replication_timeout=7200,
+            gpu=False,
+        )
+        assert config.use_docker is False
+        assert config.docker_image == "custom:v1"
+        assert config.replication_timeout == 7200
+        assert config.gpu is False
