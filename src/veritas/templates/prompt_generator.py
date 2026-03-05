@@ -40,7 +40,7 @@ class PromptGenerator:
         self,
         repo_path: Path,
         output_dir: Path,
-        paper_text: Optional[str] = None,
+        paper_path: Optional[Path] = None,
     ) -> str:
         """Generate prompt for personalized checklist generation."""
         template = self.env.get_template("checklist_generation.md")
@@ -48,8 +48,8 @@ class PromptGenerator:
         context = {
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
-            "has_paper": paper_text is not None,
-            "paper_text": paper_text or "",
+            "has_paper": paper_path is not None,
+            "paper_path": str(paper_path) if paper_path else "",
         }
         return template.render(**context)
 
@@ -83,15 +83,15 @@ class PromptGenerator:
         repo_path: Path,
         output_dir: Path,
         checklist_items: List[ChecklistItem],
-        paper_text: Optional[str] = None,
+        paper_path: Optional[Path] = None,
     ) -> str:
         """Generate prompt for creating a replication plan."""
         template = self.env.get_template("replication/plan_generation.md")
         context = {
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
-            "has_paper": paper_text is not None,
-            "paper_text": paper_text or "",
+            "has_paper": paper_path is not None,
+            "paper_path": str(paper_path) if paper_path else "",
             "checklist_items": checklist_items,
         }
         return template.render(**context)

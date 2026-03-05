@@ -20,14 +20,14 @@ class TestPromptGenerator:
         prompt = gen.generate_checklist_prompt(
             repo_path=repo,
             output_dir=output,
-            paper_text="This paper studies sentiment analysis using BERT.",
+            paper_path=Path("/some/paper.pdf"),
         )
-        assert "sentiment analysis" in prompt
+        assert "paper.pdf" in prompt
+        assert "read the PDF directly" in prompt
         assert str(repo.absolute()) in prompt
         assert "checklist" in prompt.lower()
         assert "Code Quality" in prompt
         assert "Consistency" in prompt
-        assert "Paper Content" in prompt
 
     def test_generate_checklist_prompt_without_paper(self, tmp_path):
         repo = tmp_path / "repo"
@@ -125,13 +125,14 @@ class TestReplicationPrompts:
         prompt = pg.generate_replication_plan_prompt(
             repo_path=repo,
             output_dir=output,
-            paper_text="A paper about training BERT on SST-2",
+            paper_path=Path("/some/paper.pdf"),
             checklist_items=[
                 ChecklistItem(question="Does training run?", category="code"),
                 ChecklistItem(question="Is accuracy 92%?", category="consistency"),
             ],
         )
-        assert "BERT" in prompt or "paper" in prompt.lower()
+        assert "paper.pdf" in prompt
+        assert "read the PDF directly" in prompt
         assert str(repo.absolute()) in prompt
         assert "Does training run?" in prompt
         assert "replication_plan.json" in prompt
