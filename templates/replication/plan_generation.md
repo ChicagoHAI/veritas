@@ -4,9 +4,11 @@ You are generating a step-by-step replication plan for testing the reproducibili
 {% if has_paper %}
 You have been given the paper that this repository is meant to replicate.
 
-## Paper Content
+## Paper
 
-{{ paper_text }}
+You MUST read the PDF directly from this local path:
+{{ paper_path }}
+
 {% else %}
 No paper was provided. Generate the plan based on the repository contents alone.
 {% endif %}
