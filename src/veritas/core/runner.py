@@ -20,7 +20,6 @@ from veritas.core.container import (
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.pdf import read_pdf
 from veritas.utils.security import sanitize_log_file
 
 
@@ -110,14 +109,10 @@ class ReplicationRunner:
         """Generate a personalized checklist."""
         print("Generating personalized checklist...")
 
-        paper_text = None
-        if self.config.has_paper:
-            paper_text = read_pdf(self.config.paper_path)
-
         prompt = self.prompt_generator.generate_checklist_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_text=paper_text,
+            paper_path=self.config.paper_path if self.config.has_paper else None,
         )
 
         prompt_path = self.config.output_dir / "checklist_generation_prompt.txt"
@@ -152,15 +147,11 @@ class ReplicationRunner:
         """Generate a replication plan based on the checklist."""
         print("Generating replication plan...")
 
-        paper_text = None
-        if self.config.has_paper:
-            paper_text = read_pdf(self.config.paper_path)
-
         prompt = self.prompt_generator.generate_replication_plan_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_text=paper_text,
             checklist_items=checklist.items,
+            paper_path=self.config.paper_path if self.config.has_paper else None,
         )
 
         prompt_path = self.config.output_dir / "replication_plan_prompt.txt"
@@ -172,10 +163,6 @@ class ReplicationRunner:
             working_dir=self.config.repo_path,
             output_path=output_path,
         )
-
-        if stdout is None:
-            print("  Warning: Replication plan generation failed, skipping replication phase")
-            return None
 
         response_text = None
         if output_path.exists():
