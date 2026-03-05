@@ -130,13 +130,10 @@ class ReplicationRunner:
             output_path=output_json_path,
         )
 
-        if stdout is None:
-            raise RuntimeError("Checklist generation failed: provider returned no output")
-
         response_text = None
         if output_json_path.exists():
-            response_text = output_json_path.read_text(encoding='utf-8')
-        elif stdout:
+            response_text = output_json_path.read_text(encoding='utf-8').strip()
+        if not response_text and stdout:
             response_text = stdout
 
         if not response_text:
@@ -182,8 +179,8 @@ class ReplicationRunner:
 
         response_text = None
         if output_path.exists():
-            response_text = output_path.read_text(encoding='utf-8')
-        elif stdout:
+            response_text = output_path.read_text(encoding='utf-8').strip()
+        if not response_text and stdout:
             response_text = stdout
 
         if not response_text:
@@ -344,7 +341,7 @@ class ReplicationRunner:
                 output_path=output_json_path,
             )
 
-            if stdout is not None and output_json_path.exists():
+            if output_json_path.exists():
                 with open(output_json_path, encoding='utf-8') as f:
                     data = json.load(f)
 
