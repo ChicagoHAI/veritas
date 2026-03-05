@@ -3,14 +3,14 @@
 You are generating a personalized evaluation checklist for assessing the quality and reproducibility of a code repository.
 {% if has_paper %}
 You have been given the paper that this repository is meant to replicate. Generate specific YES/NO questions tailored to this paper and repository.
+
+## Paper
+
+You MUST read the PDF directly from this local path:
+{{ paper_path }}
+
 {% else %}
 No paper was provided. Generate YES/NO questions based on what you find in the repository — its documentation, code, and stated goals.
-{% endif %}
-
-{% if has_paper %}
-## Paper Content
-
-{{ paper_text }}
 {% endif %}
 
 ## Repository Path
@@ -127,7 +127,7 @@ Replication:
 
 ## Real Task
 
-{% if has_paper %}Read the paper content above and explore{% else %}Explore{% endif %} the repository at the specified path. Then:
+{% if has_paper %}Read the paper at the path above and explore{% else %}Explore{% endif %} the repository at the specified path. Then:
 
 1. **Analyze**: Identify the {% if has_paper %}paper's key claims, methods, parameters, datasets, and expected results. Note what{% else %}repository's goals, methods, and stated results from its documentation. Note what{% endif %} the repository contains.
 2. **Generate**: Produce 3-8 YES/NO questions per category, following the guidance above.
