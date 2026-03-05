@@ -1,6 +1,7 @@
 """Main runner for replication evaluation."""
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -397,11 +398,24 @@ class ReplicationRunner:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
+    @staticmethod
+    def _resolve_cli(name: str) -> str:
+        """Resolve a CLI tool name to its full path.
+
+        On Windows, npm installs .cmd shims that subprocess can't find
+        without shell=True. This resolves the full path instead.
+        """
+        resolved = shutil.which(name)
+        if resolved is None:
+            raise FileNotFoundError(f"{name} CLI not found on PATH")
+        return resolved
+
     def _invoke_claude(self, prompt, working_dir, output_path):
         try:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
-            cmd = ["claude", "-p", str(prompt_file), "--output-format", "text", "--dangerously-skip-permissions"]
+            claude = self._resolve_cli("claude")
+            cmd = [claude, "-p", str(prompt_file), "--output-format", "text", "--dangerously-skip-permissions"]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=self.config.timeout,
                 capture_output=True, encoding='utf-8',
@@ -410,8 +424,8 @@ class ReplicationRunner:
         except subprocess.TimeoutExpired:
             print(f"  Timeout after {self.config.timeout}s")
             return None
-        except FileNotFoundError:
-            print("  Claude CLI not found. Please install claude-code.")
+        except FileNotFoundError as e:
+            print(f"  {e}")
             return None
         except Exception as e:
             print(f"  Error invoking Claude: {e}")
@@ -419,12 +433,16 @@ class ReplicationRunner:
 
     def _invoke_codex(self, prompt, working_dir, output_path):
         try:
-            cmd = ["codex", "exec", "--full-auto", "-"]
+            codex = self._resolve_cli("codex")
+            cmd = [codex, "exec", "--full-auto", "-"]
             result = subprocess.run(
                 cmd, cwd=working_dir, input=prompt, timeout=self.config.timeout,
                 capture_output=True, encoding='utf-8',
             )
             return result.stdout if result.returncode == 0 else None
+        except FileNotFoundError as e:
+            print(f"  {e}")
+            return None
         except Exception as e:
             print(f"  Error invoking Codex: {e}")
             return None
@@ -433,12 +451,16 @@ class ReplicationRunner:
         try:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
-            cmd = ["gemini", "-p", str(prompt_file)]
+            gemini = self._resolve_cli("gemini")
+            cmd = [gemini, "-p", str(prompt_file)]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=self.config.timeout,
                 capture_output=True, encoding='utf-8',
             )
             return result.stdout if result.returncode == 0 else None
+        except FileNotFoundError as e:
+            print(f"  {e}")
+            return None
         except Exception as e:
             print(f"  Error invoking Gemini: {e}")
             return None
