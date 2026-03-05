@@ -78,7 +78,6 @@ class TestChecklistPipelineIntegration:
             return None
 
         with patch.object(runner, '_invoke_provider', side_effect=mock_invoke), \
-             patch('veritas.core.runner.read_pdf', return_value="Paper about testing"), \
              patch.object(runner.plan_extractor, '_read_pdf', return_value=("Paper about testing", [])):
                 result = runner.run()
 

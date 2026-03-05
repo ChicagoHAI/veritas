@@ -50,8 +50,7 @@ class TestGenerateChecklist:
         })
 
         with patch.object(runner, '_invoke_provider', return_value=mock_response):
-            with patch('veritas.core.runner.read_pdf', return_value="Paper about testing"):
-                checklist = runner._generate_checklist()
+            checklist = runner._generate_checklist()
 
         assert checklist is not None
         assert len(checklist.get_items_by_category("code")) == 1
