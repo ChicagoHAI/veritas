@@ -12,23 +12,21 @@ if ! command -v python &> /dev/null; then
     fi
 fi
 
-# Handle arbitrary user (--user flag)
+# Handle arbitrary user (--user flag).
 if [ ! -w "${HOME:-/}" ]; then
-    export HOME=/tmp
+    export HOME=/tmp/home
+    mkdir -p "$HOME"
 fi
 
-# Symlink credential directories from /tmp/ to $HOME/ so AI CLIs
-# can find them regardless of which user the container runs as.
-# (Credentials are mounted to /tmp/ by veritas for --user compatibility.)
-if [ "$HOME" != "/tmp" ]; then
-    for dir in .claude .codex .gemini; do
-        if [ -d "/tmp/$dir" ]; then
-            # Remove empty dir created by Dockerfile so symlink can replace it
-            rm -rf "$HOME/$dir"
-            ln -sf "/tmp/$dir" "$HOME/$dir"
-        fi
-    done
-fi
+# Copy credential directories from read-only mounts at /tmp/ to writable $HOME/.
+# Credentials are mounted to /tmp/ by veritas with :ro to protect host files,
+# but CLIs like Codex need write access to their config dirs.
+for dir in .claude .codex .gemini; do
+    if [ -d "/tmp/$dir" ]; then
+        rm -rf "$HOME/$dir"
+        cp -r "/tmp/$dir" "$HOME/$dir"
+    fi
+done
 
 echo "=== Veritas Replicator Container ==="
 
