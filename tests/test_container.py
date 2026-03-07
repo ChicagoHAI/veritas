@@ -162,11 +162,8 @@ class TestDirectoryPreCreation:
         assert (output / "replication").exists()
 
 
-class TestTtyDetection:
-    @patch("veritas.core.container.sys.stdin")
-    def test_non_interactive_uses_dash_i(self, mock_stdin, tmp_path):
-        """Non-interactive (piped) should use -i only."""
-        mock_stdin.isatty.return_value = False
+class TestTtyFlag:
+    def test_always_uses_dash_i_not_dash_it(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         output = tmp_path / "output"
@@ -178,21 +175,6 @@ class TestTtyDetection:
         )
         assert "-i" in cmd
         assert "-it" not in cmd
-
-    @patch("veritas.core.container.sys.stdin")
-    def test_interactive_uses_dash_it(self, mock_stdin, tmp_path):
-        """Interactive terminal should use -it."""
-        mock_stdin.isatty.return_value = True
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        output = tmp_path / "output"
-        output.mkdir()
-
-        cmd = build_container_command(
-            repo_path=repo, output_dir=output,
-            image="veritas:latest", provider_cmd=["claude"],
-        )
-        assert "-it" in cmd
 
 
 class TestBuildContainerCommand:

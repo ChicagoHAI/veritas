@@ -3,7 +3,6 @@
 import os
 import platform
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -80,8 +79,7 @@ def build_container_command(
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "replication").mkdir(exist_ok=True)
 
-    tty_flags = ["-it"] if sys.stdin.isatty() else ["-i"]
-    cmd = ["docker", "run", "--rm"] + tty_flags
+    cmd = ["docker", "run", "--rm", "-i"]
 
     # Run as host user on Linux/macOS so output files have correct ownership.
     # On Windows, Docker Desktop handles permissions automatically.
@@ -167,7 +165,8 @@ def execute_in_container(
         process.wait()
         return process.returncode
 
-    except Exception:
+    except Exception as e:
+        print(f"  [container] Error: {e}")
         if process is not None:
             process.kill()
         return -1
