@@ -316,7 +316,7 @@ class ReplicationRunner:
         if provider == "claude":
             return ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text"]
         elif provider == "codex":
-            return ["codex", "exec", "--full-auto", "-"]
+            return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-"]
         elif provider == "gemini":
             return ["gemini", "-p"]
         else:
