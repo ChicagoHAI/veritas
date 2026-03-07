@@ -180,6 +180,118 @@ class TestReplicatePhase:
         assert evidence is None
 
 
+class TestJsonRepairReprompt:
+    def test_replication_plan_retries_on_invalid_json(self, tmp_path):
+        """When first response has invalid JSON, should re-prompt and succeed."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        config = Config(repo_path=repo, output_dir=output)
+        runner = ReplicationRunner(config)
+
+        invalid_json = '{"environment": {"language": "python"}, "steps": [{"id": 1, "description": "Audit", "command_hint": "rg \\s*=", "expected_outcome": "OK"}]}'
+        valid_json = json.dumps({
+            "environment": {"language": "python"},
+            "steps": [{"id": 1, "description": "Audit", "command_hint": "rg \\\\s*=", "expected_outcome": "OK"}]
+        })
+
+        call_count = 0
+        def mock_invoke(prompt, working_dir, output_path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: checklist generation
+                checklist_json = json.dumps({
+                    "categories": {"code": [{"question": "Does it run?"}]}
+                })
+                output_path.write_text(checklist_json, encoding='utf-8')
+                return checklist_json
+            elif call_count == 2:
+                # Second call: replication plan with invalid JSON
+                output_path.write_text(invalid_json, encoding='utf-8')
+                return invalid_json
+            elif call_count == 3:
+                # Third call: repair re-prompt returns valid JSON
+                output_path.write_text(valid_json, encoding='utf-8')
+                return valid_json
+            return None
+
+        with patch.object(runner, '_invoke_provider', side_effect=mock_invoke):
+            checklist, plan = runner._analyze()
+
+        assert plan is not None
+        assert len(plan.steps) == 1
+        assert call_count == 3  # checklist + failed plan + repair
+
+    def test_checklist_retries_on_invalid_json(self, tmp_path):
+        """When checklist response has invalid JSON, should re-prompt."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        config = Config(repo_path=repo, output_dir=output)
+        runner = ReplicationRunner(config)
+
+        invalid_json = '{"categories": {"code": [{"question": "Does \\d+ work?"}]}}'
+        valid_json = json.dumps({
+            "categories": {"code": [{"question": "Does the code run?"}]}
+        })
+
+        call_count = 0
+        def mock_invoke(prompt, working_dir, output_path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                output_path.write_text(invalid_json, encoding='utf-8')
+                return invalid_json
+            elif call_count == 2:
+                output_path.write_text(valid_json, encoding='utf-8')
+                return valid_json
+            return None
+
+        with patch.object(runner, '_invoke_provider', side_effect=mock_invoke):
+            checklist = runner._generate_checklist()
+
+        assert checklist is not None
+        assert len(checklist.items) == 1
+        assert call_count == 2
+
+    def test_replication_plan_gives_up_after_repair_fails(self, tmp_path):
+        """When repair also returns invalid JSON, should give up gracefully."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        config = Config(repo_path=repo, output_dir=output)
+        runner = ReplicationRunner(config)
+
+        invalid_json = '{"steps": [{"command_hint": "rg \\s*="}]}'
+
+        call_count = 0
+        def mock_invoke(prompt, working_dir, output_path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                checklist_json = json.dumps({
+                    "categories": {"code": [{"question": "Q?"}]}
+                })
+                output_path.write_text(checklist_json, encoding='utf-8')
+                return checklist_json
+            else:
+                # Both plan attempts return invalid JSON
+                output_path.write_text(invalid_json, encoding='utf-8')
+                return invalid_json
+
+        with patch.object(runner, '_invoke_provider', side_effect=mock_invoke):
+            checklist, plan = runner._analyze()
+
+        assert plan is None  # gave up
+
+
 class TestEvaluatePhase:
     def test_evaluate_passes_evidence_to_scoring(self, tmp_path):
         repo = tmp_path / "repo"

@@ -134,7 +134,20 @@ class ReplicationRunner:
         if not response_text:
             raise RuntimeError("Checklist generation failed: no output to parse")
 
-        checklist = parse_checklist_response(response_text)
+        try:
+            checklist = parse_checklist_response(response_text)
+        except ValueError as e:
+            print(f"  Warning: Could not parse checklist: {e}")
+            print("  Retrying with repair prompt...")
+            checklist = self._repair_json_response(
+                original_prompt=prompt,
+                broken_output=response_text,
+                output_path=output_json_path,
+                parser=parse_checklist_response,
+            )
+
+        if checklist is None:
+            raise RuntimeError("Checklist generation failed: could not parse response even after repair")
 
         output_json_path.write_text(
             json.dumps(checklist.to_dict(), indent=2), encoding='utf-8'
@@ -176,13 +189,60 @@ class ReplicationRunner:
 
         try:
             plan = parse_replication_plan_response(response_text)
-            output_path.write_text(
-                json.dumps(plan.to_dict(), indent=2), encoding='utf-8'
-            )
-            print(f"  Generated replication plan with {len(plan.steps)} steps")
-            return plan
         except ValueError as e:
             print(f"  Warning: Could not parse replication plan: {e}")
+            print("  Retrying with repair prompt...")
+            plan = self._repair_json_response(
+                original_prompt=prompt,
+                broken_output=response_text,
+                output_path=output_path,
+                parser=parse_replication_plan_response,
+            )
+
+        if plan is None:
+            return None
+
+        output_path.write_text(
+            json.dumps(plan.to_dict(), indent=2), encoding='utf-8'
+        )
+        print(f"  Generated replication plan with {len(plan.steps)} steps")
+        return plan
+
+    def _repair_json_response(self, original_prompt, broken_output, output_path, parser):
+        """Re-prompt the provider to fix invalid JSON output.
+
+        Follows MechEvalAgent's pattern: append the broken output and ask
+        the provider to return valid JSON only.
+        """
+        repair_prompt = (
+            original_prompt
+            + "\n\n---\n\n"
+            + "Your last output was not valid JSON. Here is what you returned:\n\n"
+            + broken_output[:2000]
+            + "\n\nPlease return ONLY valid JSON, with no explanation or markdown formatting. "
+            + "Make sure all backslashes in strings are properly escaped (use \\\\ not \\)."
+        )
+
+        stdout = self._invoke_provider(
+            prompt=repair_prompt,
+            working_dir=self.config.repo_path,
+            output_path=output_path,
+        )
+
+        response_text = None
+        if output_path.exists():
+            response_text = output_path.read_text(encoding='utf-8').strip()
+        if not response_text and stdout:
+            response_text = stdout
+
+        if not response_text:
+            print("  Warning: Repair prompt returned no output")
+            return None
+
+        try:
+            return parser(response_text)
+        except ValueError as e:
+            print(f"  Warning: Repair also failed: {e}")
             return None
 
     # -- Phase 2: Replicate ------------------------------------------------
@@ -268,7 +328,7 @@ class ReplicationRunner:
 
     # -- Phase 3: Evaluate -------------------------------------------------
 
-    def _evaluate(
+    def _evaluate(  
         self,
         checklist: Checklist,
         evidence: Optional[ExecutionEvidence],
