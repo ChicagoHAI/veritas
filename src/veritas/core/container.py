@@ -104,8 +104,7 @@ def build_container_command(
     if gpu:
         cmd.extend(["--gpus", "all"])
 
-    # Working directory — run inside the repo so git-aware tools work
-    cmd.extend(["-w", "/workspace/repo"])
+    cmd.extend(["-w", "/workspace/output"])
 
     # Image and command
     cmd.append(image)
