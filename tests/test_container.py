@@ -235,6 +235,21 @@ class TestBuildContainerCommand:
         )
         assert "--gpus" not in cmd
 
+    def test_working_directory_set_to_repo(self, tmp_path):
+        """Should set -w /workspace/repo so git-aware tools work."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["codex"],
+        )
+        assert "-w" in cmd
+        w_idx = cmd.index("-w")
+        assert cmd[w_idx + 1] == "/workspace/repo"
+
     def test_volume_mounts_present(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
