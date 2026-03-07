@@ -101,7 +101,7 @@ class TestPromptGenerator:
             ("consistency", "Consistency"),
             ("generalization", "Generalization"),
             ("replication", "Replicability"),
-            ("instruction", "Instruction Following"),
+            ("instruction_following", "Instruction Following"),
         ]:
             items = [ChecklistItem(question="Q?", category=category)]
             prompt = gen.generate_scoring_prompt(

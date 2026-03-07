@@ -153,7 +153,7 @@ Save the checklist to `{{ output_dir }}/checklist.json` with this format:
         "replication": [
             {"question": "Your specific YES/NO question here?"}
         ],
-        "instruction": [
+        "instruction_following": [
             {"question": "Your specific YES/NO question here?"}
         ]
     }

@@ -18,7 +18,7 @@ class ReportGenerator:
         "consistency": "Consistency",
         "generalization": "Generalization",
         "replication": "Replicability",
-        "instruction": "Instruction Following",
+        "instruction_following": "Instruction Following",
     }
 
     def generate(
@@ -112,7 +112,7 @@ class ReportGenerator:
             "consistency": "consistency_evaluation.json",
             "generalization": "generalization_evaluation.json",
             "replication": "replication_evaluation.json",
-            "instruction": "instruction_evaluation.json",
+            "instruction_following": "instruction_following_evaluation.json",
         }
 
         for eval_name, filename in eval_files.items():

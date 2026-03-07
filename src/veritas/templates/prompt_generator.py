@@ -17,7 +17,7 @@ CATEGORY_DISPLAY_NAMES = {
     "consistency": "Consistency",
     "generalization": "Generalization",
     "replication": "Replicability",
-    "instruction": "Instruction Following",
+    "instruction_following": "Instruction Following",
 }
 
 

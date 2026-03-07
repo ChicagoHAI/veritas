@@ -58,7 +58,7 @@ def evaluate(
         None,
         "--evaluations", "-e",
         help="Comma-separated list of evaluations to run (default: all). "
-             "Options: code,consistency,generalization,replication,instruction",
+             "Options: code,consistency,generalization,replication,instruction_following",
     ),
     timeout: int = typer.Option(
         3600,

@@ -14,7 +14,7 @@ ALL_EVALUATIONS = [
     "consistency",    # Consistency between docs, code, and claims
     "generalization", # Generalization testing
     "replication",    # Replicability assessment
-    "instruction",    # Instruction following (for AI-generated work)
+    "instruction_following",    # Instruction following (for AI-generated work)
 ]
 
 

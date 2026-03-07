@@ -20,7 +20,7 @@ class TestConfig:
         assert "consistency" in config.evaluations
         assert "generalization" in config.evaluations
         assert "replication" in config.evaluations
-        assert "instruction" in config.evaluations
+        assert "instruction_following" in config.evaluations
 
     def test_custom_evaluations(self, tmp_path):
         """Test custom evaluation selection."""
