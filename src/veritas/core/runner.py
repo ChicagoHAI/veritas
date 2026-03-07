@@ -288,15 +288,11 @@ class ReplicationRunner:
 
         log_path = self.config.output_dir / "replication" / "execution_stdout.log"
 
-        def _on_output(line: str):
-            print(f"  [container] {line}", end="")
-
         returncode = execute_in_container(
             cmd=cmd,
             session_instructions=session_instructions,
             log_path=log_path,
             timeout=self.config.replication_timeout,
-            on_output=_on_output,
         )
 
         if returncode != 0:
