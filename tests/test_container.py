@@ -9,6 +9,7 @@ from veritas.core.container import (
     build_container_command,
     execute_in_container,
     _get_credential_mounts,
+    _docker_path,
 )
 
 
@@ -39,6 +40,17 @@ class TestHasGpu:
             assert has_gpu() is False
 
 
+class TestDockerPath:
+    def test_no_backslashes(self, tmp_path):
+        result = _docker_path(tmp_path / "repo")
+        assert "\\" not in result
+
+    def test_absolute(self, tmp_path):
+        result = _docker_path(tmp_path / "repo")
+        # Should be an absolute path (Unix / or Windows drive letter)
+        assert result[0] == "/" or result[1] == ":"
+
+
 class TestCredentialMounts:
     def test_mounts_existing_credential_dirs(self, tmp_path):
         """Should mount credential dirs that exist."""
@@ -60,6 +72,127 @@ class TestCredentialMounts:
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             mounts = _get_credential_mounts()
         assert mounts == []
+
+    def test_mounts_to_tmp_directory(self, tmp_path):
+        """Credentials should mount to /tmp/ for --user compatibility."""
+        (tmp_path / ".claude").mkdir()
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        mount_str = " ".join(mounts)
+        assert "/tmp/.claude" in mount_str
+        assert "/home/replicator" not in mount_str
+
+    def test_no_backslashes_in_mount_source(self, tmp_path):
+        """Mount source path should use forward slashes."""
+        (tmp_path / ".claude").mkdir()
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        # Check the source part of the mount (before the colon)
+        for i, arg in enumerate(mounts):
+            if arg == "-v":
+                source = mounts[i + 1].split(":")[0]
+                assert "\\" not in source
+
+
+class TestUserFlag:
+    @patch("veritas.core.container.platform.system", return_value="Linux")
+    @patch("veritas.core.container.os.getuid", return_value=1001, create=True)
+    @patch("veritas.core.container.os.getgid", return_value=1001, create=True)
+    def test_adds_user_flag_on_linux(self, mock_gid, mock_uid, mock_system, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        assert "--user" in cmd
+        assert "1001:1001" in cmd
+
+    @patch("veritas.core.container.platform.system", return_value="Darwin")
+    @patch("veritas.core.container.os.getuid", return_value=501, create=True)
+    @patch("veritas.core.container.os.getgid", return_value=20, create=True)
+    def test_adds_user_flag_on_macos(self, mock_gid, mock_uid, mock_system, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        assert "--user" in cmd
+        assert "501:20" in cmd
+
+    @patch("veritas.core.container.platform.system", return_value="Windows")
+    def test_no_user_flag_on_windows(self, mock_system, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        assert "--user" not in cmd
+
+
+class TestDirectoryPreCreation:
+    def test_creates_output_subdirectories(self, tmp_path):
+        """build_container_command should pre-create output subdirs."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        # Note: output dir does NOT exist yet
+
+        build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+
+        assert output.exists()
+        assert (output / "replication").exists()
+
+
+class TestTtyDetection:
+    @patch("veritas.core.container.sys.stdin")
+    def test_non_interactive_uses_dash_i(self, mock_stdin, tmp_path):
+        """Non-interactive (piped) should use -i only."""
+        mock_stdin.isatty.return_value = False
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        assert "-i" in cmd
+        assert "-it" not in cmd
+
+    @patch("veritas.core.container.sys.stdin")
+    def test_interactive_uses_dash_it(self, mock_stdin, tmp_path):
+        """Interactive terminal should use -it."""
+        mock_stdin.isatty.return_value = True
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        assert "-it" in cmd
 
 
 class TestBuildContainerCommand:
@@ -115,6 +248,22 @@ class TestBuildContainerCommand:
         cmd_str = " ".join(cmd)
         assert "/workspace/repo" in cmd_str
         assert "/workspace/output" in cmd_str
+
+    def test_volume_mount_sources_no_backslashes(self, tmp_path):
+        """Volume mount source paths should use forward slashes."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        output = tmp_path / "output"
+        output.mkdir()
+
+        cmd = build_container_command(
+            repo_path=repo, output_dir=output,
+            image="veritas:latest", provider_cmd=["claude"],
+        )
+        for i, arg in enumerate(cmd):
+            if arg == "-v":
+                source = cmd[i + 1].split(":")[0]
+                assert "\\" not in source, f"Backslash in mount source: {source}"
 
     def test_env_file_passed(self, tmp_path):
         """Should include --env-file when .env exists."""

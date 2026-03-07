@@ -1,7 +1,9 @@
 """Docker container management for replication."""
 
 import os
+import platform
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -33,18 +35,31 @@ def has_gpu() -> bool:
         return False
 
 
+def _docker_path(path: Path) -> str:
+    """Convert a path to a Docker-compatible mount source.
+
+    On Windows, converts backslashes to forward slashes so Docker
+    can parse the volume mount. On other platforms, returns as-is.
+    """
+    return str(path.absolute()).replace("\\", "/")
+
+
 def _get_credential_mounts() -> List[str]:
     """Get volume mount flags for AI CLI credential directories.
 
     Mounts ~/.claude, ~/.codex, ~/.gemini as read-only so the AI tools
     inside the container can authenticate with their respective APIs.
+
+    Mounts to /tmp/ because when running with --user, HOME is set to
+    /tmp by the entrypoint script (the container user's home may not
+    be writable).
     """
     home = Path.home()
     args = []
     for dirname in [".claude", ".codex", ".gemini"]:
         cred_dir = home / dirname
         if cred_dir.is_dir():
-            args.extend(["-v", f"{cred_dir}:/home/replicator/{dirname}:ro"])
+            args.extend(["-v", f"{_docker_path(cred_dir)}:/tmp/{dirname}:ro"])
     return args
 
 
@@ -58,14 +73,27 @@ def build_container_command(
     env_file: Optional[Path] = None,
 ) -> List[str]:
     """Build the docker run command for replication."""
-    cmd = ["docker", "run", "--rm", "-i"]
+    # Ensure output directory and subdirectories exist on the host.
+    # Docker volume mounts overlay the image's directories, so any
+    # subdirs created in the Dockerfile won't be visible unless they
+    # also exist on the host.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "replication").mkdir(exist_ok=True)
+
+    tty_flags = ["-it"] if sys.stdin.isatty() else ["-i"]
+    cmd = ["docker", "run", "--rm"] + tty_flags
+
+    # Run as host user on Linux/macOS so output files have correct ownership.
+    # On Windows, Docker Desktop handles permissions automatically.
+    if platform.system() != "Windows":
+        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
 
     # Volume mounts — repo is read-only to enforce no-modification rule
-    cmd.extend(["-v", f"{repo_path.absolute()}:/workspace/repo:ro"])
-    cmd.extend(["-v", f"{output_dir.absolute()}:/workspace/output"])
+    cmd.extend(["-v", f"{_docker_path(repo_path)}:/workspace/repo:ro"])
+    cmd.extend(["-v", f"{_docker_path(output_dir)}:/workspace/output"])
 
     if templates_dir:
-        cmd.extend(["-v", f"{templates_dir.absolute()}:/workspace/templates:ro"])
+        cmd.extend(["-v", f"{_docker_path(templates_dir)}:/workspace/templates:ro"])
 
     # AI CLI credential mounts (read-only)
     cmd.extend(_get_credential_mounts())
