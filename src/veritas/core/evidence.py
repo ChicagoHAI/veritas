@@ -8,30 +8,92 @@ from typing import Optional
 from veritas.core.models import ReplicationPlan, ExecutionEvidence, StepOutcome
 
 
-def parse_replication_plan_response(response: str) -> ReplicationPlan:
-    """Parse a replication plan from LLM response text.
+_VALID_JSON_ESCAPES = frozenset('"\\/bfnrtu')
 
-    Handles both raw JSON and JSON embedded in markdown code blocks.
+
+def _fix_json_escapes(text: str) -> str:
+    r"""Fix invalid JSON escape sequences commonly produced by LLMs.
+
+    JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
+    LLMs often write \' (from Python) which becomes a bare apostrophe,
+    or \s, \d, \( etc. (from embedded regex) which get double-escaped
+    to preserve the intended literal backslash.
     """
-    text = response.strip()
+    out = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt in _VALID_JSON_ESCAPES:
+                out.append(ch)
+                out.append(nxt)
+                i += 2
+            elif nxt == "'":
+                # \' is invalid JSON; drop the backslash
+                out.append("'")
+                i += 2
+            else:
+                # \s, \d, \(, etc. — double the backslash
+                out.append("\\\\")
+                out.append(nxt)
+                i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
-    # Try raw JSON first
-    try:
-        data = json.loads(text)
-        return ReplicationPlan.from_dict(data)
-    except json.JSONDecodeError:
-        pass
 
-    # Try extracting from markdown code block
-    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
-    if match:
+def _extract_json(text: str) -> str:
+    """Extract JSON from LLM output that may contain surrounding text.
+
+    Tries each extraction strategy with raw text first, then with
+    escape-fixed text. Strategies:
+    1. Raw text as JSON
+    2. JSON inside markdown code fences
+    3. Outermost { ... } braces (handles explanation text around JSON)
+    """
+    for candidate_text in [text.strip(), _fix_json_escapes(text.strip())]:
+        # 1. Raw JSON
         try:
-            data = json.loads(match.group(1))
-            return ReplicationPlan.from_dict(data)
+            json.loads(candidate_text)
+            return candidate_text
         except json.JSONDecodeError:
             pass
 
-    raise ValueError(f"Could not parse replication plan from response")
+        # 2. Markdown code block
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", candidate_text, re.DOTALL)
+        if match:
+            candidate = match.group(1).strip()
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Find outermost { ... } braces
+        first = candidate_text.find("{")
+        last = candidate_text.rfind("}")
+        if first != -1 and last > first:
+            candidate = candidate_text[first:last + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+    raise ValueError("Could not parse replication plan from response")
+
+
+def parse_replication_plan_response(response: str) -> ReplicationPlan:
+    """Parse a replication plan from LLM response text.
+
+    Handles raw JSON, markdown code blocks, and JSON embedded in
+    surrounding explanation text.
+    """
+    raw = _extract_json(response)
+    data = json.loads(raw)
+    return ReplicationPlan.from_dict(data)
 
 
 def gather_evidence(replication_dir: Path) -> Optional[ExecutionEvidence]:

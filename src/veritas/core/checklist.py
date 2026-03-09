@@ -1,9 +1,10 @@
 """Data models for personalized checklist generation."""
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
+
+from veritas.core.evidence import _extract_json
 
 
 @dataclass
@@ -59,14 +60,6 @@ class Checklist:
             for item in data["items"]
         ]
         return cls(items=items)
-
-
-def _extract_json(text: str) -> str:
-    """Extract JSON from text, handling markdown code blocks."""
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return text.strip()
 
 
 def parse_checklist_response(response: str) -> Checklist:

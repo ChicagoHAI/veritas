@@ -27,6 +27,29 @@ class TestParseReplicationPlanResponse:
         plan = parse_replication_plan_response(response)
         assert len(plan.steps) == 1
 
+    def test_parse_json_with_surrounding_text(self):
+        response = (
+            'Here is the plan:\n'
+            '{"environment": {"language": "python"}, '
+            '"steps": [{"id": 1, "description": "Run", '
+            '"command_hint": "python run.py", "expected_outcome": "OK"}]}'
+            '\nLet me know if you need changes.'
+        )
+        plan = parse_replication_plan_response(response)
+        assert len(plan.steps) == 1
+
+    def test_parse_json_with_invalid_backslash_escapes(self):
+        r"""Should fix \s, \d etc. that LLMs embed from regex patterns."""
+        response = (
+            '{"environment": {"language": "python"}, '
+            '"steps": [{"id": 1, "description": "Audit", '
+            r'"command_hint": "grep \\s*pattern \\d+", '
+            '"expected_outcome": "OK"}]}'
+        )
+        plan = parse_replication_plan_response(response)
+        assert len(plan.steps) == 1
+        assert "\\s*pattern" in plan.steps[0].command_hint
+
     def test_parse_invalid_json_raises(self):
         import pytest
         with pytest.raises(ValueError, match="Could not parse"):
