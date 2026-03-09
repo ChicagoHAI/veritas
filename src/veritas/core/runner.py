@@ -219,8 +219,12 @@ class ReplicationRunner:
             + "\n\n---\n\n"
             + "Your last output was not valid JSON. Here is what you returned:\n\n"
             + broken_output[:2000]
-            + "\n\nPlease return ONLY valid JSON, with no explanation or markdown formatting. "
-            + "Make sure all backslashes in strings are properly escaped (use \\\\ not \\)."
+            + "\n\nPlease return ONLY valid JSON, with no explanation or markdown formatting."
+            + "\n\nCommon JSON mistakes to avoid:"
+            + "\n- Double quotes inside strings MUST be escaped: use \\\" not \""
+            + "\n- Backslash-single-quote (\\') is not valid JSON — just use '"
+            + "\n- Regex patterns in strings need double-escaped backslashes: use \\\\s not \\s"
+            + "\n- If a command_hint contains Python code with double quotes, escape them"
         )
 
         stdout = self._invoke_provider(

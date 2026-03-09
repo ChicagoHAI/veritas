@@ -191,10 +191,10 @@ class TestJsonRepairReprompt:
         config = Config(repo_path=repo, output_dir=output)
         runner = ReplicationRunner(config)
 
-        invalid_json = '{"environment": {"language": "python"}, "steps": [{"id": 1, "description": "Audit", "command_hint": "rg \\s*=", "expected_outcome": "OK"}]}'
+        invalid_json = "I analyzed the repo. Here is what I found: the code looks good."
         valid_json = json.dumps({
             "environment": {"language": "python"},
-            "steps": [{"id": 1, "description": "Audit", "command_hint": "rg \\\\s*=", "expected_outcome": "OK"}]
+            "steps": [{"id": 1, "description": "Audit", "command_hint": "rg", "expected_outcome": "OK"}]
         })
 
         call_count = 0
@@ -235,7 +235,7 @@ class TestJsonRepairReprompt:
         config = Config(repo_path=repo, output_dir=output)
         runner = ReplicationRunner(config)
 
-        invalid_json = '{"categories": {"code": [{"question": "Does \\d+ work?"}]}}'
+        invalid_json = "Sure! Here are the checklist items for your repo."
         valid_json = json.dumps({
             "categories": {"code": [{"question": "Does the code run?"}]}
         })
@@ -269,7 +269,7 @@ class TestJsonRepairReprompt:
         config = Config(repo_path=repo, output_dir=output)
         runner = ReplicationRunner(config)
 
-        invalid_json = '{"steps": [{"command_hint": "rg \\s*="}]}'
+        invalid_json = "I could not generate a valid plan for this repository."
 
         call_count = 0
         def mock_invoke(prompt, working_dir, output_path):
