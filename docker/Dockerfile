@@ -44,6 +44,7 @@ ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git git-lfs openssh-client ca-certificates make \
+    libcudnn8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Node.js from builder

@@ -34,14 +34,26 @@ echo "=== Veritas Replicator Container ==="
 # Check GPU
 if command -v nvidia-smi &> /dev/null; then
     nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
-        && echo "GPU available" || echo "GPU not accessible"
+        && echo "GPU: available" || echo "GPU: not accessible"
 else
-    echo "No GPU detected"
+    echo "GPU: not detected"
 fi
 
 echo "Python: $(python --version 2>&1)"
 echo "uv: $(uv --version 2>&1)"
 echo "Working directory: $(pwd)"
+
+# Validate credentials
+echo ""
+echo "Credentials:"
+for dir in .claude .codex .gemini; do
+    if [ -d "$HOME/$dir" ] && [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
+        echo "  $dir: OK"
+    else
+        echo "  $dir: not found"
+    fi
+done
+
 echo "==================================="
 echo ""
 
