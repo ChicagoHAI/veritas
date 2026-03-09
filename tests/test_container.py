@@ -76,50 +76,109 @@ class TestDockerPath:
 
 
 class TestCredentialMounts:
-    def test_mounts_existing_credential_dirs(self, tmp_path):
-        """Should mount credential dirs that exist."""
-        (tmp_path / ".claude").mkdir()
-        (tmp_path / ".codex").mkdir()
+    def test_mounts_existing_credential_files(self, tmp_path):
+        """Should mount auth files that exist."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text('{}')
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text('{}')
         # .gemini doesn't exist — should be skipped
 
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             mounts = _get_credential_mounts()
 
         mount_str = " ".join(mounts)
-        assert ".claude" in mount_str
-        assert ".codex" in mount_str
+        assert ".credentials.json" in mount_str
+        assert "auth.json" in mount_str
         assert ".gemini" not in mount_str
         assert ":ro" in mount_str
 
-    def test_no_credential_dirs(self, tmp_path):
-        """Should return empty list when no credential dirs exist."""
+    def test_no_credential_files(self, tmp_path):
+        """Should return empty list when no auth files exist."""
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             mounts = _get_credential_mounts()
         assert mounts == []
 
     def test_mounts_to_tmp_directory(self, tmp_path):
-        """Credentials should mount to /tmp/ for --user compatibility."""
-        (tmp_path / ".claude").mkdir()
+        """Auth files should mount under /tmp/<dirname>/ for entrypoint to copy."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text('{}')
 
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             mounts = _get_credential_mounts()
 
         mount_str = " ".join(mounts)
-        assert "/tmp/.claude" in mount_str
-        assert "/home/replicator" not in mount_str
+        assert "/tmp/.claude/.credentials.json" in mount_str
 
     def test_no_backslashes_in_mount_source(self, tmp_path):
         """Mount source path should use forward slashes."""
-        (tmp_path / ".claude").mkdir()
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text('{}')
 
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             mounts = _get_credential_mounts()
 
-        # Check the source part of the mount (before the colon)
         for i, arg in enumerate(mounts):
             if arg == "-v":
                 source = mounts[i + 1].split(":")[0]
                 assert "\\" not in source
+
+    def test_claude_mounts_only_credentials_file(self, tmp_path):
+        """Should mount .claude/.credentials.json, not the entire .claude/ dir."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text('{"claudeAiOauth": {}}')
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        mount_str = " ".join(mounts)
+        assert ".credentials.json" in mount_str
+        assert ":/tmp/.claude:" not in mount_str
+
+    def test_codex_mounts_only_auth_file(self, tmp_path):
+        """Should mount .codex/auth.json, not the entire .codex/ dir."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text('{}')
+        (codex_dir / "state_5.sqlite").write_text('junk')
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        mount_str = " ".join(mounts)
+        assert "auth.json" in mount_str
+        assert ":/tmp/.codex:" not in mount_str
+
+    def test_gemini_mounts_only_auth_files(self, tmp_path):
+        """Should mount oauth_creds.json and google_accounts.json only."""
+        gemini_dir = tmp_path / ".gemini"
+        gemini_dir.mkdir()
+        (gemini_dir / "oauth_creds.json").write_text('{}')
+        (gemini_dir / "google_accounts.json").write_text('{}')
+        (gemini_dir / "settings.json").write_text('{}')
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        mount_str = " ".join(mounts)
+        assert "oauth_creds.json" in mount_str
+        assert "google_accounts.json" in mount_str
+        assert "settings.json" not in mount_str
+
+    def test_skips_missing_auth_files(self, tmp_path):
+        """Should skip CLIs whose auth files don't exist."""
+        (tmp_path / ".claude").mkdir()
+        # .codex doesn't exist at all
+
+        with patch("veritas.core.container.Path.home", return_value=tmp_path):
+            mounts = _get_credential_mounts()
+
+        assert mounts == []
 
 
 class TestUserFlag:
@@ -319,12 +378,14 @@ class TestBuildContainerCommand:
         assert "--env-file" not in cmd
 
     def test_credential_mounts_included(self, tmp_path):
-        """Should include credential mounts in command."""
+        """Should include credential file mounts in command."""
         repo = tmp_path / "repo"
         repo.mkdir()
         output = tmp_path / "output"
         output.mkdir()
-        (tmp_path / ".claude").mkdir()
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text('{}')
 
         with patch("veritas.core.container.Path.home", return_value=tmp_path):
             cmd = build_container_command(
@@ -333,7 +394,7 @@ class TestBuildContainerCommand:
             )
 
         cmd_str = " ".join(cmd)
-        assert ".claude" in cmd_str
+        assert ".credentials.json" in cmd_str
         assert ":ro" in cmd_str
 
 

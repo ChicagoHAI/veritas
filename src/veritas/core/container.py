@@ -68,22 +68,33 @@ def _docker_path(path: Path) -> str:
     return str(path.absolute()).replace("\\", "/")
 
 
+# Maps each CLI to its auth-only files.
+# We mount individual files (not full dirs) to avoid copying
+# OS-specific config, history, plugins, and multi-MB caches.
+_CREDENTIAL_FILES = {
+    ".claude": [".credentials.json"],
+    ".codex": ["auth.json"],
+    ".gemini": ["oauth_creds.json", "google_accounts.json"],
+}
+
+
 def _get_credential_mounts() -> List[str]:
-    """Get volume mount flags for AI CLI credential directories.
+    """Get volume mount flags for AI CLI credential files.
 
-    Mounts ~/.claude, ~/.codex, ~/.gemini as read-only so the AI tools
-    inside the container can authenticate with their respective APIs.
-
-    Mounts to /tmp/ because when running with --user, HOME is set to
-    /tmp by the entrypoint script (the container user's home may not
-    be writable).
+    Mounts only the minimal auth files needed for each CLI.
+    Each file is mounted read-only to /tmp/<dirname>/<filename>.
+    The entrypoint copies them into writable $HOME/<dirname>/.
     """
     home = Path.home()
     args = []
-    for dirname in [".claude", ".codex", ".gemini"]:
-        cred_dir = home / dirname
-        if cred_dir.is_dir():
-            args.extend(["-v", f"{_docker_path(cred_dir)}:/tmp/{dirname}:ro"])
+    for dirname, filenames in _CREDENTIAL_FILES.items():
+        for filename in filenames:
+            cred_file = home / dirname / filename
+            if cred_file.is_file():
+                args.extend([
+                    "-v",
+                    f"{_docker_path(cred_file)}:/tmp/{dirname}/{filename}:ro",
+                ])
     return args
 
 

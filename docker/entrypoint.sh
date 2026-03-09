@@ -18,13 +18,14 @@ if [ ! -w "${HOME:-/}" ]; then
     mkdir -p "$HOME"
 fi
 
-# Copy credential directories from read-only mounts at /tmp/ to writable $HOME/.
-# Credentials are mounted to /tmp/ by veritas with :ro to protect host files,
-# but CLIs like Codex need write access to their config dirs.
+# Set up credential files from read-only mounts at /tmp/.
+# Individual auth files are mounted (not full dirs) to avoid
+# OS-specific config and bloat. We copy them into writable $HOME/.
 for dir in .claude .codex .gemini; do
-    if [ -d "/tmp/$dir" ]; then
-        rm -rf "$HOME/$dir"
-        cp -r "/tmp/$dir" "$HOME/$dir"
+    if [ -d "/tmp/$dir" ] && [ "$(ls -A /tmp/$dir 2>/dev/null)" ]; then
+        mkdir -p "$HOME/$dir"
+        # Use find instead of glob — bash * doesn't match dotfiles like .credentials.json
+        find "/tmp/$dir" -maxdepth 1 -type f -exec cp {} "$HOME/$dir/" \;
     fi
 done
 
