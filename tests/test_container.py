@@ -30,13 +30,37 @@ class TestIsDockerAvailable:
 
 
 class TestHasGpu:
-    def test_gpu_detected(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+    def test_gpu_detected_via_docker_info(self):
+        def mock_run(cmd, **kwargs):
+            if cmd == ["docker", "info"]:
+                return MagicMock(returncode=0, stdout="Runtimes: nvidia runc\n", stderr="")
+            # GPU probe succeeds
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=mock_run):
             assert has_gpu() is True
 
-    def test_no_gpu(self):
+    def test_no_gpu_when_nvidia_not_in_docker_info(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="Runtimes: runc\n",
+                stderr="",
+            )
+            assert has_gpu() is False
+
+    def test_no_gpu_when_docker_not_available(self):
         with patch("subprocess.run", side_effect=FileNotFoundError):
+            assert has_gpu() is False
+
+    def test_no_gpu_when_toolkit_installed_but_no_adapter(self):
+        """Should return False when nvidia toolkit exists but GPU probe fails."""
+        def mock_run(cmd, **kwargs):
+            if cmd == ["docker", "info"]:
+                return MagicMock(returncode=0, stdout="Runtimes: nvidia runc\n", stderr="")
+            return MagicMock(returncode=125)
+
+        with patch("subprocess.run", side_effect=mock_run):
             assert has_gpu() is False
 
 

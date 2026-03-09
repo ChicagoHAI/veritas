@@ -43,7 +43,7 @@ class Config:
     use_docker: bool = True
     docker_image: str = "veritas-replicator:latest"
     replication_timeout: int = 3600
-    gpu: bool = True
+    gpu: bool = False
 
     def __post_init__(self):
         # Convert paths to Path objects

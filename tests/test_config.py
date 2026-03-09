@@ -111,7 +111,7 @@ class TestDockerConfig:
         assert config.use_docker is True
         assert config.docker_image == "veritas-replicator:latest"
         assert config.replication_timeout == 3600
-        assert config.gpu is True
+        assert config.gpu is False
 
     def test_custom_docker_settings(self, tmp_path):
         config = Config(

@@ -22,14 +22,39 @@ def is_docker_available() -> bool:
 
 
 def has_gpu() -> bool:
-    """Check if NVIDIA GPU is available via nvidia-smi."""
+    """Check if Docker can actually provide GPU access.
+
+    Two-step check:
+    1. `docker info` must mention nvidia (toolkit installed)
+    2. A quick `docker run --gpus all` probe must succeed (GPU accessible)
+
+    This catches Windows/WSL setups where the toolkit is installed
+    but no GPU adapter is available.
+    """
     try:
-        result = subprocess.run(
-            ["nvidia-smi"],
+        # Step 1: Check if nvidia-container-toolkit is installed
+        info = subprocess.run(
+            ["docker", "info"],
             capture_output=True,
             timeout=10,
+            encoding="utf-8",
         )
-        return result.returncode == 0
+        if info.returncode != 0:
+            return False
+        output = (info.stdout or "") + (info.stderr or "")
+        if "nvidia" not in output.lower():
+            return False
+
+        # Step 2: Verify a GPU is actually accessible
+        probe = subprocess.run(
+            ["docker", "run", "--rm", "--gpus", "all",
+             "nvidia/cuda:12.5.1-runtime-ubuntu22.04",
+             "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            timeout=30,
+        )
+        return probe.returncode == 0
+
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
