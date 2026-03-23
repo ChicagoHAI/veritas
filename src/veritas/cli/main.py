@@ -240,11 +240,18 @@ def build_image(
     tag: str = typer.Option("veritas-replicator:latest", "--tag", help="Image tag"),
 ):
     """Build the Docker image for replication."""
+    import os
+    import platform
     import subprocess
     docker_dir = Path(__file__).parent.parent.parent.parent / "docker"
     console.print(f"[blue]Building Docker image:[/blue] {tag}")
     try:
-        subprocess.run(["docker", "build", "-t", tag, str(docker_dir)], check=True)
+        cmd = ["docker", "build", "-t", tag]
+        # Pass host UID/GID so container file permissions match
+        if platform.system() != "Windows":
+            cmd.extend(["--build-arg", f"UID={os.getuid()}", "--build-arg", f"GID={os.getgid()}"])
+        cmd.append(str(docker_dir))
+        subprocess.run(cmd, check=True)
         console.print(f"[green]Image built successfully:[/green] {tag}")
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Build failed:[/red] {e}")
