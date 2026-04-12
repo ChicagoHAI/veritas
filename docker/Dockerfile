@@ -54,9 +54,12 @@ COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules
 RUN ln -sf /usr/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm \
     && ln -sf /usr/lib/node_modules/npm/bin/npx-cli.js /usr/bin/npx
 
-# Symlink CLI tools
-RUN ln -sf /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/bin/claude \
-    && ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/bin/codex \
+# Copy Claude Code native binary from builder
+COPY --from=builder /usr/local/bin/claude /usr/local/bin/claude
+
+# Symlink Codex and Gemini CLI tools
+# (COPY dereferences symlinks, breaking Node.js relative imports, so we re-symlink here)
+RUN ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/bin/codex \
     && ln -sf /usr/lib/node_modules/@google/gemini-cli/dist/index.js /usr/bin/gemini
 
 # uv + Python
