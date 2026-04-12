@@ -29,10 +29,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_INSTALL_DIR=/python UV_PYTHON_PREFERENCE=only-managed
 RUN uv python install 3.12
 
-# AI CLI tools
-# AI CLI tools (verify install path for runtime stage COPY)
-RUN npm install -g @anthropic-ai/claude-code \
-    && npm install -g @openai/codex \
+# Claude Code via native installer (more reliable than npm; auto-updates in background)
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && cp /root/.local/bin/claude /usr/local/bin/claude
+
+# Codex and Gemini via npm (no native Linux installer available)
+RUN npm install -g @openai/codex \
     && npm install -g @google/gemini-cli \
     && echo "npm global root: $(npm root -g)"
 
