@@ -55,7 +55,7 @@ RUN ln -sf /usr/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm \
 # Symlink CLI tools
 RUN ln -sf /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/bin/claude \
     && ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/bin/codex \
-    && ln -sf /usr/lib/node_modules/@google/gemini-cli/dist/index.js /usr/bin/gemini
+    && ln -sf /usr/lib/node_modules/@google/gemini-cli/bundle/gemini.js /usr/bin/gemini
 
 # uv + Python
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
