@@ -243,10 +243,22 @@ def build_image(
     import os
     import platform
     import subprocess
-    docker_dir = Path(__file__).parent.parent.parent.parent / "docker"
+    from veritas.core.container import (
+        DOCKERFILE_HASH_LABEL,
+        compute_dockerfile_hash,
+        get_dockerfile_path,
+    )
+    dockerfile = get_dockerfile_path()
+    if dockerfile is None:
+        console.print("[red]Dockerfile not found in source tree.[/red]")
+        raise typer.Exit(1)
+    docker_dir = dockerfile.parent
     console.print(f"[blue]Building Docker image:[/blue] {tag}")
     try:
+        dockerfile_hash = compute_dockerfile_hash(dockerfile)
         cmd = ["docker", "build", "-t", tag]
+        # Stamp the Dockerfile hash so preflight can detect stale images
+        cmd.extend(["--label", f"{DOCKERFILE_HASH_LABEL}={dockerfile_hash}"])
         # Pass host UID/GID so container file permissions match
         if platform.system() != "Windows":
             cmd.extend(["--build-arg", f"UID={os.getuid()}", "--build-arg", f"GID={os.getgid()}"])

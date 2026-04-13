@@ -16,6 +16,8 @@ from veritas.core.container import (
     has_gpu,
     build_container_command,
     execute_in_container,
+    preflight_checks,
+    PreflightError,
 )
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
@@ -57,6 +59,7 @@ class ReplicationRunner:
         """Run the full three-phase pipeline: analyze -> replicate -> evaluate -> report."""
         try:
             self._setup_output_dir()
+            self._preflight()
             plan_path = self._extract_plan()
             checklist, replication_plan = self._analyze()
             evidence = self._replicate(replication_plan)
@@ -77,6 +80,18 @@ class ReplicationRunner:
         """Create the output directory structure."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         (self.config.output_dir / "replication").mkdir(exist_ok=True)
+
+    def _preflight(self):
+        """Validate credentials, Docker image, and GPU before spending any API time."""
+        try:
+            preflight_checks(
+                image=self.config.docker_image,
+                provider=self.config.provider,
+                gpu_requested=self.config.gpu,
+                use_docker=self.config.use_docker,
+            )
+        except PreflightError as e:
+            raise RuntimeError(f"Preflight check failed: {e}") from e
 
     def _extract_plan(self) -> Optional[Path]:
         """Get existing plan or extract from paper."""
