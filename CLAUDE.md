@@ -49,11 +49,6 @@ uv run veritas report ./evaluation-dir
 
 # Interactive shell inside the replication container
 uv run veritas shell ./my-project
-
-# Run tests
-uv run pytest
-uv run pytest tests/test_runner.py
-uv run pytest -k "test_checklist"
 ```
 
 ## Architecture
@@ -107,7 +102,7 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). Runs as non-root `replicato
 
 ## Testing
 
-Tests are mostly unit tests with mocked provider calls in `tests/`. There are no integration tests that hit real LLMs or Docker.
+No tests. The test suite was removed during the redesign phase because the upcoming architectural changes would invalidate most of them. Tests will be reintroduced once the new architecture stabilizes. Do not add new tests for now.
 
 ## Related Work
 
