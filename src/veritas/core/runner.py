@@ -20,7 +20,7 @@ from veritas.core.container import (
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.security import sanitize_log_file
+from veritas.utils.security import sanitize_logs_directory
 
 
 @dataclass
@@ -303,7 +303,7 @@ class ReplicationRunner:
             print(f"  Warning: Container exited with code {returncode}")
 
         # Sanitize logs to redact any leaked API keys
-        sanitize_log_file(log_path)
+        sanitize_logs_directory(self.config.output_dir)
 
         evidence = gather_evidence(self.config.output_dir / "replication")
 

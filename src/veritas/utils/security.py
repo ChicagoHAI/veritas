@@ -52,3 +52,19 @@ def sanitize_log_file(file_path: Path) -> bool:
         file_path.write_text(sanitized, encoding="utf-8")
         return True
     return False
+
+
+def sanitize_logs_directory(logs_dir: Path) -> int:
+    """Sanitize all log files in a directory tree. Returns number of files modified."""
+    if not logs_dir.exists():
+        return 0
+
+    modified_count = 0
+    log_patterns = ['*.log', '*.jsonl', '*.txt', '*.json', '*.md', '*.out', '*.err']
+
+    for pattern in log_patterns:
+        for log_file in logs_dir.rglob(pattern):
+            if sanitize_log_file(log_file):
+                modified_count += 1
+
+    return modified_count
