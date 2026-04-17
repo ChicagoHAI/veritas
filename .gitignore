@@ -97,3 +97,6 @@ Thumbs.db
 /evaluation/
 *.pdf
 !templates/**/*.pdf
+
+# Design docs and plans
+docs/plans/

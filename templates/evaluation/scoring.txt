@@ -1,0 +1,96 @@
+# {{ category_display_name }} Evaluation
+
+You are evaluating a repository against specific criteria for replication quality.
+
+## Repository Path
+{{ repo_path }}
+
+{% if has_plan %}
+## Plan File
+{{ plan_path }}
+{% endif %}
+
+## Output Directory
+{{ output_dir }}
+
+{% if has_evidence %}
+## Execution Evidence
+
+A replication agent attempted to run the code inside a Docker container. Here are the results:
+
+### Environment
+{{ evidence.environment | tojson(indent=2) }}
+
+### Replication Steps
+{% for step in evidence.step_outcomes %}
+**Step {{ step.step_id }}: {{ step.description }}**
+- Command: `{{ step.command_executed }}`
+- Exit code: {{ step.exit_code }}
+{% if step.exit_code != 0 %}
+- Stderr (truncated): {{ step.stderr[:2000] }}
+{% endif %}
+{% if step.stdout and step.exit_code == 0 %}
+- Stdout (truncated): {{ step.stdout[:2000] }}
+{% endif %}
+{% if step.suggested_fix %}
+- Suggested fix: {{ step.suggested_fix }}
+- **NOTE:** The code was NOT modified. This item should be scored as FAILED.
+{% endif %}
+{% if step.output_files %}
+- Output files: {{ step.output_files | join(', ') }}
+{% endif %}
+{% endfor %}
+
+## Scoring Rules
+
+- **Evidence first, code reading second.** If execution evidence exists for a checklist item, base your answer on that evidence.
+- **Execution success alone does not mean correctness.** Code can run without errors but produce wrong results. Check output values against the paper's claims.
+- **Suggested fix means failure.** If the replication agent identified that a code modification was needed for a step to work, any related checklist item should be scored NO. Include the suggested fix in your rationale.
+- You may still read repository files to answer items that execution evidence does not cover (e.g., documentation quality, code structure).
+- **Be strict** — only answer YES if you have clear evidence the requirement is met.
+
+{% else %}
+## Scoring Rules
+
+No execution evidence is available. Evaluate by reading the repository files directly.
+- **Answer YES or NO** for each question. YES means the requirement is met.
+- **Provide specific evidence** for each answer — cite file paths, line numbers, output values, or error messages.
+- **Actually run the code** where possible to verify claims, rather than only reading it.
+- **Do not modify** the repository's source code during evaluation.
+- **Be strict** — only answer YES if you have clear evidence the requirement is met. When in doubt, answer NO and explain why.
+
+{% endif %}
+
+## Your Task
+
+Evaluate the repository against each checklist question below.
+
+## Checklist Items
+
+{% for item in checklist_items %}
+Q{{ loop.index }}: {{ item.question }}
+{% endfor %}
+
+## Output Format
+
+Save your evaluation to `{{ output_dir }}/{{ category_name }}_evaluation.json`:
+
+```json
+{
+    "items": [
+{% for item in checklist_items %}
+        {
+            "question": "{{ item.question }}",
+            "answer": "YES or NO",
+            "rationale": "Specific evidence for your answer"
+        }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "pass_rate": 0.0
+}
+```
+
+Compute `pass_rate` as the number of YES answers divided by the total number of questions.
+
+Begin your evaluation now. Read the repository files and provide your assessment.

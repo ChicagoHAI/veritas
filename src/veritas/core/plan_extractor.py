@@ -38,40 +38,11 @@ class PlanExtractor:
 
     def _read_pdf(self, paper_path: Path) -> tuple[str, List[Dict]]:
         """Read text content from PDF."""
-        try:
-            import pdfplumber
+        from veritas.utils.pdf import read_pdf, read_pdf_pages
 
-            text_parts = []
-            pages = []
-
-            with pdfplumber.open(paper_path) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    page_text = page.extract_text() or ""
-                    text_parts.append(page_text)
-                    pages.append({
-                        "number": i + 1,
-                        "text": page_text
-                    })
-
-            return "\n\n".join(text_parts), pages
-
-        except ImportError:
-            # Fallback to pypdf
-            from pypdf import PdfReader
-
-            reader = PdfReader(paper_path)
-            text_parts = []
-            pages = []
-
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text() or ""
-                text_parts.append(page_text)
-                pages.append({
-                    "number": i + 1,
-                    "text": page_text
-                })
-
-            return "\n\n".join(text_parts), pages
+        text = read_pdf(paper_path)
+        pages = read_pdf_pages(paper_path)
+        return text, pages
 
     def _extract_plan_structure(
         self,
@@ -226,16 +197,26 @@ class PlanExtractor:
         # This is a simplified implementation
         # A full implementation would use an AI to identify relevant quotes
         for key in ["objective", "hypothesis", "methodology"]:
-            if key in plan and "text" in plan[key]:
-                search_text = plan[key].get("text", plan[key].get("items", [""])[0] if isinstance(plan[key].get("items"), list) else "")
-                if search_text:
-                    for page in pages:
-                        if search_text[:50].lower() in page["text"].lower():
-                            plan[key]["evidence"] = [{
-                                "page": page["number"],
-                                "quote": search_text[:200]
-                            }]
-                            break
+            if key not in plan:
+                continue
+
+            entry = plan[key]
+            search_text = None
+
+            if "text" in entry:
+                search_text = entry["text"]
+            elif "items" in entry and isinstance(entry["items"], list) and entry["items"]:
+                first_item = entry["items"][0]
+                search_text = first_item if isinstance(first_item, str) else str(first_item)
+
+            if search_text:
+                for page in pages:
+                    if search_text[:50].lower() in page["text"].lower():
+                        entry["evidence"] = [{
+                            "page": page["number"],
+                            "quote": search_text[:200]
+                        }]
+                        break
 
         return plan
 

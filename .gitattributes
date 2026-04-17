@@ -1,0 +1,15 @@
+# Force LF line endings for files that run inside Linux containers
+# or are parsed by tools that expect Unix line endings.
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf
+
+# Templates rendered by Jinja2 — keep consistent
+*.md text eol=lf
+*.txt text eol=lf
+
+# Config files
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf

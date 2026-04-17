@@ -5,13 +5,16 @@ from pathlib import Path
 from typing import Optional, List
 
 
+# All valid AI providers
+VALID_PROVIDERS = ["claude", "codex", "gemini"]
+
 # All available evaluation types
 ALL_EVALUATIONS = [
     "code",           # Code quality evaluation
     "consistency",    # Consistency between docs, code, and claims
     "generalization", # Generalization testing
     "replication",    # Replicability assessment
-    "instruction",    # Instruction following (for AI-generated work)
+    "instruction_following",    # Instruction following (for AI-generated work)
 ]
 
 
@@ -36,6 +39,12 @@ class Config:
     # Runtime settings
     verbose: bool = False
 
+    # Docker / replication settings
+    use_docker: bool = True
+    docker_image: str = "veritas-replicator:latest"
+    replication_timeout: int = 3600
+    gpu: bool = False
+
     def __post_init__(self):
         # Convert paths to Path objects
         self.repo_path = Path(self.repo_path)
@@ -56,6 +65,10 @@ class Config:
         for e in self.evaluations:
             if e not in ALL_EVALUATIONS:
                 raise ValueError(f"Unknown evaluation type: {e}. Valid options: {ALL_EVALUATIONS}")
+
+        # Validate provider
+        if self.provider.lower() not in VALID_PROVIDERS:
+            raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
 
     @property
     def has_paper(self) -> bool:

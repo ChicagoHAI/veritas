@@ -58,12 +58,32 @@ def evaluate(
         None,
         "--evaluations", "-e",
         help="Comma-separated list of evaluations to run (default: all). "
-             "Options: code,consistency,generalization,replication,instruction",
+             "Options: code,consistency,generalization,replication,instruction_following",
     ),
     timeout: int = typer.Option(
         3600,
         "--timeout", "-t",
         help="Timeout in seconds for each evaluation",
+    ),
+    no_docker: bool = typer.Option(
+        False,
+        "--no-docker",
+        help="Skip replication phase, evaluate by reading code only",
+    ),
+    docker_image: str = typer.Option(
+        "veritas-replicator:latest",
+        "--docker-image",
+        help="Docker image for replication container",
+    ),
+    replication_timeout: int = typer.Option(
+        3600,
+        "--replication-timeout",
+        help="Timeout in seconds for the replication phase",
+    ),
+    gpu: bool = typer.Option(
+        True,
+        "--gpu/--no-gpu",
+        help="Enable GPU passthrough for Docker container",
     ),
 ):
     """
@@ -71,7 +91,7 @@ def evaluate(
 
     Takes a paper (PDF) and repository as input, and produces a comprehensive
     replication report assessing code quality, consistency, generalizability,
-    and reproducibility.
+    , reproducibility and instruction following.
     """
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
@@ -94,6 +114,10 @@ def evaluate(
         generate_pdf=generate_pdf,
         evaluations=eval_list,
         timeout=timeout,
+        use_docker=not no_docker,
+        docker_image=docker_image,
+        replication_timeout=replication_timeout,
+        gpu=gpu,
     )
 
     # Run evaluation
@@ -155,7 +179,7 @@ def extract_plan(
         if output is None:
             output = paper.parent / f"{paper.stem}_plan.md"
 
-        output.write_text(plan)
+        output.write_text(plan, encoding='utf-8')
         console.print(f"[green]Plan saved to:[/green] {output}")
 
     except Exception as e:
@@ -176,7 +200,7 @@ def report(
         "--output", "-o",
         help="Output path for the report",
     ),
-    format: str = typer.Option(
+    output_format: str = typer.Option(
         "all",
         "--format", "-f",
         help="Output format: md, pdf, or all",
@@ -197,8 +221,8 @@ def report(
         report_path, pdf_path = generator.generate(
             evaluation_dir=evaluation_dir,
             output_path=output,
-            generate_pdf=(format in ["pdf", "all"]),
-            generate_md=(format in ["md", "all"]),
+            generate_pdf=(output_format in ["pdf", "all"]),
+            generate_md=(output_format in ["md", "all"]),
         )
 
         if report_path:
@@ -209,6 +233,59 @@ def report(
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
+
+
+@app.command(name="build-image")
+def build_image(
+    tag: str = typer.Option("veritas-replicator:latest", "--tag", help="Image tag"),
+):
+    """Build the Docker image for replication."""
+    import os
+    import platform
+    import subprocess
+    docker_dir = Path(__file__).parent.parent.parent.parent / "docker"
+    console.print(f"[blue]Building Docker image:[/blue] {tag}")
+    try:
+        cmd = ["docker", "build", "-t", tag]
+        # Pass host UID/GID so container file permissions match
+        if platform.system() != "Windows":
+            cmd.extend(["--build-arg", f"UID={os.getuid()}", "--build-arg", f"GID={os.getgid()}"])
+        cmd.append(str(docker_dir))
+        subprocess.run(cmd, check=True)
+        console.print(f"[green]Image built successfully:[/green] {tag}")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Build failed:[/red] {e}")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]Docker not found. Please install Docker.[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def shell(
+    repo: Path = typer.Argument(..., help="Path to the repository", exists=True, file_okay=False),
+    docker_image: str = typer.Option("veritas-replicator:latest", "--docker-image"),
+):
+    """Open an interactive shell inside the replication container."""
+    import subprocess
+    from veritas.core.container import build_container_command, has_gpu
+
+    output_dir = repo / "evaluation"
+    output_dir.mkdir(exist_ok=True)
+
+    cmd = build_container_command(
+        repo_path=repo,
+        output_dir=output_dir,
+        image=docker_image,
+        provider_cmd=["/bin/bash"],
+        gpu=has_gpu(),
+    )
+    # Replace -i with -it for interactive
+    if "-i" in cmd:
+        idx = cmd.index("-i")
+        cmd[idx] = "-it"
+
+    subprocess.run(cmd)
 
 
 if __name__ == "__main__":

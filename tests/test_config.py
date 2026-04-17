@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from veritas.core.config import Config, ALL_EVALUATIONS
+from veritas.core.config import Config, ALL_EVALUATIONS, VALID_PROVIDERS
 
 
 class TestConfig:
@@ -20,7 +20,7 @@ class TestConfig:
         assert "consistency" in config.evaluations
         assert "generalization" in config.evaluations
         assert "replication" in config.evaluations
-        assert "instruction" in config.evaluations
+        assert "instruction_following" in config.evaluations
 
     def test_custom_evaluations(self, tmp_path):
         """Test custom evaluation selection."""
@@ -86,3 +86,42 @@ class TestConfig:
 
         config_with_plan = Config(repo_path=repo, plan_path=plan)
         assert config_with_plan.has_plan
+
+    def test_invalid_provider(self, tmp_path):
+        """Test that invalid provider raises error."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            Config(repo_path=repo, provider="invalid_provider")
+
+    def test_valid_providers(self, tmp_path):
+        """Test that all valid providers are accepted."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        for provider in VALID_PROVIDERS:
+            config = Config(repo_path=repo, provider=provider)
+            assert config.provider == provider
+
+
+class TestDockerConfig:
+    def test_default_docker_settings(self, tmp_path):
+        config = Config(repo_path=tmp_path)
+        assert config.use_docker is True
+        assert config.docker_image == "veritas-replicator:latest"
+        assert config.replication_timeout == 3600
+        assert config.gpu is False
+
+    def test_custom_docker_settings(self, tmp_path):
+        config = Config(
+            repo_path=tmp_path,
+            use_docker=False,
+            docker_image="custom:v1",
+            replication_timeout=7200,
+            gpu=False,
+        )
+        assert config.use_docker is False
+        assert config.docker_image == "custom:v1"
+        assert config.replication_timeout == 7200
+        assert config.gpu is False

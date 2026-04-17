@@ -1,51 +1,21 @@
 """JSON utilities for Veritas."""
 
 import json
-import re
 from pathlib import Path
 from typing import Any, Optional
 
 
 def load_json(path: Path) -> dict:
     """Load JSON from file."""
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
 def save_json(data: dict, path: Path, indent: int = 2):
     """Save dict to JSON file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=indent)
-
-
-def extract_json_from_text(text: str) -> Optional[dict]:
-    """
-    Extract JSON object from text that may contain other content.
-
-    Args:
-        text: Text that may contain a JSON object
-
-    Returns:
-        Parsed JSON dict or None if not found
-    """
-    # Try to find JSON block with Checklist key (our expected format)
-    patterns = [
-        r'\{[\s\S]*"Checklist"[\s\S]*\}',
-        r'```json\s*([\s\S]*?)\s*```',
-        r'\{[\s\S]*\}',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            json_str = match.group(1) if '```' in pattern else match.group()
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                continue
-
-    return None
 
 
 def merge_results(results: list[dict]) -> dict:
