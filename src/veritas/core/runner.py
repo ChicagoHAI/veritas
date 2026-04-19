@@ -123,6 +123,7 @@ class ReplicationRunner:
             prompt=prompt,
             working_dir=self.config.repo_path,
             output_path=output_json_path,
+            timeout=self.config.analyze_timeout,
         )
 
         response_text = None
@@ -144,6 +145,7 @@ class ReplicationRunner:
                 broken_output=response_text,
                 output_path=output_json_path,
                 parser=parse_checklist_response,
+                timeout=self.config.analyze_timeout,
             )
 
         if checklist is None:
@@ -175,6 +177,7 @@ class ReplicationRunner:
             prompt=prompt,
             working_dir=self.config.repo_path,
             output_path=output_path,
+            timeout=self.config.analyze_timeout,
         )
 
         response_text = None
@@ -197,6 +200,7 @@ class ReplicationRunner:
                 broken_output=response_text,
                 output_path=output_path,
                 parser=parse_replication_plan_response,
+                timeout=self.config.analyze_timeout,
             )
 
         if plan is None:
@@ -208,7 +212,7 @@ class ReplicationRunner:
         print(f"  Generated replication plan with {len(plan.steps)} steps")
         return plan
 
-    def _repair_json_response(self, original_prompt, broken_output, output_path, parser):
+    def _repair_json_response(self, original_prompt, broken_output, output_path, parser, timeout):
         """Re-prompt the provider to fix invalid JSON output.
 
         Follows MechEvalAgent's pattern: append the broken output and ask
@@ -231,6 +235,7 @@ class ReplicationRunner:
             prompt=repair_prompt,
             working_dir=self.config.repo_path,
             output_path=output_path,
+            timeout=timeout,
         )
 
         response_text = None
@@ -296,7 +301,7 @@ class ReplicationRunner:
             cmd=cmd,
             session_instructions=session_instructions,
             log_path=log_path,
-            timeout=self.config.replication_timeout,
+            timeout=self.config.replicate_timeout,
         )
 
         if returncode != 0:
@@ -386,6 +391,7 @@ class ReplicationRunner:
                 prompt=prompt,
                 working_dir=self.config.repo_path,
                 output_path=output_json_path,
+                timeout=self.config.evaluate_timeout,
             )
 
             if output_json_path.exists():
@@ -428,17 +434,17 @@ class ReplicationRunner:
     # -- Provider Invocation -----------------------------------------------
 
     def _invoke_provider(
-        self, prompt: str, working_dir: Path, output_path: Path,
+        self, prompt: str, working_dir: Path, output_path: Path, timeout: int,
     ) -> Optional[str]:
         """Invoke the AI provider to run the evaluation."""
         provider = self.config.provider.lower()
 
         if provider == "claude":
-            return self._invoke_claude(prompt, working_dir, output_path)
+            return self._invoke_claude(prompt, working_dir, output_path, timeout)
         elif provider == "codex":
-            return self._invoke_codex(prompt, working_dir, output_path)
+            return self._invoke_codex(prompt, working_dir, output_path, timeout)
         elif provider == "gemini":
-            return self._invoke_gemini(prompt, working_dir, output_path)
+            return self._invoke_gemini(prompt, working_dir, output_path, timeout)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -454,19 +460,19 @@ class ReplicationRunner:
             raise FileNotFoundError(f"{name} CLI not found on PATH")
         return resolved
 
-    def _invoke_claude(self, prompt, working_dir, output_path):
+    def _invoke_claude(self, prompt, working_dir, output_path, timeout):
         try:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             claude = self._resolve_cli("claude")
             cmd = [claude, "-p", str(prompt_file), "--output-format", "text", "--dangerously-skip-permissions"]
             result = subprocess.run(
-                cmd, cwd=working_dir, timeout=self.config.timeout,
+                cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
             )
             return result.stdout if result.returncode == 0 else None
         except subprocess.TimeoutExpired:
-            print(f"  Timeout after {self.config.timeout}s")
+            print(f"  Timeout after {timeout}s")
             return None
         except FileNotFoundError as e:
             print(f"  {e}")
@@ -475,15 +481,18 @@ class ReplicationRunner:
             print(f"  Error invoking Claude: {e}")
             return None
 
-    def _invoke_codex(self, prompt, working_dir, output_path):
+    def _invoke_codex(self, prompt, working_dir, output_path, timeout):
         try:
             codex = self._resolve_cli("codex")
             cmd = [codex, "exec", "--full-auto", "-"]
             result = subprocess.run(
-                cmd, cwd=working_dir, input=prompt, timeout=self.config.timeout,
+                cmd, cwd=working_dir, input=prompt, timeout=timeout,
                 capture_output=True, encoding='utf-8',
             )
             return result.stdout if result.returncode == 0 else None
+        except subprocess.TimeoutExpired:
+            print(f"  Timeout after {timeout}s")
+            return None
         except FileNotFoundError as e:
             print(f"  {e}")
             return None
@@ -491,17 +500,20 @@ class ReplicationRunner:
             print(f"  Error invoking Codex: {e}")
             return None
 
-    def _invoke_gemini(self, prompt, working_dir, output_path):
+    def _invoke_gemini(self, prompt, working_dir, output_path, timeout):
         try:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             gemini = self._resolve_cli("gemini")
             cmd = [gemini, "-p", str(prompt_file)]
             result = subprocess.run(
-                cmd, cwd=working_dir, timeout=self.config.timeout,
+                cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
             )
             return result.stdout if result.returncode == 0 else None
+        except subprocess.TimeoutExpired:
+            print(f"  Timeout after {timeout}s")
+            return None
         except FileNotFoundError as e:
             print(f"  {e}")
             return None

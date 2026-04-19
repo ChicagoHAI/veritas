@@ -34,7 +34,11 @@ class Config:
     # Evaluation settings
     evaluations: Optional[List[str]] = None
     provider: str = "claude"
-    timeout: int = 3600  # 1 hour per evaluation
+
+    # Per-phase timeouts (seconds).
+    analyze_timeout: int = 300
+    replicate_timeout: int = 3600
+    evaluate_timeout: int = 600
 
     # Runtime settings
     verbose: bool = False
@@ -42,7 +46,6 @@ class Config:
     # Docker / replication settings
     use_docker: bool = True
     docker_image: str = "veritas-replicator:latest"
-    replication_timeout: int = 3600
     gpu: bool = False
 
     def __post_init__(self):
