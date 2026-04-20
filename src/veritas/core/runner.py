@@ -434,7 +434,7 @@ class ReplicationRunner:
     # -- Provider Invocation -----------------------------------------------
 
     def _invoke_provider(
-        self, prompt: str, working_dir: Path, output_path: Path, timeout: int,
+        self, prompt: str, working_dir: Path, output_path: Path, timeout: Optional[int],
     ) -> Optional[str]:
         """Invoke the AI provider to run the evaluation."""
         provider = self.config.provider.lower()

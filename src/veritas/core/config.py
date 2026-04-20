@@ -35,10 +35,13 @@ class Config:
     evaluations: Optional[List[str]] = None
     provider: str = "claude"
 
-    # Per-phase timeouts (seconds).
-    analyze_timeout: int = 300
-    replicate_timeout: int = 3600
-    evaluate_timeout: int = 600
+    # Per-phase timeouts (seconds); None disables the timeout for that phase.
+    # Defaults are None — killing a hung run discards partial progress, which
+    # is worse than letting it finish. Re-enable once there's a checkpoint /
+    # resume mechanism to recover the work.
+    analyze_timeout: Optional[int] = None
+    replicate_timeout: Optional[int] = None
+    evaluate_timeout: Optional[int] = None
 
     # Runtime settings
     verbose: bool = False

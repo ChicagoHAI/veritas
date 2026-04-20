@@ -60,20 +60,20 @@ def evaluate(
         help="Comma-separated list of evaluations to run (default: all). "
              "Options: code,consistency,generalization,replication,instruction_following",
     ),
-    analyze_timeout: int = typer.Option(
-        300,
+    analyze_timeout: Optional[int] = typer.Option(
+        None,
         "--analyze-timeout",
-        help="Timeout in seconds for the analyze phase (per LLM call; checklist + plan generation)",
+        help="Timeout in seconds for the analyze phase (per LLM call). Default: no timeout.",
     ),
-    replicate_timeout: int = typer.Option(
-        3600,
+    replicate_timeout: Optional[int] = typer.Option(
+        None,
         "--replicate-timeout",
-        help="Timeout in seconds for the replicate phase (Docker execution)",
+        help="Timeout in seconds for the replicate phase (Docker execution). Default: no timeout.",
     ),
-    evaluate_timeout: int = typer.Option(
-        600,
+    evaluate_timeout: Optional[int] = typer.Option(
+        None,
         "--evaluate-timeout",
-        help="Timeout in seconds for the evaluate phase (per evaluation category)",
+        help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
     ),
     no_docker: bool = typer.Option(
         False,
