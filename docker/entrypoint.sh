@@ -2,6 +2,13 @@
 # veritas-replicator container entrypoint
 set -e
 
+# Make all files created by the container world-readable/writable so that any
+# host user can manage (read/delete) workspace files regardless of UID mismatch.
+# The container runs as replicator (UID from --build-arg) which maps to a different user on
+# most host systems, so without this, only that mapped user (or root) could
+# delete generated output.
+umask 000
+
 export PATH="/python/bin:/usr/local/bin:${PATH}"
 
 # Ensure python is on PATH (uv installs to a versioned subdirectory)
