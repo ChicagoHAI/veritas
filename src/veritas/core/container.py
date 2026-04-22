@@ -153,14 +153,14 @@ def execute_in_container(
     cmd: List[str],
     session_instructions: str,
     log_path: Path,
-    timeout: int = 3600,
+    timeout: Optional[int] = None,
     on_output: Optional[Callable[[str], None]] = None,
 ) -> int:
     """Execute a command in the container, piping session instructions via stdin.
 
     Streams stdout line-by-line to log file and optionally to a callback.
-    Enforces timeout via a background thread — if the process exceeds
-    the timeout, it is killed. Returns the process exit code, or -1 on timeout.
+    If `timeout` is set, kills the process after that many seconds and returns
+    -1; `None` disables the timeout. Otherwise returns the process exit code.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
