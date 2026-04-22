@@ -60,10 +60,20 @@ def evaluate(
         help="Comma-separated list of evaluations to run (default: all). "
              "Options: code,consistency,generalization,replication,instruction_following",
     ),
-    timeout: int = typer.Option(
-        3600,
-        "--timeout", "-t",
-        help="Timeout in seconds for each evaluation",
+    analyze_timeout: Optional[int] = typer.Option(
+        None,
+        "--analyze-timeout",
+        help="Timeout in seconds for the analyze phase (per LLM call). Default: no timeout.",
+    ),
+    replicate_timeout: Optional[int] = typer.Option(
+        None,
+        "--replicate-timeout",
+        help="Timeout in seconds for the replicate phase (Docker execution). Default: no timeout.",
+    ),
+    evaluate_timeout: Optional[int] = typer.Option(
+        None,
+        "--evaluate-timeout",
+        help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
     ),
     no_docker: bool = typer.Option(
         False,
@@ -74,11 +84,6 @@ def evaluate(
         "veritas-replicator:latest",
         "--docker-image",
         help="Docker image for replication container",
-    ),
-    replication_timeout: int = typer.Option(
-        3600,
-        "--replication-timeout",
-        help="Timeout in seconds for the replication phase",
     ),
     gpu: bool = typer.Option(
         True,
@@ -91,7 +96,7 @@ def evaluate(
 
     Takes a paper (PDF) and repository as input, and produces a comprehensive
     replication report assessing code quality, consistency, generalizability,
-    , reproducibility and instruction following.
+    reproducibility, and instruction following.
     """
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
@@ -113,10 +118,11 @@ def evaluate(
         provider=provider,
         generate_pdf=generate_pdf,
         evaluations=eval_list,
-        timeout=timeout,
+        analyze_timeout=analyze_timeout,
+        replicate_timeout=replicate_timeout,
+        evaluate_timeout=evaluate_timeout,
         use_docker=not no_docker,
         docker_image=docker_image,
-        replication_timeout=replication_timeout,
         gpu=gpu,
     )
 
