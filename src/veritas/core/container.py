@@ -196,11 +196,27 @@ def check_credentials(provider: str) -> None:
 
     Raises PreflightError naming the specific missing file and the
     login command to fix it.
+
+    macOS note: Claude Code stores credentials in the Keychain rather
+    than `~/.claude/.credentials.json`.
     """
     try:
         dirname, login_cmd = _PROVIDER_CREDENTIALS[provider.lower()]
     except KeyError:
         raise PreflightError(f"Unknown provider: {provider}")
+
+    if provider.lower() == "claude" and platform.system() == "Darwin":
+        try:
+            subprocess.run(
+                ["security", "find-generic-password",
+                 "-s", "Claude Code-credentials", "-w"],
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
+            return  # Keychain entry exists — logged in.
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            pass  # fall through to the file check below.
 
     filenames = _CREDENTIAL_FILES[dirname]
     home = Path.home()
