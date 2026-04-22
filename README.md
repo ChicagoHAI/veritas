@@ -45,6 +45,7 @@ git clone https://github.com/ChicagoHAI/veritas.git
 cd veritas
 
 # Install with uv (recommended)
+uv venv --python 3.12
 uv pip install -e .
 
 # Or with pip
