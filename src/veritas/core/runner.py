@@ -20,7 +20,7 @@ from veritas.core.container import (
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.security import sanitize_log_file
+from veritas.utils.security import sanitize_logs_directory
 
 
 @dataclass
@@ -72,6 +72,14 @@ class ReplicationRunner:
 
         except Exception as e:
             return RunResult(success=False, error=str(e))
+
+        finally:
+            # Sanitize the full output tree after all phases (analyze + replicate + evaluate)
+            # so files written by any phase are scrubbed — even if a phase crashed.
+            try:
+                sanitize_logs_directory(self.config.output_dir)
+            except Exception:
+                pass
 
     def _setup_output_dir(self):
         """Create the output directory structure."""
@@ -301,9 +309,6 @@ class ReplicationRunner:
 
         if returncode != 0:
             print(f"  Warning: Container exited with code {returncode}")
-
-        # Sanitize logs to redact any leaked API keys
-        sanitize_log_file(log_path)
 
         evidence = gather_evidence(self.config.output_dir / "replication")
 
