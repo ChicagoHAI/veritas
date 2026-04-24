@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# =============================================================================
+# veritas — top-level wrapper
+# Forwards all arguments to docker/run.sh. See `./veritas help`.
+# =============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/docker/run.sh" "$@"
