@@ -483,6 +483,8 @@ rewrite_paths() {
     MOUNTS=""
     ARGS=""
     local counter=0
+    local saw_output=false
+    local repo_host=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -509,11 +511,13 @@ rewrite_paths() {
                     echo -e "${RED}Repo not found:${NC} $2" >&2
                     exit 1
                 fi
+                repo_host="$host_path"
                 MOUNTS="$MOUNTS -v \"$host_path://workspace/repo:ro\""
                 ARGS="$ARGS --repo //workspace/repo"
                 shift 2
                 ;;
             --output|-o)
+                saw_output=true
                 local host_path
                 host_path=$(realpath -m "$2")
                 mkdir -p "$host_path"
@@ -533,6 +537,19 @@ rewrite_paths() {
                 ;;
         esac
     done
+
+    # If the user didn't specify --output, default to <repo>/evaluation on
+    # the host side. Matches the Python CLI's default intent but lands on
+    # a writable mount — the --repo bind is read-only, so letting the CLI
+    # compute /workspace/repo/evaluation internally would crash with
+    # "Read-only file system" when it tries to mkdir the subdir.
+    if [ "$saw_output" = false ] && [ -n "$repo_host" ]; then
+        local default_output="$repo_host/evaluation"
+        mkdir -p "$default_output"
+        chmod -R a+rwX "$default_output" 2>/dev/null || true
+        MOUNTS="$MOUNTS -v \"$default_output://workspace/output\""
+        ARGS="$ARGS --output //workspace/output"
+    fi
 }
 
 # -----------------------------------------------------------------------------
