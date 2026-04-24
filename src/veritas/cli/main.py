@@ -60,10 +60,20 @@ def evaluate(
         help="Comma-separated list of evaluations to run (default: all). "
              "Options: code,consistency,generalization,replication,instruction_following",
     ),
-    timeout: int = typer.Option(
-        3600,
-        "--timeout", "-t",
-        help="Timeout in seconds for each evaluation",
+    analyze_timeout: Optional[int] = typer.Option(
+        None,
+        "--analyze-timeout",
+        help="Timeout in seconds for the analyze phase (per LLM call). Default: no timeout.",
+    ),
+    replicate_timeout: Optional[int] = typer.Option(
+        None,
+        "--replicate-timeout",
+        help="Timeout in seconds for the replicate phase (per LLM call). Default: no timeout.",
+    ),
+    evaluate_timeout: Optional[int] = typer.Option(
+        None,
+        "--evaluate-timeout",
+        help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
     ),
 ):
     """
@@ -93,7 +103,9 @@ def evaluate(
         provider=provider,
         generate_pdf=generate_pdf,
         evaluations=eval_list,
-        timeout=timeout,
+        analyze_timeout=analyze_timeout,
+        replicate_timeout=replicate_timeout,
+        evaluate_timeout=evaluate_timeout,
     )
 
     # Run evaluation
