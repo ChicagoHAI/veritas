@@ -38,14 +38,45 @@ RUN npm install -g @openai/codex \
     && npm install -g @google/gemini-cli \
     && echo "npm global root: $(npm root -g)"
 
+# -----------------------------------------------------------------------------
+# Copy veritas source and build its venv into /app/.venv
+# -----------------------------------------------------------------------------
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ ./src/
+COPY templates/ ./templates/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv \
+    && uv sync --frozen --no-dev
+
 # === Stage 2: Runtime ===
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+
+LABEL org.opencontainers.image.title="veritas"
+LABEL org.opencontainers.image.description="Replication agent for scientific reproducibility"
+LABEL org.opencontainers.image.source="https://github.com/ChicagoHAI/veritas"
+LABEL maintainer="ChicagoHAI"
 
 ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git git-lfs openssh-client ca-certificates make \
     libcudnn8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# LaTeX + pandoc for PDF report generation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc \
+    texlive-latex-base \
+    texlive-latex-extra \
+    texlive-latex-recommended \
+    texlive-fonts-recommended \
+    texlive-fonts-extra \
+    texlive-science \
+    lmodern \
+    cm-super \
+    latexmk \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Node.js from builder
@@ -66,29 +97,36 @@ RUN ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/bin/codex \
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 COPY --from=builder /python /python
 
-ENV PATH="/python/bin:/usr/local/bin:${PATH}"
+ENV PATH="/app/.venv/bin:/python/bin:/usr/local/bin:${PATH}"
+ENV VIRTUAL_ENV="/app/.venv"
+ENV PYTHONPATH="/app"
+ENV VERITAS_WORKSPACE=/workspace
 ENV UV_PYTHON_INSTALL_DIR=/python UV_PYTHON_PREFERENCE=only-managed
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 # Entrypoint (before USER switch so we can write to /usr/local/bin)
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Non-root user
 ARG UID=1000
 ARG GID=1000
-RUN groupadd -g ${GID} replicator \
-    && useradd -u ${UID} -g replicator -m -s /bin/bash replicator
+RUN groupadd -g ${GID} veritas \
+    && useradd -u ${UID} -g veritas -m -s /bin/bash veritas
 
 # Workspace directory
 RUN mkdir -p /workspace/repo /workspace/output \
-    && chown -R replicator:replicator /workspace
+    && chown -R veritas:veritas /workspace
 
-USER replicator
+# Copy veritas source and venv from builder, owned by the new user
+COPY --from=builder --chown=veritas:veritas /app /app
+
+USER veritas
 WORKDIR /workspace
 
 # Git config
-RUN git config --global user.email "replicator@veritas" \
-    && git config --global user.name "Veritas Replicator"
+RUN git config --global user.email "noreply@veritas.dev" \
+    && git config --global user.name "Veritas" \
+    && git config --global init.defaultBranch main
 
 # CLI credential directories
 RUN mkdir -p ~/.claude ~/.codex ~/.gemini ~/.cache/uv
