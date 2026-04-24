@@ -14,7 +14,7 @@ if [[ -z "$_VERITAS_WINPTY_REEXEC" ]] \
     && [ -t 0 ] \
     && command -v winpty &> /dev/null; then
     export _VERITAS_WINPTY_REEXEC=1
-    exec winpty "$0" "$@"
+    exec winpty bash "$0" "$@"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
