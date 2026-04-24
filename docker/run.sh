@@ -152,7 +152,7 @@ get_cli_credential_mounts() {
 
     for dir in .claude .codex .gemini; do
         if [ -d "$HOME/$dir" ]; then
-            mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
+            mounts="$mounts -v \"$HOME/$dir://home/veritas/$dir\""
             if [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
                 echo -e "  ${GREEN}[OK]${NC} Mounting $dir credentials" >&2
             else
@@ -363,9 +363,9 @@ cmd_login() {
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
-        -v \"$HOME/.claude:/home/veritas/.claude\" \
-        -v \"$HOME/.codex:/home/veritas/.codex\" \
-        -v \"$HOME/.gemini:/home/veritas/.gemini\" \
+        -v \"$HOME/.claude://home/veritas/.claude\" \
+        -v \"$HOME/.codex://home/veritas/.codex\" \
+        -v \"$HOME/.gemini://home/veritas/.gemini\" \
         \"$IMAGE_NAME\" \
         bash"
 }
