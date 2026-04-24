@@ -192,6 +192,69 @@ ensure_credential_perms() {
 }
 
 # -----------------------------------------------------------------------------
+# Extract --provider value from a subcommand's argv. Default: claude.
+# Handles both `--provider X` and `--provider=X` forms.
+# -----------------------------------------------------------------------------
+extract_provider() {
+    local provider="claude"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --provider) provider="$2"; shift 2 ;;
+            --provider=*) provider="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    echo "$provider"
+}
+
+# -----------------------------------------------------------------------------
+# Verify the requested provider has usable credentials on the host. Exits
+# with a clear actionable error BEFORE launching the container, so users
+# don't watch an LLM-call hang for several minutes before realising they
+# forgot to log in.
+#
+# macOS note: Claude Code stores credentials in the Keychain rather than
+# ~/.claude/.credentials.json, so on Darwin we also probe the Keychain.
+# -----------------------------------------------------------------------------
+check_provider_credentials() {
+    local provider="$1"
+    case "$provider" in
+        claude)
+            if [[ "$(uname)" == "Darwin" ]] \
+                && security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
+                return 0
+            fi
+            if [ -s "$HOME/.claude/.credentials.json" ]; then
+                return 0
+            fi
+            echo -e "${RED}Claude credentials not found.${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login claude${NC}" >&2
+            exit 1
+            ;;
+        codex)
+            if [ -d "$HOME/.codex" ] && [ -n "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
+                return 0
+            fi
+            echo -e "${RED}Codex credentials not found.${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login codex${NC}" >&2
+            exit 1
+            ;;
+        gemini)
+            if [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+                return 0
+            fi
+            echo -e "${RED}Gemini credentials not found.${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login gemini${NC}" >&2
+            exit 1
+            ;;
+        *)
+            echo -e "${RED}Unknown provider:${NC} $provider (expected claude|codex|gemini)" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
 # Non-blocking notice: if a newer image is on GHCR, print it. Don't pull.
 # -----------------------------------------------------------------------------
 warn_if_outdated() {
@@ -479,6 +542,11 @@ cmd_evaluate() {
     ensure_image
     warn_if_outdated
 
+    # Fast-fail if the requested provider has no credentials on the host.
+    # Beats waiting for an inside-container LLM call to hang or error out.
+    local provider=$(extract_provider "$@")
+    check_provider_credentials "$provider"
+
     rewrite_paths "$@"
 
     local tty_flag=$(get_tty_flag)
@@ -502,6 +570,10 @@ cmd_evaluate() {
 # -----------------------------------------------------------------------------
 cmd_extract_plan() {
     ensure_image
+
+    # extract-plan currently uses the default provider (claude) internally.
+    # Pre-flight that credential so the LLM call doesn't hang mid-run.
+    check_provider_credentials claude
 
     # extract-plan takes a positional paper argument — rewrite it like --paper
     local paper="$1"; shift
