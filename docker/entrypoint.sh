@@ -1,6 +1,10 @@
 #!/bin/bash
-# veritas-replicator container entrypoint
+# veritas container entrypoint
 set -e
+
+# Make container-created files world-rw so host users (any UID) can
+# manage workspace outputs after the container exits. NeuriCo pattern.
+umask 000
 
 export PATH="/python/bin:/usr/local/bin:${PATH}"
 
@@ -29,18 +33,29 @@ for dir in .claude .codex .gemini; do
     fi
 done
 
-echo "=== Veritas Replicator Container ==="
+echo "========================================"
+echo "  Veritas Container Starting"
+echo "========================================"
+
+# veritas version
+if command -v veritas &> /dev/null; then
+    echo "Veritas: $(veritas --help 2>&1 | grep -m1 'Usage:')"
+fi
 
 # Check GPU
 if command -v nvidia-smi &> /dev/null; then
-    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
-        && echo "GPU: available" || echo "GPU: not accessible"
+    if nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null; then
+        echo "GPU: available"
+    else
+        echo "GPU: not accessible (need --gpus flag)"
+    fi
 else
     echo "GPU: not detected"
 fi
 
 echo "Python: $(python --version 2>&1)"
-echo "uv: $(uv --version 2>&1)"
+echo "uv:     $(uv --version 2>&1)"
+echo "Pandoc: $(pandoc --version 2>&1 | head -1)"
 echo "Working directory: $(pwd)"
 
 # Validate credentials
