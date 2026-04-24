@@ -462,8 +462,8 @@ cmd_shell() {
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
-        -v \"$PWD://workspace\" \
-        -w //workspace \
+        -v \"$PWD:/workspace\" \
+        -w /workspace \
         \"$IMAGE_NAME\" \
         bash"
 }
@@ -499,7 +499,7 @@ rewrite_paths() {
                 local basename
                 basename=$(basename "$host_path")
                 counter=$((counter + 1))
-                local container_path="//workspace/inputs/file${counter}_${basename}"
+                local container_path="/workspace/inputs/file${counter}_${basename}"
                 MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
                 ARGS="$ARGS $flag \"$container_path\""
                 shift 2
@@ -512,8 +512,8 @@ rewrite_paths() {
                     exit 1
                 fi
                 repo_host="$host_path"
-                MOUNTS="$MOUNTS -v \"$host_path://workspace/repo:ro\""
-                ARGS="$ARGS --repo //workspace/repo"
+                MOUNTS="$MOUNTS -v \"$host_path:/workspace/repo:ro\""
+                ARGS="$ARGS --repo /workspace/repo"
                 shift 2
                 ;;
             --output|-o)
@@ -526,8 +526,8 @@ rewrite_paths() {
                 # write into it — phases that mkdir subdirs like replication/
                 # fail with "Permission denied". Make it world-writable.
                 chmod -R a+rwX "$host_path" 2>/dev/null || true
-                MOUNTS="$MOUNTS -v \"$host_path://workspace/output\""
-                ARGS="$ARGS --output //workspace/output"
+                MOUNTS="$MOUNTS -v \"$host_path:/workspace/output\""
+                ARGS="$ARGS --output /workspace/output"
                 shift 2
                 ;;
             *)
@@ -547,8 +547,8 @@ rewrite_paths() {
         local default_output="$repo_host/evaluation"
         mkdir -p "$default_output"
         chmod -R a+rwX "$default_output" 2>/dev/null || true
-        MOUNTS="$MOUNTS -v \"$default_output://workspace/output\""
-        ARGS="$ARGS --output //workspace/output"
+        MOUNTS="$MOUNTS -v \"$default_output:/workspace/output\""
+        ARGS="$ARGS --output /workspace/output"
     fi
 }
 
@@ -577,7 +577,7 @@ cmd_evaluate() {
         $gpu_flags \
         $credential_mounts \
         $MOUNTS \
-        -w //workspace \
+        -w /workspace \
         \"$IMAGE_NAME\" \
         veritas evaluate $ARGS"
 }
@@ -601,7 +601,7 @@ cmd_extract_plan() {
         exit 1
     fi
     local basename=$(basename "$host_paper")
-    local container_paper="//workspace/inputs/$basename"
+    local container_paper="/workspace/inputs/$basename"
 
     local tty_flag=$(get_tty_flag)
     local platform_flag=$(get_platform_flags)
@@ -616,7 +616,7 @@ cmd_extract_plan() {
         $credential_mounts \
         -v \"$host_paper:$container_paper:ro\" \
         $MOUNTS \
-        -w //workspace \
+        -w /workspace \
         \"$IMAGE_NAME\" \
         veritas extract-plan \"$container_paper\" $ARGS"
 }
@@ -640,10 +640,10 @@ cmd_report() {
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
-        -v \"$host_eval_dir://workspace/eval\" \
-        -w //workspace \
+        -v \"$host_eval_dir:/workspace/eval\" \
+        -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas report //workspace/eval $@"
+        veritas report /workspace/eval $@"
 }
 
 # -----------------------------------------------------------------------------
