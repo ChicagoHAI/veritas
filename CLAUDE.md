@@ -13,7 +13,7 @@ Basic implementation is complete, but a significant redesign is in flight based 
 - **Veritas should replicate the paper, not just the repo.** Paper-only mode (no repo) and repo-only mode (no paper, use README as methodology source) are planned. Currently only paper+repo works and repo is mandatory.
 - **Results must be structured and numerical**, compared against the paper's claims using tolerance-based matching. This makes output naturally comparable with ReplicationBench (Ye et al., 2025) and Scaling Reproducibility (Xu & Yang, 2026) without requiring a special benchmark mode.
 - **The final codebase used during replication should always be preserved as output** — whether it's a patched version of the original repo or code veritas wrote from scratch.
-- **Veritas should be highly modularized** — components (execution environment, LLM provider, PDF extractor, scoring method, output format) should be swappable via flags or config, following the pattern of the existing `--no-docker` flag.
+- **Veritas should be highly modularized** — components (execution environment, LLM provider, PDF extractor, scoring method, output format) should be swappable via flags or config.
 
 Open questions still pending lab input:
 - Where is the line between "minor fix" and "too broken"?
@@ -23,37 +23,32 @@ Open questions still pending lab input:
 ## Commands
 
 ```bash
-# Install (editable, requires uv)
-uv pip install -e .
+# Install
+git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
-# Build the Docker image for replication
-uv run veritas build-image
+# Full evaluation (paper + repo)
+./veritas evaluate --paper paper.pdf --repo ./my-project
 
-# Full evaluation (paper + repo, Docker-based)
-uv run veritas evaluate --paper paper.pdf --repo ./my-project
-
-# Skip Docker replication
-uv run veritas evaluate --paper paper.pdf --repo ./my-project --no-docker
-
-# Select provider (default: claude)
-uv run veritas evaluate --repo ./my-project --provider codex
+# Select provider
+./veritas evaluate --repo ./my-project --provider codex
 
 # Select specific evaluation dimensions
-uv run veritas evaluate --repo ./my-project --evaluations code,consistency
+./veritas evaluate --repo ./my-project --evaluations code,consistency
 
 # Extract plan from paper
-uv run veritas extract-plan paper.pdf
+./veritas extract-plan paper.pdf
 
 # Regenerate report from existing results
-uv run veritas report ./evaluation-dir
+./veritas report ./evaluation-dir
 
 # Interactive shell inside the replication container
-uv run veritas shell ./my-project
+./veritas shell
 
-# Run tests
-uv run pytest
-uv run pytest tests/test_runner.py
-uv run pytest -k "test_checklist"
+# Build the image locally (usually not needed — first run pulls from GHCR)
+./veritas build
+
+# Smoke test the built image
+./scripts/test_docker.sh
 ```
 
 ## Architecture
@@ -68,7 +63,6 @@ uv run pytest -k "test_checklist"
 
 - `runner.py` — orchestrator; provider invocation (`_invoke_claude/codex/gemini`); JSON repair re-prompt logic
 - `config.py` — `Config` dataclass; `VALID_PROVIDERS` and `ALL_EVALUATIONS` constants
-- `container.py` — Docker command builder; GPU detection; credential mount logic
 - `checklist.py` — `ChecklistItem` / `Checklist` data models and parsing
 - `models.py` — `ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`
 - `evidence.py` — parses execution evidence; `_extract_json` / `_fix_json_escapes` repair logic
@@ -92,22 +86,26 @@ All templates are Jinja2, rendered by `src/veritas/templates/prompt_generator.py
 
 ### Docker
 
-Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). Runs as non-root `replicator` user; UID/GID configurable at build time. Credentials are mounted read-only at `/tmp/.{claude,codex,gemini}/` and copied to writable `$HOME` by `docker/entrypoint.sh`.
+Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
 
 ## Gotchas
 
-- **The replication agent is currently told NOT to modify source code.** This is being redesigned — see open issues before touching `templates/replication/session_instructions.md`. The current behavior is the reason v1 output scores are artificially low.
-- **Repo is mounted read-only** in the Docker container. This will change as part of the redesign so the agent can apply fixes.
+- **The replication agent is currently told NOT to modify source code.** The scope of what the agent is allowed to change is being redesigned (see issue #12) before touching `templates/replication/session_instructions.md`. The current behavior is the reason v1 output scores are artificially low. Not Docker-specific.
+- **The user's repo is bind-mounted read-only** at `/workspace/repo` by the wrapper; agent writes go to `/workspace/output`.
 - **Provider CLI resolution is cross-platform** — `_resolve_cli()` in `runner.py` handles Windows `.cmd` shims via `shutil.which()`. Don't hardcode paths.
 - **JSON responses from LLMs are unreliable.** `evidence.py` has multi-strategy extraction (raw → markdown blocks → brace matching) and escape repair. If adding new LLM-parsed fields, route through `_extract_json()`. A planned change to structured JSON output format (`--output-format stream-json`) should eventually reduce the need for this.
-- **GPU support is Linux-only** and requires NVIDIA Container Toolkit. The `--gpu` flag is a no-op on Windows/macOS.
-- **PDF report generation** requires `pandoc` + `pdflatex` on the host. Use `--no-pdf` if those aren't installed.
-- **Gemini provider is undertested and likely broken.** The symlink may be stale after `@google/gemini-cli` restructured in v0.36.0. Prefer Claude or Codex until fixed.
-- **Docker file ownership on Linux/macOS** may leave output files owned by the container UID. Known issue — see open issues.
+- **GPU is auto-detected and Linux-only** (requires NVIDIA Container Toolkit).
+- **Docker is mandatory.** There is no host-side fallback. The `./veritas` wrapper manages the image lifecycle (pull from GHCR on first run, build locally if pull fails).
+- **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
+- **GPU auto-detected.** `docker/run.sh` probes `docker info` for the NVIDIA runtime. On WSL or machines where the toolkit is installed but no GPU adapter is reachable, this can produce a false positive — `--gpus all` gets passed and the container fails at launch. Workaround: `CUDA_VISIBLE_DEVICES="" ./veritas ...` (this skips GPU activation entirely inside the container, though veritas itself does not currently read that env var — the real fix is a GPU probe in the wrapper, tracked for follow-up).
 
 ## Testing
 
-Tests are mostly unit tests with mocked provider calls in `tests/`. There are no integration tests that hit real LLMs or Docker.
+The Python test suite was removed during the flat-Docker refactor (see issue #27). Current coverage consists of:
+
+- **`scripts/test_docker.sh`** — asserts the built image has functional claude/codex/gemini/pandoc/pdflatex/python/veritas and that the entrypoint banner prints. Run locally with `./scripts/test_docker.sh <image-tag>`; CI runs it automatically against the pushed image in `.github/workflows/docker-publish.yml`.
+
+Python unit tests for `defaults`/`settings`/`paths`/`providers`/`evidence` will be re-introduced under issue #27 after the current redesign stabilizes.
 
 ## Related Work
 
