@@ -8,6 +8,18 @@
 
 set -e
 
+# On Windows Git Bash (MINGW/MSYS), disable MSYS's automatic path translation
+# for docker -v mount specs. Without this, MSYS mangles mount targets like
+# /home/veritas/.claude into either C:/Program Files/Git/home/veritas/.claude
+# (the MSYS /home tree) or \\home\veritas\.claude (UNC-style, if the source
+# uses // to dodge earlier translation). Docker silently creates empty dirs
+# at the wrong location and the credentials never reach the container.
+# Docker Desktop on Windows accepts raw /c/Users/... Git-Bash-style paths
+# just fine as mount sources.
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    export MSYS_NO_PATHCONV=1
+fi
+
 # Locate the veritas project root (two levels up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -152,7 +164,7 @@ get_cli_credential_mounts() {
 
     for dir in .claude .codex .gemini; do
         if [ -d "$HOME/$dir" ]; then
-            mounts="$mounts -v \"$HOME/$dir://home/veritas/$dir\""
+            mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
             if [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
                 echo -e "  ${GREEN}[OK]${NC} Mounting $dir credentials" >&2
             else
@@ -363,9 +375,9 @@ cmd_login() {
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
-        -v \"$HOME/.claude://home/veritas/.claude\" \
-        -v \"$HOME/.codex://home/veritas/.codex\" \
-        -v \"$HOME/.gemini://home/veritas/.gemini\" \
+        -v \"$HOME/.claude:/home/veritas/.claude\" \
+        -v \"$HOME/.codex:/home/veritas/.codex\" \
+        -v \"$HOME/.gemini:/home/veritas/.gemini\" \
         \"$IMAGE_NAME\" \
         bash"
 }
