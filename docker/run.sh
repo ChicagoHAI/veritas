@@ -54,10 +54,21 @@ get_remote_digest() {
 # -----------------------------------------------------------------------------
 # Only allocate a pseudo-terminal when stdin is one. Allows veritas to be
 # invoked as a subprocess without failing.
+#
+# On Windows Git Bash without winpty re-exec, [ -t 0 ] lies to us.
+# In that case fall back to -i.
+# The top-level ./veritas wrapper re-execs under winpty when available, so
+# under normal use this fallback only kicks in when winpty is missing.
 # -----------------------------------------------------------------------------
 get_tty_flag() {
     if [ -t 0 ]; then
-        echo "-it"
+        # On MINGW/MSYS without winpty re-exec, [ -t 0 ] lies to us.
+        if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] \
+            && [[ -z "$_VERITAS_WINPTY_REEXEC" ]]; then
+            echo "-i"
+        else
+            echo "-it"
+        fi
     else
         echo "-i"
     fi
