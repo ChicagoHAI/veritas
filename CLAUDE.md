@@ -97,7 +97,7 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **GPU is auto-detected and Linux-only** (requires NVIDIA Container Toolkit).
 - **Docker is mandatory.** There is no host-side fallback. The `./veritas` wrapper manages the image lifecycle (pull from GHCR on first run, build locally if pull fails).
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
-- **GPU auto-detected.** `docker/run.sh` probes `docker info` for the NVIDIA runtime. On WSL or machines where the toolkit is installed but no GPU adapter is reachable, this can produce a false positive — `--gpus all` gets passed and the container fails at launch. Workaround: `CUDA_VISIBLE_DEVICES="" ./veritas ...` (this skips GPU activation entirely inside the container, though veritas itself does not currently read that env var — the real fix is a GPU probe in the wrapper, tracked for follow-up).
+- **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped (we trust the toolkit check alone rather than pulling a 2GB probe image just to decide about a flag).
 
 ## Testing
 

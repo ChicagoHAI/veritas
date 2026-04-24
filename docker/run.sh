@@ -64,14 +64,41 @@ get_tty_flag() {
 }
 
 # -----------------------------------------------------------------------------
-# Auto-detect nvidia-container-toolkit. Returns --gpus all when available,
-# empty string otherwise. Prints a notice on stderr if GPU is unavailable.
+# Auto-detect nvidia-container-toolkit AND actual GPU accessibility.
+# Two-step check:
+#   1. `docker info` mentions nvidia (toolkit installed)
+#   2. A `docker run --gpus all ... nvidia-smi` probe succeeds
+# The second step catches WSL / emulated envs where the toolkit is installed
+# but no GPU adapter is reachable. Returns `--gpus all` only if both pass;
+# empty string otherwise (with a stderr notice).
+#
+# Uses the veritas image itself for the probe when available (nvidia-smi
+# ships in the nvidia/cuda runtime base it's built on). Falls back to the
+# step-1 result if the image isn't pulled yet — at that point we haven't
+# spent time to pull a 2GB probe image just to decide about a flag.
 # -----------------------------------------------------------------------------
 get_gpu_flags() {
-    if docker info 2>/dev/null | grep -qi nvidia; then
+    # Step 1: toolkit present?
+    if ! docker info 2>/dev/null | grep -qi nvidia; then
+        echo -e "${DIM}Running without GPU (nvidia-container-toolkit not configured)${NC}" >&2
+        echo ""
+        return
+    fi
+
+    # Step 2: GPU actually reachable? Probe with our image (nvidia-smi ships
+    # in its nvidia/cuda base). If the image doesn't exist yet, trust step 1
+    # — the user hasn't built yet, and a full probe would require pulling a
+    # 2GB image just to decide about a flag.
+    if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+        echo "--gpus all"
+        return
+    fi
+
+    if docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+            --query-gpu=name --format=csv,noheader &> /dev/null; then
         echo "--gpus all"
     else
-        echo -e "${DIM}Running without GPU (nvidia-container-toolkit not configured)${NC}" >&2
+        echo -e "${DIM}GPU toolkit detected but no GPU accessible (WSL/emulated?); running without --gpus all${NC}" >&2
         echo ""
     fi
 }
@@ -215,8 +242,17 @@ show_status() {
         echo -e "    Docker image ........ ${YELLOW}[MISSING]${NC} run: ./veritas build (or let first run pull)"
     fi
 
+    # Two-step GPU probe: toolkit + actual accessibility
     if docker info 2>/dev/null | grep -qi nvidia; then
-        echo -e "    GPU ................. ${GREEN}[OK]${NC} nvidia-container-toolkit"
+        if docker image inspect "$IMAGE_NAME" &> /dev/null && \
+           docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+               --query-gpu=name --format=csv,noheader &> /dev/null; then
+            echo -e "    GPU ................. ${GREEN}[OK]${NC} accessible"
+        elif ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+            echo -e "    GPU ................. ${DIM}[?]${NC} toolkit present; rebuild image to probe"
+        else
+            echo -e "    GPU ................. ${YELLOW}[WARN]${NC} toolkit present but no GPU reachable (WSL/emulated?)"
+        fi
     else
         echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
     fi
