@@ -454,6 +454,11 @@ rewrite_paths() {
                 local host_path
                 host_path=$(realpath -m "$2")
                 mkdir -p "$host_path"
+                # Container runs as veritas (UID 1000). If the host dir is
+                # owned by another UID (e.g. root on a VM), UID 1000 can't
+                # write into it — phases that mkdir subdirs like replication/
+                # fail with "Permission denied". Make it world-writable.
+                chmod -R a+rwX "$host_path" 2>/dev/null || true
                 MOUNTS="$MOUNTS -v \"$host_path://workspace/output\""
                 ARGS="$ARGS --output //workspace/output"
                 shift 2
