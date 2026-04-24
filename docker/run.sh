@@ -250,3 +250,297 @@ show_status() {
 
     echo ""
 }
+
+# -----------------------------------------------------------------------------
+# Build the container image locally
+# -----------------------------------------------------------------------------
+cmd_build() {
+    echo -e "${BLUE}Building veritas container image...${NC}"
+    local platform_flag=$(get_platform_flags)
+    if [ -n "$platform_flag" ]; then
+        echo -e "  ${DIM}macOS detected — building for linux/amd64 (Rosetta emulation)${NC}"
+    fi
+
+    docker build $platform_flag -t "$IMAGE_NAME" -f "$PROJECT_ROOT/docker/Dockerfile" "$PROJECT_ROOT"
+
+    echo -e "${GREEN}Build complete:${NC} $IMAGE_NAME"
+}
+
+# -----------------------------------------------------------------------------
+# Pull latest image from GHCR
+# -----------------------------------------------------------------------------
+cmd_update() {
+    echo -e "${BLUE}Updating veritas image...${NC}"
+    local platform_flag=$(get_platform_flags)
+
+    if docker pull $platform_flag "$REGISTRY_IMAGE"; then
+        docker tag "$REGISTRY_IMAGE" "$IMAGE_NAME"
+        echo -e "  ${GREEN}[OK]${NC} Image updated"
+    else
+        echo -e "  ${RED}[FAIL]${NC} Pull failed — check network or run: ./veritas build"
+        exit 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Status dashboard
+# -----------------------------------------------------------------------------
+cmd_status() {
+    show_banner
+    show_status
+}
+
+# -----------------------------------------------------------------------------
+# Launch interactive login shell for a provider
+# -----------------------------------------------------------------------------
+cmd_login() {
+    local provider="${1:-claude}"
+    case "$provider" in
+        claude|codex|gemini) ;;
+        *) echo -e "${RED}Unknown provider: $provider${NC} (expected claude|codex|gemini)"; exit 1 ;;
+    esac
+
+    ensure_image
+
+    echo -e "${BLUE}Starting login shell for $provider...${NC}"
+    echo -e "  Inside the shell, type: ${BOLD}$provider${NC}"
+    echo -e "  After the browser flow finishes, type ${BOLD}exit${NC}. Credentials persist to ~/.$provider/."
+    echo ""
+
+    mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.gemini"
+    ensure_credential_perms
+
+    local platform_flag=$(get_platform_flags)
+    local gpu_flags=$(get_gpu_flags)
+
+    eval "docker run -it --rm \
+        $platform_flag \
+        $gpu_flags \
+        -v \"$HOME/.claude:/home/veritas/.claude\" \
+        -v \"$HOME/.codex:/home/veritas/.codex\" \
+        -v \"$HOME/.gemini:/home/veritas/.gemini\" \
+        \"$IMAGE_NAME\" \
+        bash"
+}
+
+# -----------------------------------------------------------------------------
+# Interactive bash shell inside the container (cwd mounted at /workspace)
+# -----------------------------------------------------------------------------
+cmd_shell() {
+    ensure_image
+    warn_if_outdated
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local gpu_flags=$(get_gpu_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        $gpu_flags \
+        $credential_mounts \
+        -v \"$PWD://workspace\" \
+        -w //workspace \
+        \"$IMAGE_NAME\" \
+        bash"
+}
+
+# -----------------------------------------------------------------------------
+# Path-rewriting helper for veritas subcommands.
+# Given a list of --flag/value pairs (where some flags carry host paths),
+# emit a rewritten arg list plus bind-mount flags.
+#
+# Sets two globals for the caller:
+#   MOUNTS  — string of -v flags
+#   ARGS    — the rewritten argv list
+#
+# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --output /h/out --provider claude
+# -----------------------------------------------------------------------------
+rewrite_paths() {
+    MOUNTS=""
+    ARGS=""
+    local counter=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper|-p|--plan)
+                local flag="$1"
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -e "$host_path" ]; then
+                    echo -e "${RED}File not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_path")
+                counter=$((counter + 1))
+                local container_path="//workspace/inputs/file${counter}_${basename}"
+                MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
+                ARGS="$ARGS $flag \"$container_path\""
+                shift 2
+                ;;
+            --repo|-r)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -d "$host_path" ]; then
+                    echo -e "${RED}Repo not found:${NC} $2" >&2
+                    exit 1
+                fi
+                MOUNTS="$MOUNTS -v \"$host_path://workspace/repo:ro\""
+                ARGS="$ARGS --repo //workspace/repo"
+                shift 2
+                ;;
+            --output|-o)
+                local host_path
+                host_path=$(realpath -m "$2")
+                mkdir -p "$host_path"
+                MOUNTS="$MOUNTS -v \"$host_path://workspace/output\""
+                ARGS="$ARGS --output //workspace/output"
+                shift 2
+                ;;
+            *)
+                # Pass through unchanged, quoting each token once
+                ARGS="$ARGS \"$1\""
+                shift
+                ;;
+        esac
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Evaluate (the primary subcommand)
+# -----------------------------------------------------------------------------
+cmd_evaluate() {
+    ensure_image
+    warn_if_outdated
+
+    rewrite_paths "$@"
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local gpu_flags=$(get_gpu_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        $gpu_flags \
+        $credential_mounts \
+        $MOUNTS \
+        -w //workspace \
+        \"$IMAGE_NAME\" \
+        veritas evaluate $ARGS"
+}
+
+# -----------------------------------------------------------------------------
+# Extract plan from a paper
+# -----------------------------------------------------------------------------
+cmd_extract_plan() {
+    ensure_image
+
+    # extract-plan takes a positional paper argument — rewrite it like --paper
+    local paper="$1"; shift
+    local host_paper
+    host_paper=$(realpath "$paper" 2>/dev/null || echo "$paper")
+    if [ ! -f "$host_paper" ]; then
+        echo -e "${RED}Paper not found:${NC} $paper" >&2
+        exit 1
+    fi
+    local basename=$(basename "$host_paper")
+    local container_paper="//workspace/inputs/$basename"
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+
+    # Handle --output specially (other args pass through)
+    rewrite_paths "$@"
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        $credential_mounts \
+        -v \"$host_paper:$container_paper:ro\" \
+        $MOUNTS \
+        -w //workspace \
+        \"$IMAGE_NAME\" \
+        veritas extract-plan \"$container_paper\" $ARGS"
+}
+
+# -----------------------------------------------------------------------------
+# Regenerate report from existing evaluation dir
+# -----------------------------------------------------------------------------
+cmd_report() {
+    ensure_image
+
+    local eval_dir="$1"; shift
+    local host_eval_dir
+    host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
+    if [ ! -d "$host_eval_dir" ]; then
+        echo -e "${RED}Evaluation dir not found:${NC} $eval_dir" >&2
+        exit 1
+    fi
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        -v \"$host_eval_dir://workspace/eval\" \
+        -w //workspace \
+        \"$IMAGE_NAME\" \
+        veritas report //workspace/eval $@"
+}
+
+# -----------------------------------------------------------------------------
+# Help
+# -----------------------------------------------------------------------------
+show_help() {
+    show_banner
+    echo -e "${BOLD}Usage:${NC} ./veritas <command> [args...]"
+    echo ""
+    echo -e "${BOLD}Commands:${NC}"
+    echo "  evaluate      Run the full replication pipeline"
+    echo "                  e.g. ./veritas evaluate --paper p.pdf --repo ./myrepo"
+    echo "  extract-plan  Extract a structured plan from a paper PDF"
+    echo "  report        Regenerate a report from an existing evaluation dir"
+    echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
+    echo "  login         Log in to an AI provider (claude|codex|gemini)"
+    echo "  build         Build the image locally"
+    echo "  update        Pull the latest image from GHCR"
+    echo "  status        Show status dashboard (Docker, image, GPU, credentials)"
+    echo "  help          Show this help"
+    echo ""
+    echo -e "${BOLD}First-time setup:${NC}"
+    echo "  1. ./veritas login claude"
+    echo "  2. ./veritas evaluate --paper <your-paper.pdf> --repo <your-repo>"
+    echo ""
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        evaluate)      cmd_evaluate "$@" ;;
+        extract-plan)  cmd_extract_plan "$@" ;;
+        report)        cmd_report "$@" ;;
+        shell)         cmd_shell "$@" ;;
+        login)         cmd_login "$@" ;;
+        build)         cmd_build ;;
+        update)        cmd_update ;;
+        status)        cmd_status ;;
+        help|-h|--help) show_help ;;
+        *)
+            echo -e "${RED}Unknown command:${NC} $cmd"
+            echo "Run: ./veritas help"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
