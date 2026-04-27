@@ -504,7 +504,7 @@ class ReplicationRunner:
             prompt_file = self.config.output_dir / "prompts" / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             claude = self._resolve_cli("claude")
-            cmd = [claude, "-p", str(prompt_file), "--output-format", "text", "--dangerously-skip-permissions"]
+            cmd = [claude, "-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
@@ -544,7 +544,7 @@ class ReplicationRunner:
             prompt_file = self.config.output_dir / "prompts" / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             gemini = self._resolve_cli("gemini")
-            cmd = [gemini, "-p", str(prompt_file)]
+            cmd = [gemini, "-p", prompt]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
