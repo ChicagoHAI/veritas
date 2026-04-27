@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# =============================================================================
+# veritas — top-level wrapper
+# Forwards all arguments to docker/run.sh. See `./veritas help`.
+#
+# On Windows Git Bash (mintty / MINGW / MSYS), re-exec under winpty so docker
+# run -it sees a real pty. Without this, interactive docker calls fail with
+# "the input device is not a TTY". Guarded by _VERITAS_WINPTY_REEXEC to avoid
+# infinite recursion.
+# =============================================================================
+
+if [[ -z "$_VERITAS_WINPTY_REEXEC" ]] \
+    && [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] \
+    && [ -t 0 ] \
+    && command -v winpty &> /dev/null; then
+    export _VERITAS_WINPTY_REEXEC=1
+    exec winpty bash "$0" "$@"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/docker/run.sh" "$@"

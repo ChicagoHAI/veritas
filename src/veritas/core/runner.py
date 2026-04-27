@@ -11,12 +11,6 @@ from veritas.core.config import Config
 from veritas.core.checklist import Checklist, parse_checklist_response
 from veritas.core.models import ReplicationPlan, ExecutionEvidence
 from veritas.core.evidence import parse_replication_plan_response, gather_evidence
-from veritas.core.container import (
-    is_docker_available,
-    has_gpu,
-    build_container_command,
-    execute_in_container,
-)
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
@@ -265,55 +259,41 @@ class ReplicationRunner:
     # -- Phase 2: Replicate ------------------------------------------------
 
     def _replicate(self, replication_plan: Optional[ReplicationPlan]) -> Optional[ExecutionEvidence]:
-        """Phase 2: Execute replication inside Docker container."""
-        if not self.config.use_docker:
-            print("Docker disabled (--no-docker), skipping replication phase")
-            return None
+        """Phase 2: Execute replication via the configured provider.
 
+        Runs as an in-process subprocess. When the whole veritas CLI is
+        running inside the veritas Docker image (the production path),
+        the provider sees `/workspace/repo` as the read-only repo and
+        `/workspace/output` as the writable scratch space. When run
+        outside Docker (dev-time), paths come from `self.config` as-is.
+        """
         if replication_plan is None:
             print("No replication plan available, skipping replication phase")
             return None
 
-        if not is_docker_available():
-            print("Warning: Docker not available, skipping replication phase")
-            print("  Install Docker and run 'veritas build-image' for full replication")
-            return None
-
-        print("Running replication inside Docker container...")
+        print("Running replication phase...")
 
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
         )
 
-        provider_cmd = self._get_provider_cmd()
-
-        gpu = self.config.gpu and has_gpu()
-
-        # Look for .env file in veritas config dir (NOT the evaluated repo)
-        env_file = Path.home() / ".veritas" / ".env"
-        if not env_file.exists():
-            env_file = None
-
-        cmd = build_container_command(
-            repo_path=self.config.repo_path,
-            output_dir=self.config.output_dir,
-            image=self.config.docker_image,
-            provider_cmd=provider_cmd,
-            gpu=gpu,
-            env_file=env_file,
-        )
-
         log_path = self.config.output_dir / "replication" / "execution_stdout.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        returncode = execute_in_container(
-            cmd=cmd,
-            session_instructions=session_instructions,
-            log_path=log_path,
+        # Write session instructions to a prompt file so the provider
+        # can be pointed at it the same way as the other phases.
+        prompt_path = self.config.output_dir / "replication_session_prompt.txt"
+        prompt_path.write_text(session_instructions, encoding='utf-8')
+
+        stdout = self._invoke_provider(
+            prompt=session_instructions,
+            working_dir=self.config.repo_path,
+            output_path=log_path,
             timeout=self.config.replicate_timeout,
         )
 
-        if returncode != 0:
-            print(f"  Warning: Container exited with code {returncode}")
+        if stdout:
+            log_path.write_text(stdout, encoding='utf-8')
 
         evidence = gather_evidence(self.config.output_dir / "replication")
 
@@ -323,18 +303,6 @@ class ReplicationRunner:
             print("  Warning: No evidence collected from replication")
 
         return evidence
-
-    def _get_provider_cmd(self) -> List[str]:
-        """Get the CLI command for the configured provider."""
-        provider = self.config.provider.lower()
-        if provider == "claude":
-            return ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text"]
-        elif provider == "codex":
-            return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-"]
-        elif provider == "gemini":
-            return ["gemini", "-p"]
-        else:
-            raise ValueError(f"Unknown provider: {provider}")
 
     # -- Phase 3: Evaluate -------------------------------------------------
 

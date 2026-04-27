@@ -39,115 +39,36 @@ Rather than using a fixed set of evaluation criteria, Veritas generates a checkl
 
 ## Installation
 
+You need Docker. Nothing else — no Python, no pandoc, no LaTeX, no provider CLI on the host.
+
 ```bash
-# Clone the repository
 git clone https://github.com/ChicagoHAI/veritas.git
 cd veritas
-
-# Install with uv (recommended)
-uv venv --python 3.12
-uv pip install -e .
-
-# Or with pip
-pip install -e .
+./veritas login claude      # one-time OAuth sign-in
+./veritas evaluate --paper your_paper.pdf --repo your_repo/
 ```
 
-### Prerequisites
+On first run, `./veritas` pulls `ghcr.io/chicagohai/veritas:latest` (~3GB) from GitHub Container Registry. Subsequent runs are instant.
 
-- Python 3.10+
-- Docker (for the replication phase)
-- One of the following AI CLI tools:
-  - [Claude Code](https://claude.com/claude-code) (recommended)
-  - [Codex CLI](https://github.com/openai/codex)
-  - [Gemini CLI](https://ai.google.dev/gemini-api)
+Linux/macOS users: after cloning, the shell scripts are already marked executable in the git index. If you somehow ended up with non-executable scripts, run `chmod +x veritas docker/run.sh scripts/test_docker.sh`.
 
-For PDF report generation:
-- `pandoc` and `pdflatex` (optional)
+Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` because `nvidia/cuda` base images have no arm64 build. Rosetta emulation handles it.
 
-## Quick Start
-
-### 1. Build the Docker image
+## Commands
 
 ```bash
-veritas build-image
+./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
+./veritas extract-plan paper.pdf                     # plan only
+./veritas report ./evaluation                        # regenerate report
+./veritas shell                                      # interactive container
+./veritas login claude                               # provider OAuth
+./veritas status                                     # dashboard
+./veritas update                                     # pull latest image
+./veritas build                                      # build image locally
+./veritas help
 ```
 
-### 2. Run an evaluation
-
-```bash
-veritas evaluate --paper paper.pdf --repo ./my-project
-```
-
-This runs the full pipeline: generates a checklist from the paper, replicates the project inside Docker, scores the results, and writes a report to `./my-project/evaluation/`.
-
-### Evaluate without Docker (code analysis only)
-
-```bash
-veritas evaluate --paper paper.pdf --repo ./my-project --no-docker
-```
-
-This skips the replication phase and evaluates by reading the code only.
-
-## Command Reference
-
-### `veritas evaluate`
-
-Main evaluation command. Runs the full three-phase pipeline.
-
-```
-veritas evaluate [OPTIONS]
-
-Options:
-  -p, --paper PATH               Path to the paper PDF file
-  -r, --repo PATH                Path to the repository to evaluate (required)
-  --plan PATH                    Path to an existing plan file
-  -o, --output PATH              Output directory (default: repo/evaluation)
-  --provider TEXT                AI provider: claude, codex, gemini [default: claude]
-  --pdf / --no-pdf               Generate PDF report [default: pdf]
-  -e, --evaluations TEXT         Comma-separated evaluations to run
-                                 Options: code,consistency,generalization,
-                                 replication,instruction_following
-  -t, --timeout INT              Timeout per evaluation in seconds [default: 3600]
-  --no-docker                    Skip replication phase, evaluate by reading code only
-  --docker-image TEXT            Docker image name [default: veritas-replicator:latest]
-  --replication-timeout INT      Timeout for replication phase [default: 3600]
-  --gpu / --no-gpu               Enable GPU passthrough for Docker [default: no-gpu]
-```
-
-### `veritas build-image`
-
-Build the Docker image for replication.
-
-```
-veritas build-image [OPTIONS]
-
-Options:
-  --tag TEXT    Image tag [default: veritas-replicator:latest]
-```
-
-### `veritas extract-plan`
-
-Extract a structured plan from a paper PDF.
-
-```
-veritas extract-plan PAPER [OPTIONS]
-
-Options:
-  -o, --output PATH      Output path for the plan file
-  --with-evidence        Include evidence quotes from the paper
-```
-
-### `veritas report`
-
-Generate a report from existing evaluation results.
-
-```
-veritas report EVALUATION_DIR [OPTIONS]
-
-Options:
-  -o, --output PATH      Output path for the report
-  -f, --format TEXT      Output format: md, pdf, or all [default: all]
-```
+Run `./veritas evaluate --help` for the full option list (provider, evaluations selection, paper/repo/output paths, timeout, etc.).
 
 ## Evaluation Dimensions
 
@@ -191,13 +112,7 @@ The replication container is a CUDA 12.5.1 multi-stage build with:
 
 ### GPU Support
 
-GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and only works on Linux with NVIDIA GPUs. On all other platforms (Windows, macOS, Linux without NVIDIA), the container runs in CPU-only mode.
-
-To enable GPU:
-
-```bash
-veritas evaluate --repo ./project --paper paper.pdf --gpu
-```
+GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and only works on Linux with NVIDIA GPUs. When detected, `./veritas` passes `--gpus all` to the container automatically. On all other platforms (Windows, macOS, Linux without NVIDIA), the container runs in CPU-only mode.
 
 ### Credentials
 
@@ -224,23 +139,23 @@ echo "ANTHROPIC_API_KEY=sk-..." > ~/.veritas/.env
 
 ```bash
 # Use Claude (default)
-veritas evaluate --repo ./project --paper paper.pdf --provider claude
+./veritas evaluate --repo ./project --paper paper.pdf --provider claude
 
 # Use Codex
-veritas evaluate --repo ./project --paper paper.pdf --provider codex
+./veritas evaluate --repo ./project --paper paper.pdf --provider codex
 
 # Use Gemini
-veritas evaluate --repo ./project --paper paper.pdf --provider gemini
+./veritas evaluate --repo ./project --paper paper.pdf --provider gemini
 ```
 
 ### Running Specific Evaluations
 
 ```bash
 # Only code and consistency
-veritas evaluate --repo ./project -e code,consistency
+./veritas evaluate --repo ./project -e code,consistency
 
 # Only replication
-veritas evaluate --repo ./project -e replication
+./veritas evaluate --repo ./project -e replication
 ```
 
 ## Acknowledgments
