@@ -8,6 +8,9 @@ from typing import Optional, List
 # All valid AI providers
 VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
+# Valid replication scope modes
+VALID_MODES = ["main", "full"]
+
 # All available evaluation types
 ALL_EVALUATIONS = [
     "code",           # Code quality evaluation
@@ -34,6 +37,7 @@ class Config:
     # Evaluation settings
     evaluations: Optional[List[str]] = None
     provider: str = "claude"
+    mode: str = "main"
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
@@ -70,6 +74,12 @@ class Config:
         # Validate provider
         if self.provider.lower() not in VALID_PROVIDERS:
             raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
+
+        # Validate mode
+        if self.mode not in VALID_MODES:
+            raise ValueError(f"Unknown mode: {self.mode}. Valid options: {VALID_MODES}")
+        if self.mode == "full":
+            raise NotImplementedError("--mode full is not yet implemented. Use --mode main (default).")
 
     @property
     def has_paper(self) -> bool:

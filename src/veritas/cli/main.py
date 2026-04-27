@@ -75,6 +75,11 @@ def evaluate(
         "--evaluate-timeout",
         help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
     ),
+    mode: str = typer.Option(
+        "main",
+        "--mode",
+        help="Replication scope: 'main' targets key claims, 'full' targets all results (not yet implemented)",
+    ),
 ):
     """
     Evaluate the replicability of a scientific project.
@@ -106,6 +111,7 @@ def evaluate(
         analyze_timeout=analyze_timeout,
         replicate_timeout=replicate_timeout,
         evaluate_timeout=evaluate_timeout,
+        mode=mode,
     )
 
     # Run evaluation
