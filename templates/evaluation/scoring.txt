@@ -32,9 +32,11 @@ A replication agent attempted to run the code inside a Docker container. Here ar
 {% if step.stdout and step.exit_code == 0 %}
 - Stdout (truncated): {{ step.stdout[:2000] }}
 {% endif %}
-{% if step.suggested_fix %}
-- Suggested fix: {{ step.suggested_fix }}
-- **NOTE:** The code was NOT modified. This item should be scored as FAILED.
+{% if step.fixes_applied %}
+- Fixes applied:
+{% for fix in step.fixes_applied %}
+  - **{{ fix.file_path }}**: {{ fix.description }} (triggered by: {{ fix.original_error }})
+{% endfor %}
 {% endif %}
 {% if step.output_files %}
 - Output files: {{ step.output_files | join(', ') }}
@@ -45,7 +47,10 @@ A replication agent attempted to run the code inside a Docker container. Here ar
 
 - **Evidence first, code reading second.** If execution evidence exists for a checklist item, base your answer on that evidence.
 - **Execution success alone does not mean correctness.** Code can run without errors but produce wrong results. Check output values against the paper's claims.
-- **Suggested fix means failure.** If the replication agent identified that a code modification was needed for a step to work, any related checklist item should be scored NO. Include the suggested fix in your rationale.
+- **Fixes do not mean failure.** If the replication agent fixed issues (deprecated APIs, missing dependencies, minor bugs) and the step then produced correct results, score based on the results. The fixes are context about reproducibility quality, not automatic penalties.
+{% if has_fix_assessment and fix_assessment and fix_assessment.total_fixes > 0 %}
+- **Fix severity context:** {{ fix_assessment.total_fixes }} fix(es) were applied during replication ({{ fix_assessment.minor_count }} minor, {{ fix_assessment.major_count }} major, {{ fix_assessment.critical_count }} critical). Summary: {{ fix_assessment.summary }}
+{% endif %}
 - You may still read repository files to answer items that execution evidence does not cover (e.g., documentation quality, code structure).
 - **Be strict** — only answer YES if you have clear evidence the requirement is met.
 
