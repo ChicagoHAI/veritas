@@ -170,6 +170,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             checklist_items=checklist.items,
             paper_path=self.config.paper_path if self.config.has_paper else None,
+            mode=self.config.mode,
         )
 
         prompt_path = self.config.output_dir / "prompts" / "replication_plan_prompt.txt"
@@ -276,6 +277,7 @@ class ReplicationRunner:
 
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
+            paper_path=self.config.paper_path,
         )
 
         log_path = self.config.output_dir / "replication" / "execution_stdout.log"

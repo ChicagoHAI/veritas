@@ -50,7 +50,7 @@ Focus on steps that produce **verifiable evidence** — commands that generate o
 
 ## Output
 
-Save the plan to `{{ output_dir }}/replication_plan.json` with this format:
+Save the plan to `{{ output_dir }}/analyze/replication_plan.json` with this format:
 
 ```json
 {

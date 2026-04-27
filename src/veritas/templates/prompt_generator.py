@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, List, TYPE_CHECKING
+from typing import Any, Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from veritas.core.checklist import ChecklistItem
@@ -61,6 +61,7 @@ class PromptGenerator:
         plan_path: Optional[Path],
         output_dir: Path,
         evidence: Optional[ExecutionEvidence] = None,
+        fix_assessment: Optional[Any] = None,
     ) -> str:
         """Generate prompt for scoring a category's checklist items."""
         template = self.env.get_template("evaluation/scoring.txt")
@@ -75,6 +76,8 @@ class PromptGenerator:
             "has_plan": plan_path is not None and plan_path.exists(),
             "has_evidence": evidence is not None,
             "evidence": evidence,
+            "has_fix_assessment": fix_assessment is not None,
+            "fix_assessment": fix_assessment,
         }
         return template.render(**context)
 
@@ -84,6 +87,7 @@ class PromptGenerator:
         output_dir: Path,
         checklist_items: List[ChecklistItem],
         paper_path: Optional[Path] = None,
+        mode: str = "main",
     ) -> str:
         """Generate prompt for creating a replication plan."""
         template = self.env.get_template("replication/plan_generation.md")
@@ -93,16 +97,33 @@ class PromptGenerator:
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
             "checklist_items": checklist_items,
+            "mode": mode,
         }
         return template.render(**context)
 
     def generate_replication_session_prompt(
         self,
         replication_plan: ReplicationPlan,
+        paper_path: Optional[Path] = None,
     ) -> str:
         """Generate session instructions for the replication agent."""
         template = self.env.get_template("replication/session_instructions.md")
         context = {
             "replication_plan": replication_plan,
+            "has_paper": paper_path is not None,
+            "paper_path": str(paper_path) if paper_path else "",
+        }
+        return template.render(**context)
+
+    def generate_fix_severity_prompt(
+        self,
+        fixes: List,
+        output_dir: Path,
+    ) -> str:
+        """Generate prompt for assessing fix severity."""
+        template = self.env.get_template("evaluation/fix_severity.md")
+        context = {
+            "fixes": fixes,
+            "output_dir": str(output_dir.absolute()),
         }
         return template.render(**context)

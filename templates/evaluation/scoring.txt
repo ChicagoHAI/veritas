@@ -73,7 +73,7 @@ Q{{ loop.index }}: {{ item.question }}
 
 ## Output Format
 
-Save your evaluation to `{{ output_dir }}/{{ category_name }}_evaluation.json`:
+Save your evaluation to `{{ output_dir }}/evaluate/{{ category_name }}_evaluation.json`:
 
 ```json
 {
