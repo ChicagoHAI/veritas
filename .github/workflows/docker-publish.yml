@@ -32,6 +32,18 @@ jobs:
       packages: write
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/share/boost /usr/local/graalvm /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/hostedtoolcache
+          sudo apt-get remove -y '^dotnet-.*' '^llvm-.*' 'php.*' azure-cli \
+            google-cloud-cli microsoft-edge-stable google-chrome-stable \
+            firefox powershell mono-devel 2>/dev/null || true
+          sudo apt-get autoremove -y
+          sudo docker builder prune -af
+          df -h /
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
