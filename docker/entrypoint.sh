@@ -72,4 +72,16 @@ done
 echo "==================================="
 echo ""
 
+# Create a writable copy of the repo for the replication agent.
+# The original mount at /workspace/repo stays read-only.
+if [ -d /workspace/repo ] && [ -d /workspace/output ]; then
+    mkdir -p /workspace/output/replication
+    cp -a /workspace/repo /workspace/output/replication/codebase
+
+    # Generate a unified diff of agent changes on exit, regardless of
+    # how the main process terminates.
+    trap 'diff -ruN /workspace/repo /workspace/output/replication/codebase \
+        > /workspace/output/replication/codebase.diff 2>/dev/null || true' EXIT
+fi
+
 exec "$@"
