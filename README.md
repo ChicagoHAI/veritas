@@ -133,13 +133,7 @@ GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/
 
 ### Credentials
 
-Veritas mounts your AI CLI credential files (read-only) into the container so the agent can authenticate. It mounts only the minimal auth files needed:
-
-| CLI | File mounted |
-|-----|-------------|
-| Claude | `~/.claude/.credentials.json` |
-| Codex | `~/.codex/auth.json` |
-| Gemini | `~/.gemini/oauth_creds.json`, `~/.gemini/google_accounts.json` |
+Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.gemini`) into the container so the agent can authenticate. Run `./veritas login <provider>` to set up credentials before your first evaluation.
 
 ### Environment Variables
 

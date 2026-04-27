@@ -22,9 +22,9 @@ if [ ! -w "${HOME:-/}" ]; then
     mkdir -p "$HOME"
 fi
 
-# Set up credential files from read-only mounts at /tmp/.
-# Individual auth files are mounted (not full dirs) to avoid
-# OS-specific config and bloat. We copy them into writable $HOME/.
+# Copy credential files from /tmp/ mounts (if present) into writable $HOME/.
+# The wrapper may mount credential dirs at /tmp/.{claude,codex,gemini}
+# when the home directory isn't directly writable.
 for dir in .claude .codex .gemini; do
     if [ -d "/tmp/$dir" ] && [ "$(ls -A /tmp/$dir 2>/dev/null)" ]; then
         mkdir -p "$HOME/$dir"
