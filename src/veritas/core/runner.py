@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config
 from veritas.core.checklist import Checklist, parse_checklist_response
-from veritas.core.models import ReplicationPlan, ExecutionEvidence
+from veritas.core.models import ReplicationPlan, ExecutionEvidence, FixSeverityAssessment
 from veritas.core.evidence import parse_replication_plan_response, gather_evidence
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
@@ -39,7 +39,7 @@ class RunResult:
 
 
 class ReplicationRunner:
-    """Orchestrates the three-phase replication evaluation process."""
+    """Orchestrates the replication evaluation pipeline."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -48,14 +48,15 @@ class ReplicationRunner:
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
-        """Run the full three-phase pipeline: analyze -> replicate -> evaluate -> report."""
+        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report."""
         try:
             self._setup_output_dir()
             plan_path = self._extract_plan()
             checklist, replication_plan = self._analyze()
             evidence = self._replicate(replication_plan)
-            results = self._evaluate(checklist, evidence, plan_path)
-            report_path, pdf_path = self._report(results, evidence)
+            fix_assessment = self._assess_fixes(evidence)
+            results = self._evaluate(checklist, evidence, plan_path, fix_assessment)
+            report_path, pdf_path = self._report(results, evidence, fix_assessment)
 
             return RunResult(
                 success=True,
@@ -307,15 +308,74 @@ class ReplicationRunner:
 
         return evidence
 
+    # -- Fix Assessment ----------------------------------------------------
+
+    def _assess_fixes(self, evidence: Optional[ExecutionEvidence]) -> FixSeverityAssessment:
+        """Assess severity of fixes applied during replication.
+
+        Runs a separate LLM pass over the fix records. Skips the LLM call
+        entirely when no fixes were applied.
+        """
+        if evidence is None:
+            return FixSeverityAssessment.empty()
+
+        all_fixes = evidence.all_fixes_applied
+        if not all_fixes:
+            print("No fixes applied during replication, skipping severity assessment")
+            return FixSeverityAssessment.empty()
+
+        print(f"Assessing severity of {len(all_fixes)} fix(es)...")
+
+        prompt = self.prompt_generator.generate_fix_severity_prompt(
+            fixes=[f.to_dict() for f in all_fixes],
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.output_dir / "prompts" / "fix_severity_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        output_path = self.config.output_dir / "evaluate" / "fix_severity.json"
+        stdout = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            output_path=output_path,
+            timeout=self.config.evaluate_timeout,
+        )
+
+        response_text = None
+        if output_path.exists():
+            response_text = output_path.read_text(encoding='utf-8').strip()
+        if not response_text and stdout:
+            response_text = stdout
+
+        if not response_text:
+            print("  Warning: Fix severity assessment returned no output")
+            return FixSeverityAssessment.empty()
+
+        try:
+            from veritas.core.evidence import _extract_json
+            raw = _extract_json(response_text)
+            data = json.loads(raw)
+            assessment = FixSeverityAssessment.from_dict(data)
+            output_path.write_text(
+                json.dumps(assessment.to_dict(), indent=2), encoding='utf-8'
+            )
+            print(f"  Fix assessment: {assessment.minor_count} minor, {assessment.major_count} major, {assessment.critical_count} critical")
+            return assessment
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: Could not parse fix severity assessment: {e}")
+            return FixSeverityAssessment.empty()
+
     # -- Phase 3: Evaluate -------------------------------------------------
 
-    def _evaluate(  
+    def _evaluate(
         self,
         checklist: Checklist,
         evidence: Optional[ExecutionEvidence],
         plan_path: Optional[Path],
+        fix_assessment: Optional[FixSeverityAssessment] = None,
     ) -> List[EvaluationResult]:
-        """Phase 3: Score checklist items using evidence."""
+        """Score checklist items using evidence and fix context."""
         results = []
 
         for eval_name in self.config.evaluations:
@@ -329,7 +389,7 @@ class ReplicationRunner:
                 ))
                 continue
 
-            result = self._run_single_evaluation(eval_name, items, plan_path, evidence)
+            result = self._run_single_evaluation(eval_name, items, plan_path, evidence, fix_assessment)
             results.append(result)
 
             if result.success:
@@ -346,6 +406,7 @@ class ReplicationRunner:
         checklist_items: List,
         plan_path: Optional[Path],
         evidence: Optional[ExecutionEvidence] = None,
+        fix_assessment: Optional[FixSeverityAssessment] = None,
     ) -> EvaluationResult:
         """Run scoring for one category's checklist items."""
         try:
@@ -356,6 +417,7 @@ class ReplicationRunner:
                 plan_path=plan_path,
                 output_dir=self.config.output_dir,
                 evidence=evidence,
+                fix_assessment=fix_assessment,
             )
 
             prompt_path = self.config.output_dir / "prompts" / f"{eval_name}_prompt.txt"
@@ -397,7 +459,7 @@ class ReplicationRunner:
 
     # -- Report ------------------------------------------------------------
 
-    def _report(self, results, evidence=None):
+    def _report(self, results, evidence=None, fix_assessment=None):
         """Generate the final report."""
         return self.report_generator.generate_from_results(
             results=results,
@@ -405,6 +467,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             generate_pdf=self.config.generate_pdf,
             evidence=evidence,
+            fix_assessment=fix_assessment,
         )
 
     # -- Provider Invocation -----------------------------------------------
