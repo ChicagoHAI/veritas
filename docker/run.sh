@@ -164,7 +164,13 @@ get_cli_credential_mounts() {
 
     for dir in .claude .codex .gemini; do
         if [ -d "$HOME/$dir" ]; then
-            mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
+            # Codex mounts RO at .codex-host; entrypoint redirects CODEX_HOME
+            # to a container-private copy. cmd_login keeps the RW path.
+            if [ "$dir" = ".codex" ]; then
+                mounts="$mounts -v \"$HOME/.codex:/home/veritas/.codex-host:ro\""
+            else
+                mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
+            fi
             if [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
                 echo -e "  ${GREEN}[OK]${NC} Mounting $dir credentials" >&2
             else
@@ -422,27 +428,40 @@ cmd_login() {
         *) echo -e "${RED}Unknown provider: $provider${NC} (expected claude|codex|gemini)"; exit 1 ;;
     esac
 
-    ensure_image
-
-    echo -e "${BLUE}Starting login shell for $provider...${NC}"
-    echo -e "  Inside the shell, type: ${BOLD}$provider${NC}"
-    echo -e "  After the browser flow finishes, type ${BOLD}exit${NC}. Credentials persist to ~/.$provider/."
-    echo ""
-
     mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.gemini"
     ensure_credential_perms
+
+    # Skip login if credentials already exist
+    local cred_file=""
+    case "$provider" in
+        claude) cred_file="$HOME/.claude/.credentials.json" ;;
+        codex)  cred_file="$HOME/.codex/auth.json" ;;
+        gemini) cred_file="$HOME/.gemini/settings.json" ;;
+    esac
+    if [ -s "$cred_file" ]; then
+        echo -e "  ${GREEN}[OK]${NC} Already logged in to $provider (credentials found at $cred_file)"
+        echo -e "         To force re-login, delete that file and run this command again."
+        return 0
+    fi
+
+    ensure_image
+
+    echo -e "${BLUE}Launching $provider login...${NC}"
+    echo ""
 
     local platform_flag=$(get_platform_flags)
     local gpu_flags=$(get_gpu_flags)
 
+    # VERITAS_LOGIN_ONLY=1 keeps the RW path on ~/.codex so OAuth tokens persist.
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
+        -e VERITAS_LOGIN_ONLY=1 \
         -v \"$HOME/.claude:/home/veritas/.claude\" \
         -v \"$HOME/.codex:/home/veritas/.codex\" \
         -v \"$HOME/.gemini:/home/veritas/.gemini\" \
         \"$IMAGE_NAME\" \
-        bash"
+        $provider"
 }
 
 # -----------------------------------------------------------------------------

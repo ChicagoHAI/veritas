@@ -22,6 +22,20 @@ if [ ! -w "${HOME:-/}" ]; then
     mkdir -p "$HOME"
 fi
 
+# Codex requires owned, 0600 session files; copy from the read-only host
+# mount into a container-private CODEX_HOME. Login keeps the RW path so
+# OAuth tokens persist to the host.
+if [ "${VERITAS_LOGIN_ONLY:-0}" != "1" ] && [ -d "$HOME/.codex-host" ]; then
+    mkdir -p "$HOME/.codex-container"
+    for f in auth.json config.toml; do
+        if [ -f "$HOME/.codex-host/$f" ]; then
+            cp "$HOME/.codex-host/$f" "$HOME/.codex-container/$f" 2>/dev/null || true
+            chmod 600 "$HOME/.codex-container/$f" 2>/dev/null || true
+        fi
+    done
+    export CODEX_HOME="$HOME/.codex-container"
+fi
+
 # Set up credential files from read-only mounts at /tmp/.
 # Individual auth files are mounted (not full dirs) to avoid
 # OS-specific config and bloat. We copy them into writable $HOME/.
@@ -62,7 +76,11 @@ echo "Working directory: $(pwd)"
 echo ""
 echo "Credentials:"
 for dir in .claude .codex .gemini; do
-    if [ -d "$HOME/$dir" ] && [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
+    check_dir="$dir"
+    if [ "$dir" = ".codex" ] && [ "${VERITAS_LOGIN_ONLY:-0}" != "1" ]; then
+        check_dir=".codex-container"
+    fi
+    if [ -d "$HOME/$check_dir" ] && [ "$(ls -A "$HOME/$check_dir" 2>/dev/null)" ]; then
         echo "  $dir: OK"
     else
         echo "  $dir: not found"

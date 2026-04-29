@@ -478,7 +478,7 @@ class ReplicationRunner:
             prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             gemini = self._resolve_cli("gemini")
-            cmd = [gemini, "-p", str(prompt_file)]
+            cmd = [gemini, "-p", str(prompt_file), "--yolo", "--skip-trust"]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
