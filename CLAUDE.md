@@ -66,10 +66,10 @@ Output is organized into phase subdirectories: `analyze/`, `replication/` (inclu
 ### Key modules (`src/veritas/core/`)
 
 - `runner.py` — orchestrator; provider invocation (`_invoke_claude/codex/gemini`); JSON repair re-prompt logic
-- `config.py` — `Config` dataclass; `VALID_PROVIDERS` and `ALL_EVALUATIONS` constants
-- `checklist.py` — `ChecklistItem` / `Checklist` data models and parsing
-- `replication.py` — `ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`; plan parsing, evidence gathering, and `_extract_json` / `_fix_json_escapes` repair logic
-- `fix_severity.py` — `FixSeverityRating` and `FixSeverityAssessment` dataclasses
+- `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, `ALL_EVALUATIONS`, and output-structure constants (`*_SUBDIR`, `*_FILE`)
+- `checklist.py` — `parse_checklist_response()`
+- `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` repair logic
+- `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `checklist.py` (`Checklist`, `ChecklistItem`)
 - `plan_extractor.py` — PDF → plan extraction
 - `report_generator.py` — markdown + PDF report generation (pandoc-based)
 

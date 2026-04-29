@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from veritas.core.checklist import ChecklistItem
+from veritas.core.models.checklist import ChecklistItem
 
 if TYPE_CHECKING:
-    from veritas.core.replication import ExecutionEvidence, ReplicationPlan
+    from veritas.core.models.replication import ExecutionEvidence, ReplicationPlan
 
 
 CATEGORY_DISPLAY_NAMES = {

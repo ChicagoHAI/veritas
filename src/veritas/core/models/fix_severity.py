@@ -1,4 +1,4 @@
-"""Severity rating for fixes applied during replication."""
+"""Severity rating dataclasses for fixes applied during replication."""
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any

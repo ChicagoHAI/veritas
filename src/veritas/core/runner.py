@@ -7,8 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config
-from veritas.core.checklist import Checklist, parse_checklist_response
+from veritas.core.checklist import parse_checklist_response
+from veritas.core.models.checklist import Checklist
+from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
+from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.replication import (
     ReplicationPlan,
     ExecutionEvidence,
