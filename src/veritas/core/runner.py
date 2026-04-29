@@ -7,17 +7,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
+from veritas.core.config import Config, OUTPUT_SUBDIRS
 from veritas.core.checklist import parse_checklist_response
 from veritas.core.models.checklist import Checklist
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.replication import (
-    ReplicationPlan,
-    ExecutionEvidence,
     parse_replication_plan_response,
     gather_evidence,
+    _extract_json,
 )
-from veritas.core.fix_severity import FixSeverityAssessment
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
@@ -86,7 +85,7 @@ class ReplicationRunner:
     def _setup_output_dir(self):
         """Create the output directory structure."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        for subdir in ["analyze", "replication", "evaluate", "report", "prompts"]:
+        for subdir in OUTPUT_SUBDIRS:
             (self.config.output_dir / subdir).mkdir(exist_ok=True)
 
     def _extract_plan(self) -> Optional[Path]:
@@ -102,7 +101,7 @@ class ReplicationRunner:
             plan_content = self.plan_extractor.extract(
                 self.config.paper_path, with_evidence=True
             )
-            plan_path = self.config.output_dir / "analyze" / "extracted_plan.md"
+            plan_path = self.config.extracted_plan_path
             plan_path.write_text(plan_content, encoding='utf-8')
             return plan_path
 
@@ -126,10 +125,10 @@ class ReplicationRunner:
             paper_path=self.config.paper_path if self.config.has_paper else None,
         )
 
-        prompt_path = self.config.output_dir / "prompts" / "checklist_generation_prompt.txt"
+        prompt_path = self.config.prompts_dir / "checklist_generation_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_json_path = self.config.output_dir / "analyze" / "checklist.json"
+        output_json_path = self.config.checklist_path
         stdout = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
@@ -181,10 +180,10 @@ class ReplicationRunner:
             mode=self.config.mode,
         )
 
-        prompt_path = self.config.output_dir / "prompts" / "replication_plan_prompt.txt"
+        prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_path = self.config.output_dir / "analyze" / "replication_plan.json"
+        output_path = self.config.replication_plan_path
         stdout = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
@@ -288,12 +287,12 @@ class ReplicationRunner:
             paper_path=self.config.paper_path,
         )
 
-        log_path = self.config.output_dir / "replication" / "execution_stdout.log"
+        log_path = self.config.replication_dir / "execution_stdout.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write session instructions to a prompt file so the provider
         # can be pointed at it the same way as the other phases.
-        prompt_path = self.config.output_dir / "prompts" / "replication_session_prompt.txt"
+        prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
         stdout = self._invoke_provider(
@@ -306,7 +305,7 @@ class ReplicationRunner:
         if stdout:
             log_path.write_text(stdout, encoding='utf-8')
 
-        evidence = gather_evidence(self.config.output_dir / "replication")
+        evidence = gather_evidence(self.config.replication_dir)
 
         if evidence:
             print(f"  Replication completed: {evidence.steps_succeeded}/{evidence.steps_attempted} steps succeeded")
@@ -338,10 +337,10 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
         )
 
-        prompt_path = self.config.output_dir / "prompts" / "fix_severity_prompt.txt"
+        prompt_path = self.config.prompts_dir / "fix_severity_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_path = self.config.output_dir / "evaluate" / "fix_severity.json"
+        output_path = self.config.fix_severity_path
         stdout = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.output_dir,
@@ -360,7 +359,6 @@ class ReplicationRunner:
             return FixSeverityAssessment.empty()
 
         try:
-            from veritas.core.replication import _extract_json
             raw = _extract_json(response_text)
             data = json.loads(raw)
             assessment = FixSeverityAssessment.from_dict(data)
@@ -427,10 +425,10 @@ class ReplicationRunner:
                 fix_assessment=fix_assessment,
             )
 
-            prompt_path = self.config.output_dir / "prompts" / f"{eval_name}_prompt.txt"
+            prompt_path = self.config.prompts_dir / f"{eval_name}_prompt.txt"
             prompt_path.write_text(prompt, encoding='utf-8')
 
-            output_json_path = self.config.output_dir / "evaluate" / f"{eval_name}_evaluation.json"
+            output_json_path = self.config.evaluation_path(eval_name)
 
             stdout = self._invoke_provider(
                 prompt=prompt,
@@ -508,7 +506,7 @@ class ReplicationRunner:
 
     def _invoke_claude(self, prompt, working_dir, output_path, timeout):
         try:
-            prompt_file = self.config.output_dir / "prompts" / f"current_prompt_{output_path.stem}.txt"
+            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             claude = self._resolve_cli("claude")
             cmd = [claude, "-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"]
@@ -548,7 +546,7 @@ class ReplicationRunner:
 
     def _invoke_gemini(self, prompt, working_dir, output_path, timeout):
         try:
-            prompt_file = self.config.output_dir / "prompts" / f"current_prompt_{output_path.stem}.txt"
+            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             gemini = self._resolve_cli("gemini")
             cmd = [gemini, "-p", prompt, "--yolo", "--skip-trust"]

@@ -6,7 +6,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config
+from veritas.core.config import (
+    Config,
+    ALL_EVALUATIONS,
+    EVALUATE_SUBDIR,
+    EVALUATION_FILE_SUFFIX,
+    REPORT_SUBDIR,
+    REPORT_MD_FILE,
+    REPORT_PDF_FILE,
+)
 
 
 class ReportGenerator:
@@ -44,7 +52,7 @@ class ReportGenerator:
         md_content = self._generate_markdown_report(results)
 
         if output_path is None:
-            output_path = evaluation_dir / "report" / "replication_report.md"
+            output_path = evaluation_dir / REPORT_SUBDIR / REPORT_MD_FILE
         else:
             output_path = Path(output_path)
 
@@ -98,14 +106,15 @@ class ReportGenerator:
 
         md_content = self._generate_markdown_report(results_dict, evidence=evidence, fix_assessment=fix_assessment)
 
-        md_path = output_dir / "report" / "replication_report.md"
+        report_dir = output_dir / REPORT_SUBDIR
+        md_path = report_dir / REPORT_MD_FILE
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md_content, encoding='utf-8')
 
         pdf_path = None
         if generate_pdf:
-            pdf_path = output_dir / "report" / "replication_report.pdf"
-            self._generate_pdf(md_content, pdf_path, output_dir / "report")
+            pdf_path = report_dir / REPORT_PDF_FILE
+            self._generate_pdf(md_content, pdf_path, report_dir)
 
         return md_path, pdf_path
 
@@ -113,16 +122,8 @@ class ReportGenerator:
         """Collect all evaluation JSON results in the new items+pass_rate format."""
         results = {}
 
-        eval_files = {
-            "code": "evaluate/code_evaluation.json",
-            "consistency": "evaluate/consistency_evaluation.json",
-            "generalization": "evaluate/generalization_evaluation.json",
-            "replication": "evaluate/replication_evaluation.json",
-            "instruction_following": "evaluate/instruction_following_evaluation.json",
-        }
-
-        for eval_name, filename in eval_files.items():
-            filepath = evaluation_dir / filename
+        for eval_name in ALL_EVALUATIONS:
+            filepath = evaluation_dir / EVALUATE_SUBDIR / f"{eval_name}{EVALUATION_FILE_SUFFIX}"
             if filepath.exists():
                 try:
                     with open(filepath, encoding='utf-8') as f:
