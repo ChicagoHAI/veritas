@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
-from veritas.core.evidence import _extract_json
+from veritas.core.replication import _extract_json
 
 
 @dataclass

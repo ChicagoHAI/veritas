@@ -1,7 +1,9 @@
-"""Data models for replication plan and execution evidence."""
+"""Replication plan, execution evidence, and parsers for both."""
 
 import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 
@@ -79,68 +81,6 @@ class AppliedFix:
             original_error=data.get("original_error", ""),
             diff_snippet=data.get("diff_snippet", ""),
         )
-
-
-@dataclass
-class FixSeverityRating:
-    """Severity assessment for a single applied fix."""
-    fix_description: str
-    severity: str
-    rationale: str
-    reproducibility_impact: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "fix_description": self.fix_description,
-            "severity": self.severity,
-            "rationale": self.rationale,
-            "reproducibility_impact": self.reproducibility_impact,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FixSeverityRating":
-        return cls(
-            fix_description=data.get("fix_description", ""),
-            severity=data.get("severity", "unknown"),
-            rationale=data.get("rationale", ""),
-            reproducibility_impact=data.get("reproducibility_impact", ""),
-        )
-
-
-@dataclass
-class FixSeverityAssessment:
-    """Overall assessment of all fixes applied during replication."""
-    fixes: List[FixSeverityRating] = field(default_factory=list)
-    summary: str = ""
-    total_fixes: int = 0
-    minor_count: int = 0
-    major_count: int = 0
-    critical_count: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "fixes": [f.to_dict() for f in self.fixes],
-            "summary": self.summary,
-            "total_fixes": self.total_fixes,
-            "minor_count": self.minor_count,
-            "major_count": self.major_count,
-            "critical_count": self.critical_count,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FixSeverityAssessment":
-        return cls(
-            fixes=[FixSeverityRating.from_dict(f) for f in data.get("fixes", [])],
-            summary=data.get("summary", ""),
-            total_fixes=data.get("total_fixes", 0),
-            minor_count=data.get("minor_count", 0),
-            major_count=data.get("major_count", 0),
-            critical_count=data.get("critical_count", 0),
-        )
-
-    @classmethod
-    def empty(cls) -> "FixSeverityAssessment":
-        return cls()
 
 
 @dataclass
@@ -246,3 +186,128 @@ class ExecutionEvidence:
             environment=data.get("environment", {}),
             step_outcomes=[StepOutcome.from_dict(s) for s in data.get("step_outcomes", [])],
         )
+
+
+_VALID_JSON_ESCAPES = frozenset('"\\/bfnrtu')
+
+
+def _fix_json_escapes(text: str) -> str:
+    r"""Fix invalid JSON escape sequences commonly produced by LLMs.
+
+    JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
+    LLMs often write \' (from Python) which becomes a bare apostrophe,
+    or \s, \d, \( etc. (from embedded regex) which get double-escaped
+    to preserve the intended literal backslash.
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt in _VALID_JSON_ESCAPES:
+                out.append(ch)
+                out.append(nxt)
+                i += 2
+            elif nxt == "'":
+                # \' is invalid JSON; drop the backslash
+                out.append("'")
+                i += 2
+            else:
+                # \s, \d, \(, etc. — double the backslash
+                out.append("\\\\")
+                out.append(nxt)
+                i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON from LLM output that may contain surrounding text.
+
+    Tries each extraction strategy with raw text first, then with
+    escape-fixed text. Strategies:
+    1. Raw text as JSON
+    2. JSON inside markdown code fences
+    3. Outermost { ... } braces (handles explanation text around JSON)
+    """
+    for candidate_text in [text.strip(), _fix_json_escapes(text.strip())]:
+        # 1. Raw JSON
+        try:
+            json.loads(candidate_text)
+            return candidate_text
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Markdown code block
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", candidate_text, re.DOTALL)
+        if match:
+            candidate = match.group(1).strip()
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Find outermost { ... } braces
+        first = candidate_text.find("{")
+        last = candidate_text.rfind("}")
+        if first != -1 and last > first:
+            candidate = candidate_text[first:last + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+    raise ValueError("Could not parse JSON from response")
+
+
+def parse_replication_plan_response(response: str) -> ReplicationPlan:
+    """Parse a replication plan from LLM response text.
+
+    Handles raw JSON, markdown code blocks, and JSON embedded in
+    surrounding explanation text.
+    """
+    raw = _extract_json(response)
+    data = json.loads(raw)
+    return ReplicationPlan.from_dict(data)
+
+
+def gather_evidence(replication_dir: Path) -> Optional[ExecutionEvidence]:
+    """Gather execution evidence from a replication output directory.
+
+    Expects:
+      - replication_dir/replication_log.json (required)
+      - replication_dir/evidence_summary.json (optional, for environment info)
+    """
+    if not replication_dir.exists():
+        return None
+
+    log_path = replication_dir / "replication_log.json"
+    if not log_path.exists():
+        return None
+
+    try:
+        log_data = json.loads(log_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    # Read optional summary for environment info
+    summary_path = replication_dir / "evidence_summary.json"
+    environment = {}
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            environment = summary.get("environment", {})
+        except (json.JSONDecodeError, ValueError):
+            pass  # proceed with empty environment
+
+    step_outcomes = [StepOutcome.from_dict(s) for s in log_data.get("step_outcomes", [])]
+
+    return ExecutionEvidence(
+        environment=environment,
+        step_outcomes=step_outcomes,
+    )

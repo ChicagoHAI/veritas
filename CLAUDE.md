@@ -68,8 +68,8 @@ Output is organized into phase subdirectories: `analyze/`, `replication/` (inclu
 - `runner.py` — orchestrator; provider invocation (`_invoke_claude/codex/gemini`); JSON repair re-prompt logic
 - `config.py` — `Config` dataclass; `VALID_PROVIDERS` and `ALL_EVALUATIONS` constants
 - `checklist.py` — `ChecklistItem` / `Checklist` data models and parsing
-- `models.py` — `ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`, `FixSeverityAssessment`
-- `evidence.py` — parses execution evidence; `_extract_json` / `_fix_json_escapes` repair logic
+- `replication.py` — `ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`; plan parsing, evidence gathering, and `_extract_json` / `_fix_json_escapes` repair logic
+- `fix_severity.py` — `FixSeverityRating` and `FixSeverityAssessment` dataclasses
 - `plan_extractor.py` — PDF → plan extraction
 - `report_generator.py` — markdown + PDF report generation (pandoc-based)
 

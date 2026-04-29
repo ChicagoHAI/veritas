@@ -9,7 +9,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from veritas.core.checklist import ChecklistItem
 
 if TYPE_CHECKING:
-    from veritas.core.models import ExecutionEvidence, ReplicationPlan
+    from veritas.core.replication import ExecutionEvidence, ReplicationPlan
 
 
 CATEGORY_DISPLAY_NAMES = {

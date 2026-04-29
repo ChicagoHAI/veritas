@@ -9,8 +9,13 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config
 from veritas.core.checklist import Checklist, parse_checklist_response
-from veritas.core.models import ReplicationPlan, ExecutionEvidence, FixSeverityAssessment
-from veritas.core.evidence import parse_replication_plan_response, gather_evidence
+from veritas.core.replication import (
+    ReplicationPlan,
+    ExecutionEvidence,
+    parse_replication_plan_response,
+    gather_evidence,
+)
+from veritas.core.fix_severity import FixSeverityAssessment
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
@@ -353,7 +358,7 @@ class ReplicationRunner:
             return FixSeverityAssessment.empty()
 
         try:
-            from veritas.core.evidence import _extract_json
+            from veritas.core.replication import _extract_json
             raw = _extract_json(response_text)
             data = json.loads(raw)
             assessment = FixSeverityAssessment.from_dict(data)
