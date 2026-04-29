@@ -104,6 +104,9 @@ ENV VERITAS_WORKSPACE=/workspace
 ENV UV_PYTHON_INSTALL_DIR=/python UV_PYTHON_PREFERENCE=only-managed
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
+# Bypass Gemini CLI's trusted-folders check for headless container runs.
+ENV GEMINI_CLI_TRUST_WORKSPACE=true
+
 # Entrypoint (before USER switch so we can write to /usr/local/bin)
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
@@ -128,8 +131,10 @@ RUN git config --global user.email "noreply@veritas.dev" \
     && git config --global user.name "Veritas" \
     && git config --global init.defaultBranch main
 
-# CLI credential directories
-RUN mkdir -p ~/.claude ~/.codex ~/.gemini ~/.cache/uv
+# CLI credential directories.
+# .codex-host is the RO mount target for the host's ~/.codex; .codex-container
+# is the runtime CODEX_HOME the entrypoint copies into.
+RUN mkdir -p ~/.claude ~/.codex ~/.codex-container ~/.codex-host ~/.gemini ~/.cache/uv
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]
