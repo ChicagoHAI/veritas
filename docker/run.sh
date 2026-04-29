@@ -164,7 +164,13 @@ get_cli_credential_mounts() {
 
     for dir in .claude .codex .gemini; do
         if [ -d "$HOME/$dir" ]; then
-            mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
+            # Codex mounts RO at .codex-host; entrypoint redirects CODEX_HOME
+            # to a container-private copy. cmd_login keeps the RW path.
+            if [ "$dir" = ".codex" ]; then
+                mounts="$mounts -v \"$HOME/.codex:/home/veritas/.codex-host:ro\""
+            else
+                mounts="$mounts -v \"$HOME/$dir:/home/veritas/$dir\""
+            fi
             if [ "$(ls -A "$HOME/$dir" 2>/dev/null)" ]; then
                 echo -e "  ${GREEN}[OK]${NC} Mounting $dir credentials" >&2
             else
@@ -446,9 +452,11 @@ cmd_login() {
     local platform_flag=$(get_platform_flags)
     local gpu_flags=$(get_gpu_flags)
 
+    # VERITAS_LOGIN_ONLY=1 keeps the RW path on ~/.codex so OAuth tokens persist.
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
+        -e VERITAS_LOGIN_ONLY=1 \
         -v \"$HOME/.claude:/home/veritas/.claude\" \
         -v \"$HOME/.codex:/home/veritas/.codex\" \
         -v \"$HOME/.gemini:/home/veritas/.gemini\" \
