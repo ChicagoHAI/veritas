@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -22,6 +23,28 @@ from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory
+
+# Provider invocation tables. Each provider has a CLI command (cli name plus
+# any required positional subcommand or print flag), a transcript-output flag
+# set (so the JSONL stream lands on stdout for capture), and a permission
+# flag set (so non-interactive runs don't block on confirmation prompts).
+CLI_COMMANDS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("claude", "-p"),
+    "codex":  ("codex", "exec"),
+    "gemini": ("gemini",),
+}
+
+TRANSCRIPT_FLAGS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("--verbose", "--output-format", "stream-json"),
+    "codex":  ("--json",),
+    "gemini": ("--output-format", "stream-json"),
+}
+
+PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("--dangerously-skip-permissions",),
+    "codex":  ("--full-auto",),
+    "gemini": ("--yolo", "--skip-trust"),
+}
 
 
 @dataclass
@@ -196,21 +219,30 @@ class ReplicationRunner:
         prompt_path.write_text(prompt, encoding='utf-8')
 
         output_json_path = self.config.checklist_path
-        stdout = self._invoke_provider(
+        log_path = self.config.checklist_transcript_path
+
+        ok = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
-            output_path=output_json_path,
+            log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
-        response_text = None
-        if output_json_path.exists():
-            response_text = output_json_path.read_text(encoding='utf-8').strip()
-        if not response_text and stdout:
-            response_text = stdout
+        if not ok:
+            raise RuntimeError(
+                f"Checklist generation failed: provider invocation did not succeed (transcript: {log_path})"
+            )
 
+        if not output_json_path.exists():
+            raise RuntimeError(
+                f"Checklist generation failed: agent did not write {output_json_path}"
+            )
+
+        response_text = output_json_path.read_text(encoding='utf-8').strip()
         if not response_text:
-            raise RuntimeError("Checklist generation failed: no output to parse")
+            raise RuntimeError(
+                f"Checklist generation failed: {output_json_path} is empty"
+            )
 
         try:
             checklist = parse_checklist_response(response_text)
@@ -221,12 +253,15 @@ class ReplicationRunner:
                 original_prompt=prompt,
                 broken_output=response_text,
                 output_path=output_json_path,
+                log_path=log_path,
                 parser=parse_checklist_response,
                 timeout=self.config.analyze_timeout,
             )
 
         if checklist is None:
-            raise RuntimeError("Checklist generation failed: could not parse response even after repair")
+            raise RuntimeError(
+                "Checklist generation failed: could not parse response even after repair"
+            )
 
         output_json_path.write_text(
             json.dumps(checklist.to_dict(), indent=2), encoding='utf-8'
@@ -251,21 +286,26 @@ class ReplicationRunner:
         prompt_path.write_text(prompt, encoding='utf-8')
 
         output_path = self.config.replication_plan_path
-        stdout = self._invoke_provider(
+        log_path = self.config.replication_plan_transcript_path
+
+        ok = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
-            output_path=output_path,
+            log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
-        response_text = None
-        if output_path.exists():
-            response_text = output_path.read_text(encoding='utf-8').strip()
-        if not response_text and stdout:
-            response_text = stdout
+        if not ok:
+            print(f"  Warning: Provider invocation did not succeed (transcript: {log_path}), skipping replication phase")
+            return None
 
+        if not output_path.exists():
+            print(f"  Warning: Agent did not write {output_path}, skipping replication phase")
+            return None
+
+        response_text = output_path.read_text(encoding='utf-8').strip()
         if not response_text:
-            print("  Warning: No replication plan output, skipping replication phase")
+            print(f"  Warning: {output_path} is empty, skipping replication phase")
             return None
 
         try:
@@ -277,6 +317,7 @@ class ReplicationRunner:
                 original_prompt=prompt,
                 broken_output=response_text,
                 output_path=output_path,
+                log_path=log_path,
                 parser=parse_replication_plan_response,
                 timeout=self.config.analyze_timeout,
             )
@@ -290,11 +331,21 @@ class ReplicationRunner:
         print(f"  Generated replication plan with {len(plan.steps)} steps")
         return plan
 
-    def _repair_json_response(self, original_prompt, broken_output, output_path, parser, timeout):
+    def _repair_json_response(
+        self,
+        original_prompt: str,
+        broken_output: str,
+        output_path: Path,
+        log_path: Path,
+        parser,
+        timeout: Optional[int],
+    ):
         """Re-prompt the provider to fix invalid JSON output.
 
-        Follows MechEvalAgent's pattern: append the broken output and ask
-        the provider to return valid JSON only.
+        Appends the broken output to the original prompt and asks the
+        provider to return valid JSON only. The transcript of this
+        re-invocation is appended to ``log_path`` so the original failed
+        attempt and the repair attempt share one file.
         """
         repair_prompt = (
             original_prompt
@@ -309,21 +360,25 @@ class ReplicationRunner:
             + "\n- If a command_hint contains Python code with double quotes, escape them"
         )
 
-        stdout = self._invoke_provider(
+        ok = self._invoke_provider(
             prompt=repair_prompt,
             working_dir=self.config.repo_path,
-            output_path=output_path,
+            log_path=log_path,
             timeout=timeout,
+            append=True,
         )
 
-        response_text = None
-        if output_path.exists():
-            response_text = output_path.read_text(encoding='utf-8').strip()
-        if not response_text and stdout:
-            response_text = stdout
+        if not ok:
+            print("  Warning: Repair invocation did not succeed")
+            return None
 
+        if not output_path.exists():
+            print(f"  Warning: Repair did not produce {output_path}")
+            return None
+
+        response_text = output_path.read_text(encoding='utf-8').strip()
         if not response_text:
-            print("  Warning: Repair prompt returned no output")
+            print(f"  Warning: Repair produced empty {output_path}")
             return None
 
         try:
@@ -354,23 +409,21 @@ class ReplicationRunner:
             paper_path=self.config.paper_path,
         )
 
-        log_path = self.config.replication_dir / "execution_stdout.log"
+        log_path = self.config.replication_transcript_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write session instructions to a prompt file so the provider
-        # can be pointed at it the same way as the other phases.
         prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
-        stdout = self._invoke_provider(
+        ok = self._invoke_provider(
             prompt=session_instructions,
             working_dir=self.config.repo_path,
-            output_path=log_path,
+            log_path=log_path,
             timeout=self.config.replicate_timeout,
         )
 
-        if stdout:
-            log_path.write_text(stdout, encoding='utf-8')
+        if not ok:
+            print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
 
         evidence = gather_evidence(self.config.replication_dir)
 
@@ -408,21 +461,26 @@ class ReplicationRunner:
         prompt_path.write_text(prompt, encoding='utf-8')
 
         output_path = self.config.fix_severity_path
-        stdout = self._invoke_provider(
+        log_path = self.config.fix_severity_transcript_path
+
+        ok = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.output_dir,
-            output_path=output_path,
+            log_path=log_path,
             timeout=self.config.evaluate_timeout,
         )
 
-        response_text = None
-        if output_path.exists():
-            response_text = output_path.read_text(encoding='utf-8').strip()
-        if not response_text and stdout:
-            response_text = stdout
+        if not ok:
+            print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
+            return FixSeverityAssessment.empty()
 
+        if not output_path.exists():
+            print(f"  Warning: Agent did not write {output_path}")
+            return FixSeverityAssessment.empty()
+
+        response_text = output_path.read_text(encoding='utf-8').strip()
         if not response_text:
-            print("  Warning: Fix severity assessment returned no output")
+            print(f"  Warning: {output_path} is empty")
             return FixSeverityAssessment.empty()
 
         try:
@@ -464,35 +522,37 @@ class ReplicationRunner:
             prompt_path.write_text(prompt, encoding='utf-8')
 
             output_json_path = self.config.evaluation_path(eval_name)
+            log_path = self.config.evaluation_transcript_path(eval_name)
 
-            stdout = self._invoke_provider(
+            ok = self._invoke_provider(
                 prompt=prompt,
                 working_dir=self.config.repo_path,
-                output_path=output_json_path,
+                log_path=log_path,
                 timeout=self.config.evaluate_timeout,
             )
 
-            if output_json_path.exists():
-                with open(output_json_path, encoding='utf-8') as f:
-                    data = json.load(f)
-
-                return EvaluationResult(
-                    name=eval_name,
-                    success=True,
-                    items=data.get("items", []),
-                    pass_rate=data.get("pass_rate"),
-                    output_path=output_json_path,
-                )
-            elif stdout is None:
+            if not ok:
                 return EvaluationResult(
                     name=eval_name, success=False,
                     error="Provider invocation failed",
                 )
-            else:
+
+            if not output_json_path.exists():
                 return EvaluationResult(
                     name=eval_name, success=False,
                     error=f"Output file not produced: {output_json_path.name}",
                 )
+
+            with open(output_json_path, encoding='utf-8') as f:
+                data = json.load(f)
+
+            return EvaluationResult(
+                name=eval_name,
+                success=True,
+                items=data.get("items", []),
+                pass_rate=data.get("pass_rate"),
+                output_path=output_json_path,
+            )
 
         except Exception as e:
             return EvaluationResult(name=eval_name, success=False, error=str(e))
@@ -610,19 +670,101 @@ class ReplicationRunner:
     # -- Provider Invocation -----------------------------------------------
 
     def _invoke_provider(
-        self, prompt: str, working_dir: Path, output_path: Path, timeout: Optional[int],
-    ) -> Optional[str]:
-        """Invoke the AI provider to run the evaluation."""
-        provider = self.config.provider.lower()
+        self,
+        prompt: str,
+        working_dir: Path,
+        log_path: Path,
+        timeout: Optional[int],
+        append: bool = False,
+    ) -> bool:
+        """Run the configured provider as a subprocess; stream its JSONL
+        transcript to ``log_path``; return True on success.
 
-        if provider == "claude":
-            return self._invoke_claude(prompt, working_dir, output_path, timeout)
-        elif provider == "codex":
-            return self._invoke_codex(prompt, working_dir, output_path, timeout)
-        elif provider == "gemini":
-            return self._invoke_gemini(prompt, working_dir, output_path, timeout)
-        else:
+        The agent is expected to write its actual results (checklist JSON,
+        replication plan JSON, etc.) to known disk paths during the run.
+        ``log_path`` only captures the conversation transcript — it is
+        never the source of the agent's answer.
+
+        Wall-clock timeout enforcement uses a daemon ``threading.Timer``
+        that calls ``process.kill()`` after ``timeout`` seconds. A plain
+        ``process.wait(timeout=...)`` after a streaming loop does not
+        enforce a wall-clock limit, since the loop blocks until the
+        subprocess closes stdout (which happens when it exits anyway).
+
+        With ``append=True`` the transcript file is opened in append mode,
+        which is used by the repair-re-invocation path so the original
+        failed attempt and the repair attempt land in one transcript file.
+        """
+        provider = self.config.provider.lower()
+        if provider not in CLI_COMMANDS:
             raise ValueError(f"Unknown provider: {provider}")
+
+        try:
+            cli = self._resolve_cli(CLI_COMMANDS[provider][0])
+        except FileNotFoundError as e:
+            print(f"  {e}")
+            return False
+
+        cmd: List[str] = [
+            cli,
+            *CLI_COMMANDS[provider][1:],
+            *TRANSCRIPT_FLAGS[provider],
+            *PERMISSION_FLAGS[provider],
+        ]
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        open_mode = "a" if append else "w"
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=working_dir,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+            )
+        except FileNotFoundError as e:
+            print(f"  {e}")
+            return False
+        except Exception as e:
+            print(f"  Error invoking {provider}: {e}")
+            return False
+
+        process.stdin.write(prompt)
+        process.stdin.close()
+
+        timed_out = False
+        watchdog: Optional[threading.Timer] = None
+        if timeout is not None and timeout > 0:
+            def _kill_on_timeout() -> None:
+                nonlocal timed_out
+                timed_out = True
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+            watchdog = threading.Timer(timeout, _kill_on_timeout)
+            watchdog.daemon = True
+            watchdog.start()
+
+        try:
+            with open(log_path, open_mode, encoding="utf-8") as log_f:
+                for line in iter(process.stdout.readline, ""):
+                    print(line, end="")
+                    log_f.write(line)
+            return_code = process.wait()
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+
+        if timed_out:
+            print(f"  Timeout after {timeout}s")
+            return False
+        return return_code == 0
 
     @staticmethod
     def _resolve_cli(name: str) -> str:
@@ -635,64 +777,3 @@ class ReplicationRunner:
         if resolved is None:
             raise FileNotFoundError(f"{name} CLI not found on PATH")
         return resolved
-
-    def _invoke_claude(self, prompt, working_dir, output_path, timeout):
-        try:
-            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
-            prompt_file.write_text(prompt, encoding='utf-8')
-            claude = self._resolve_cli("claude")
-            cmd = [claude, "-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"]
-            result = subprocess.run(
-                cmd, cwd=working_dir, timeout=timeout,
-                capture_output=True, encoding='utf-8',
-            )
-            return result.stdout if result.returncode == 0 else None
-        except subprocess.TimeoutExpired:
-            print(f"  Timeout after {timeout}s")
-            return None
-        except FileNotFoundError as e:
-            print(f"  {e}")
-            return None
-        except Exception as e:
-            print(f"  Error invoking Claude: {e}")
-            return None
-
-    def _invoke_codex(self, prompt, working_dir, output_path, timeout):
-        try:
-            codex = self._resolve_cli("codex")
-            cmd = [codex, "exec", "--full-auto", "-"]
-            result = subprocess.run(
-                cmd, cwd=working_dir, input=prompt, timeout=timeout,
-                capture_output=True, encoding='utf-8',
-            )
-            return result.stdout if result.returncode == 0 else None
-        except subprocess.TimeoutExpired:
-            print(f"  Timeout after {timeout}s")
-            return None
-        except FileNotFoundError as e:
-            print(f"  {e}")
-            return None
-        except Exception as e:
-            print(f"  Error invoking Codex: {e}")
-            return None
-
-    def _invoke_gemini(self, prompt, working_dir, output_path, timeout):
-        try:
-            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
-            prompt_file.write_text(prompt, encoding='utf-8')
-            gemini = self._resolve_cli("gemini")
-            cmd = [gemini, "-p", prompt, "--yolo", "--skip-trust"]
-            result = subprocess.run(
-                cmd, cwd=working_dir, timeout=timeout,
-                capture_output=True, encoding='utf-8',
-            )
-            return result.stdout if result.returncode == 0 else None
-        except subprocess.TimeoutExpired:
-            print(f"  Timeout after {timeout}s")
-            return None
-        except FileNotFoundError as e:
-            print(f"  {e}")
-            return None
-        except Exception as e:
-            print(f"  Error invoking Gemini: {e}")
-            return None
