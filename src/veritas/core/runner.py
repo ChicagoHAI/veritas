@@ -534,13 +534,13 @@ class ReplicationRunner:
             if not ok:
                 return EvaluationResult(
                     name=eval_name, success=False,
-                    error="Provider invocation failed",
+                    error=f"Provider invocation failed (transcript: {log_path})",
                 )
 
             if not output_json_path.exists():
                 return EvaluationResult(
                     name=eval_name, success=False,
-                    error=f"Output file not produced: {output_json_path.name}",
+                    error=f"Output file not produced: {output_json_path}",
                 )
 
             with open(output_json_path, encoding='utf-8') as f:
@@ -760,11 +760,14 @@ class ReplicationRunner:
         finally:
             if watchdog is not None:
                 watchdog.cancel()
+                watchdog.join()
 
+        if return_code == 0:
+            return True
         if timed_out:
             print(f"  Timeout after {timeout}s")
             return False
-        return return_code == 0
+        return False
 
     @staticmethod
     def _resolve_cli(name: str) -> str:
