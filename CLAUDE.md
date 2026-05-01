@@ -59,7 +59,7 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 1. **Analyze** (`_analyze`) — generates checklist from paper+repo, then a scoped replication plan
 2. **Replicate** (`_replicate`) — runs the plan via an AI agent that actively fixes issues; collects execution evidence and fix records
 3. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical)
-4. **Evaluate** (`_evaluate`) — scores the checklist against code and evidence, with fix severity as context
+4. **Evaluate** (`_evaluate_with_resume`) — scores the checklist against code and evidence, with fix severity as context; supports per-category resume
 
 Output is organized into phase subdirectories: `analyze/`, `replication/` (includes `codebase/` with the patched repo and `codebase.diff`), `evaluate/`, `report/`, and `prompts/`.
 
@@ -69,6 +69,7 @@ Output is organized into phase subdirectories: `analyze/`, `replication/` (inclu
 - `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, `ALL_EVALUATIONS`, and output-structure constants (`*_SUBDIR`, `*_FILE`)
 - `checklist.py` — `parse_checklist_response()`
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` repair logic
+- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` so failed runs resume from the last completed phase
 - `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `checklist.py` (`Checklist`, `ChecklistItem`)
 - `plan_extractor.py` — PDF → plan extraction
 - `report_generator.py` — markdown + PDF report generation (pandoc-based)
