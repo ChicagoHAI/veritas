@@ -56,7 +56,7 @@ EVALUATION_FILE_SUFFIX = "_evaluation.json"
 # and the repair attempt land in one place.
 CHECKLIST_TRANSCRIPT_FILE = "checklist_transcript.jsonl"
 REPLICATION_PLAN_TRANSCRIPT_FILE = "replication_plan_transcript.jsonl"
-REPLICATION_TRANSCRIPT_FILE = "transcript.jsonl"
+REPLICATION_TRANSCRIPT_FILE = "replication_transcript.jsonl"
 FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"
 
@@ -181,7 +181,7 @@ class Config:
         """Path to the per-category evaluation JSON, e.g. ``code_evaluation.json``."""
         return self.evaluate_dir / f"{category}{EVALUATION_FILE_SUFFIX}"
 
-    # -- Transcript files (JSONL streamed from provider invocations) -------
+    # -- Transcript files (JSONL streamed from provider invocations) --------
 
     @property
     def checklist_transcript_path(self) -> Path:
