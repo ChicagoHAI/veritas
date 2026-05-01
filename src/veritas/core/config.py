@@ -50,6 +50,16 @@ REPORT_PDF_FILE = "replication_report.pdf"
 # ``templates/evaluation/scoring.txt``.
 EVALUATION_FILE_SUFFIX = "_evaluation.json"
 
+# Per-phase JSONL transcripts of the agent's streaming output. Each provider
+# invocation writes its event stream to one of these files; on a parse-repair
+# re-invocation, events are appended to the same file so the failed attempt
+# and the repair attempt land in one place.
+CHECKLIST_TRANSCRIPT_FILE = "checklist_transcript.jsonl"
+REPLICATION_PLAN_TRANSCRIPT_FILE = "replication_plan_transcript.jsonl"
+REPLICATION_TRANSCRIPT_FILE = "transcript.jsonl"
+FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
+EVALUATION_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"
+
 
 @dataclass
 class Config:
@@ -170,3 +180,25 @@ class Config:
     def evaluation_path(self, category: str) -> Path:
         """Path to the per-category evaluation JSON, e.g. ``code_evaluation.json``."""
         return self.evaluate_dir / f"{category}{EVALUATION_FILE_SUFFIX}"
+
+    # -- Transcript files (JSONL streamed from provider invocations) -------
+
+    @property
+    def checklist_transcript_path(self) -> Path:
+        return self.analyze_dir / CHECKLIST_TRANSCRIPT_FILE
+
+    @property
+    def replication_plan_transcript_path(self) -> Path:
+        return self.analyze_dir / REPLICATION_PLAN_TRANSCRIPT_FILE
+
+    @property
+    def replication_transcript_path(self) -> Path:
+        return self.replication_dir / REPLICATION_TRANSCRIPT_FILE
+
+    @property
+    def fix_severity_transcript_path(self) -> Path:
+        return self.evaluate_dir / FIX_SEVERITY_TRANSCRIPT_FILE
+
+    def evaluation_transcript_path(self, category: str) -> Path:
+        """Path to the per-category evaluation transcript, e.g. ``code_transcript.jsonl``."""
+        return self.evaluate_dir / f"{category}{EVALUATION_TRANSCRIPT_FILE_SUFFIX}"
