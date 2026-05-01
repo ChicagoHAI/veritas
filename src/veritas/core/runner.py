@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
+from veritas.core.pipeline_state import PipelineState
 from veritas.core.checklist import parse_checklist_response
 from veritas.core.models.checklist import Checklist
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
@@ -54,15 +55,83 @@ class ReplicationRunner:
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
-        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report."""
+        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report.
+
+        Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
+        are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
+        """
         try:
             self._setup_output_dir()
+            state = PipelineState(self.config.output_dir)
+
+            if state.state.get('inputs') is None:
+                state.record_inputs(self.config.repo_path, self.config.paper_path)
+            else:
+                state.validate_inputs(self.config.repo_path, self.config.paper_path)
+                self._announce_resume(state)
+
             plan_path = self._extract_plan()
-            checklist, replication_plan = self._analyze()
-            evidence = self._replicate(replication_plan)
-            fix_assessment = self._assess_fixes(evidence)
-            results = self._evaluate(checklist, evidence, plan_path, fix_assessment)
+
+            # analyze
+            if state.is_stage_completed('analyze'):
+                print("[OK] analyze: skipped (already completed)")
+                checklist, replication_plan = self._load_analyze_artifacts()
+            else:
+                state.start_stage('analyze')
+                try:
+                    checklist, replication_plan = self._analyze()
+                    state.complete_stage('analyze', success=True)
+                except Exception:
+                    state.complete_stage('analyze', success=False)
+                    raise
+
+            # replicate
+            if state.is_stage_completed('replicate'):
+                print("[OK] replicate: skipped (already completed)")
+                evidence = gather_evidence(self.config.replication_dir)
+            else:
+                state.start_stage('replicate')
+                try:
+                    evidence = self._replicate(replication_plan)
+                    state.complete_stage('replicate', success=True)
+                except Exception:
+                    state.complete_stage('replicate', success=False)
+                    raise
+
+            # assess_fixes
+            if state.is_stage_completed('assess_fixes'):
+                print("[OK] assess_fixes: skipped (already completed)")
+                fix_assessment = self._load_fix_assessment()
+            else:
+                state.start_stage('assess_fixes')
+                try:
+                    fix_assessment = self._assess_fixes(evidence)
+                    state.complete_stage('assess_fixes', success=True)
+                except Exception:
+                    state.complete_stage('assess_fixes', success=False)
+                    raise
+
+            # evaluate
+            if state.is_stage_completed('evaluate'):
+                print("[OK] evaluate: skipped (already completed)")
+                results = self._load_evaluate_artifacts()
+            else:
+                already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
+                # don't reset outputs.completed_categories if we're resuming a half-done evaluate
+                if state.get_stage_status('evaluate') != 'in_progress':
+                    state.start_stage('evaluate')
+                try:
+                    results = self._evaluate_with_resume(
+                        checklist, evidence, plan_path, fix_assessment,
+                        state, already_done=already_done,
+                    )
+                    state.complete_stage('evaluate', success=True)
+                except Exception:
+                    state.complete_stage('evaluate', success=False)
+                    raise
+
             report_path, pdf_path = self._report(results, evidence, fix_assessment)
+            state.mark_completed()
 
             return RunResult(
                 success=True,
@@ -75,8 +144,6 @@ class ReplicationRunner:
             return RunResult(success=False, error=str(e))
 
         finally:
-            # Sanitize the full output tree after all phases (analyze + replicate + evaluate)
-            # so files written by any phase are scrubbed — even if a phase crashed.
             try:
                 sanitize_logs_directory(self.config.output_dir)
             except Exception:
@@ -373,38 +440,6 @@ class ReplicationRunner:
 
     # -- Phase 3: Evaluate -------------------------------------------------
 
-    def _evaluate(
-        self,
-        checklist: Checklist,
-        evidence: Optional[ExecutionEvidence],
-        plan_path: Optional[Path],
-        fix_assessment: Optional[FixSeverityAssessment] = None,
-    ) -> List[EvaluationResult]:
-        """Score checklist items using evidence and fix context."""
-        results = []
-
-        for eval_name in self.config.evaluations:
-            print(f"Running {eval_name} evaluation...")
-
-            items = checklist.get_items_by_category(eval_name)
-            if not items:
-                print(f"  Skipping {eval_name} — no checklist items generated for this category")
-                results.append(EvaluationResult(
-                    name=eval_name, success=True, items=[], pass_rate=None,
-                ))
-                continue
-
-            result = self._run_single_evaluation(eval_name, items, plan_path, evidence, fix_assessment)
-            results.append(result)
-
-            if result.success:
-                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
-                print(f"  {eval_name} completed — {pct}")
-            else:
-                print(f"  {eval_name} failed: {result.error}")
-
-        return results
-
     def _run_single_evaluation(
         self,
         eval_name: str,
@@ -474,6 +509,103 @@ class ReplicationRunner:
             evidence=evidence,
             fix_assessment=fix_assessment,
         )
+
+    # -- Resume helpers ----------------------------------------------------
+
+    def _announce_resume(self, state: PipelineState) -> None:
+        """Print the resume banner. Called when state file already had stages."""
+        created = state.state.get('created_at', 'unknown time')
+        print(f"WARNING: Found existing pipeline state from {created}. Resuming.")
+        print("   Pass --restart to start fresh.")
+
+    def _load_analyze_artifacts(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
+        """Load checklist and replication plan from disk for a skipped analyze phase."""
+        with open(self.config.checklist_path, encoding='utf-8') as f:
+            checklist = Checklist.from_dict(json.load(f))
+
+        replication_plan: Optional[ReplicationPlan] = None
+        if self.config.replication_plan_path.exists():
+            with open(self.config.replication_plan_path, encoding='utf-8') as f:
+                replication_plan = ReplicationPlan.from_dict(json.load(f))
+        return checklist, replication_plan
+
+    def _load_fix_assessment(self) -> FixSeverityAssessment:
+        """Load fix severity assessment from disk (or empty if no fixes were applied)."""
+        if not self.config.fix_severity_path.exists():
+            return FixSeverityAssessment.empty()
+        with open(self.config.fix_severity_path, encoding='utf-8') as f:
+            return FixSeverityAssessment.from_dict(json.load(f))
+
+    def _load_evaluation_result(self, eval_name: str) -> EvaluationResult:
+        """Read a single per-category evaluation JSON and build an EvaluationResult."""
+        output_path = self.config.evaluation_path(eval_name)
+        if not output_path.exists():
+            return EvaluationResult(
+                name=eval_name, success=False,
+                error=f"Output file missing on resume: {output_path.name}",
+            )
+        with open(output_path, encoding='utf-8') as f:
+            data = json.load(f)
+        return EvaluationResult(
+            name=eval_name,
+            success=True,
+            items=data.get("items", []),
+            pass_rate=data.get("pass_rate"),
+            output_path=output_path,
+        )
+
+    def _load_evaluate_artifacts(self) -> List[EvaluationResult]:
+        """Load per-category evaluation results from disk for a skipped evaluate phase."""
+        return [self._load_evaluation_result(name) for name in self.config.evaluations]
+
+    def _evaluate_with_resume(
+        self,
+        checklist: Checklist,
+        evidence: Optional[ExecutionEvidence],
+        plan_path: Optional[Path],
+        fix_assessment: Optional[FixSeverityAssessment],
+        state: PipelineState,
+        already_done: List[str],
+    ) -> List[EvaluationResult]:
+        """Score checklist items per category, skipping those already completed in a previous run.
+
+        Records each newly-completed category in the state's ``outputs.completed_categories``
+        list as it goes, so an interruption mid-loop can be resumed at the right point.
+        """
+        results: List[EvaluationResult] = []
+        completed = list(already_done)
+
+        for eval_name in self.config.evaluations:
+            if eval_name in already_done:
+                print(f"  Skipping {eval_name} (already complete from previous run)")
+                results.append(self._load_evaluation_result(eval_name))
+                continue
+
+            print(f"Running {eval_name} evaluation...")
+            items = checklist.get_items_by_category(eval_name)
+            if not items:
+                print(f"  Skipping {eval_name} - no checklist items generated for this category")
+                results.append(EvaluationResult(
+                    name=eval_name, success=True, items=[], pass_rate=None,
+                ))
+                completed.append(eval_name)
+                state.update_stage_outputs('evaluate', {'completed_categories': completed})
+                continue
+
+            result = self._run_single_evaluation(
+                eval_name, items, plan_path, evidence, fix_assessment,
+            )
+            results.append(result)
+
+            if result.success:
+                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
+                print(f"  {eval_name} completed - {pct}")
+                completed.append(eval_name)
+                state.update_stage_outputs('evaluate', {'completed_categories': completed})
+            else:
+                print(f"  {eval_name} failed: {result.error}")
+
+        return results
 
     # -- Provider Invocation -----------------------------------------------
 
