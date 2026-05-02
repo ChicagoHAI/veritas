@@ -221,14 +221,14 @@ class ReplicationRunner:
         output_json_path = self.config.checklist_path
         log_path = self.config.checklist_transcript_path
 
-        ok = self._invoke_provider(
+        success = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
-        if not ok:
+        if not success:
             raise RuntimeError(
                 f"Checklist generation failed: provider invocation did not succeed (transcript: {log_path})"
             )
@@ -288,14 +288,14 @@ class ReplicationRunner:
         output_path = self.config.replication_plan_path
         log_path = self.config.replication_plan_transcript_path
 
-        ok = self._invoke_provider(
+        success = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
-        if not ok:
+        if not success:
             print(f"  Warning: Provider invocation did not succeed (transcript: {log_path}), skipping replication phase")
             return None
 
@@ -360,7 +360,7 @@ class ReplicationRunner:
             + "\n- If a command_hint contains Python code with double quotes, escape them"
         )
 
-        ok = self._invoke_provider(
+        success = self._invoke_provider(
             prompt=repair_prompt,
             working_dir=self.config.repo_path,
             log_path=log_path,
@@ -368,7 +368,7 @@ class ReplicationRunner:
             append=True,
         )
 
-        if not ok:
+        if not success:
             print("  Warning: Repair invocation did not succeed")
             return None
 
@@ -415,14 +415,14 @@ class ReplicationRunner:
         prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
-        ok = self._invoke_provider(
+        success = self._invoke_provider(
             prompt=session_instructions,
             working_dir=self.config.repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
         )
 
-        if not ok:
+        if not success:
             print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
 
         evidence = gather_evidence(self.config.replication_dir)
@@ -463,14 +463,14 @@ class ReplicationRunner:
         output_path = self.config.fix_severity_path
         log_path = self.config.fix_severity_transcript_path
 
-        ok = self._invoke_provider(
+        success = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.output_dir,
             log_path=log_path,
             timeout=self.config.evaluate_timeout,
         )
 
-        if not ok:
+        if not success:
             print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
             return FixSeverityAssessment.empty()
 
@@ -524,14 +524,14 @@ class ReplicationRunner:
             output_json_path = self.config.evaluation_path(eval_name)
             log_path = self.config.evaluation_transcript_path(eval_name)
 
-            ok = self._invoke_provider(
+            success = self._invoke_provider(
                 prompt=prompt,
                 working_dir=self.config.repo_path,
                 log_path=log_path,
                 timeout=self.config.evaluate_timeout,
             )
 
-            if not ok:
+            if not success:
                 return EvaluationResult(
                     name=eval_name, success=False,
                     error=f"Provider invocation failed (transcript: {log_path})",
