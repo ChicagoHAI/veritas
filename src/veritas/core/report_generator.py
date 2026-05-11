@@ -6,7 +6,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config
+from veritas.core.config import (
+    Config,
+    ALL_EVALUATIONS,
+    EVALUATE_SUBDIR,
+    EVALUATION_FILE_SUFFIX,
+    REPORT_SUBDIR,
+    REPORT_MD_FILE,
+    REPORT_PDF_FILE,
+)
 
 
 class ReportGenerator:
@@ -44,7 +52,7 @@ class ReportGenerator:
         md_content = self._generate_markdown_report(results)
 
         if output_path is None:
-            output_path = evaluation_dir / "replication_report.md"
+            output_path = evaluation_dir / REPORT_SUBDIR / REPORT_MD_FILE
         else:
             output_path = Path(output_path)
 
@@ -53,11 +61,14 @@ class ReportGenerator:
 
         if generate_md:
             md_path = output_path.with_suffix(".md")
+            md_path.parent.mkdir(parents=True, exist_ok=True)
             md_path.write_text(md_content, encoding='utf-8')
 
         if generate_pdf:
             pdf_path = output_path.with_suffix(".pdf")
-            self._generate_pdf(md_content, pdf_path, evaluation_dir)
+            report_dir = output_path.parent
+            report_dir.mkdir(parents=True, exist_ok=True)
+            self._generate_pdf(md_content, pdf_path, report_dir)
 
         return md_path, pdf_path
 
@@ -68,6 +79,7 @@ class ReportGenerator:
         output_dir: Path,
         generate_pdf: bool = True,
         evidence=None,
+        fix_assessment=None,
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """
         Generate report from EvaluationResult objects.
@@ -78,6 +90,7 @@ class ReportGenerator:
             output_dir: Output directory
             generate_pdf: Whether to generate PDF
             evidence: Optional ExecutionEvidence from replication phase
+            fix_assessment: Optional FixSeverityAssessment from fix assessment phase
 
         Returns:
             Tuple of (markdown_path, pdf_path)
@@ -91,15 +104,17 @@ class ReportGenerator:
                 "error": result.error,
             }
 
-        md_content = self._generate_markdown_report(results_dict, evidence=evidence)
+        md_content = self._generate_markdown_report(results_dict, evidence=evidence, fix_assessment=fix_assessment)
 
-        md_path = output_dir / "replication_report.md"
+        report_dir = output_dir / REPORT_SUBDIR
+        md_path = report_dir / REPORT_MD_FILE
+        md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md_content, encoding='utf-8')
 
         pdf_path = None
         if generate_pdf:
-            pdf_path = output_dir / "replication_report.pdf"
-            self._generate_pdf(md_content, pdf_path, output_dir)
+            pdf_path = report_dir / REPORT_PDF_FILE
+            self._generate_pdf(md_content, pdf_path, report_dir)
 
         return md_path, pdf_path
 
@@ -107,16 +122,8 @@ class ReportGenerator:
         """Collect all evaluation JSON results in the new items+pass_rate format."""
         results = {}
 
-        eval_files = {
-            "code": "code_evaluation.json",
-            "consistency": "consistency_evaluation.json",
-            "generalization": "generalization_evaluation.json",
-            "replication": "replication_evaluation.json",
-            "instruction_following": "instruction_following_evaluation.json",
-        }
-
-        for eval_name, filename in eval_files.items():
-            filepath = evaluation_dir / filename
+        for eval_name in ALL_EVALUATIONS:
+            filepath = evaluation_dir / EVALUATE_SUBDIR / f"{eval_name}{EVALUATION_FILE_SUFFIX}"
             if filepath.exists():
                 try:
                     with open(filepath, encoding='utf-8') as f:
@@ -131,7 +138,7 @@ class ReportGenerator:
 
         return results
 
-    def _generate_markdown_report(self, results: Dict[str, Any], evidence=None) -> str:
+    def _generate_markdown_report(self, results: Dict[str, Any], evidence=None, fix_assessment=None) -> str:
         """Generate the markdown report content."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -170,6 +177,9 @@ class ReportGenerator:
         # Replication evidence section (if available)
         if evidence:
             report += self._generate_replication_section(evidence)
+
+        if fix_assessment and fix_assessment.total_fixes > 0:
+            report += self._generate_fixes_section(fix_assessment)
 
         # Summary table
         report += "### Quick Summary\n\n"
@@ -289,11 +299,31 @@ class ReportGenerator:
                 section += f"**Step {step.step_id} — {step.description}**\n"
                 if step.stderr:
                     section += f"```\n{step.stderr[:1000]}\n```\n"
-                if step.suggested_fix:
-                    section += f"Suggested fix: {step.suggested_fix}\n"
+                if step.fixes_applied:
+                    section += "Fixes attempted:\n"
+                    for fix in step.fixes_applied:
+                        section += f"  - {fix.description} ({fix.file_path})\n"
                 section += "\n"
 
         section += "\n"
+        return section
+
+    def _generate_fixes_section(self, fix_assessment) -> str:
+        """Generate the Fixes Applied section."""
+        section = "## Fixes Applied\n\n"
+        section += f"**Total fixes:** {fix_assessment.total_fixes} "
+        section += f"({fix_assessment.minor_count} minor, {fix_assessment.major_count} major, {fix_assessment.critical_count} critical)\n\n"
+
+        if fix_assessment.summary:
+            section += f"{fix_assessment.summary}\n\n"
+
+        if fix_assessment.fixes:
+            section += "| # | Description | Severity | Impact |\n"
+            section += "|---|-------------|----------|--------|\n"
+            for i, fix in enumerate(fix_assessment.fixes, 1):
+                section += f"| {i} | {fix.fix_description} | {fix.severity} | {fix.reproducibility_impact} |\n"
+            section += "\n"
+
         return section
 
     def _generate_recommendations(self, results: Dict) -> str:
