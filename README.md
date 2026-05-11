@@ -2,7 +2,9 @@
 
 **A Replication Agent for Evaluating Scientific Reproducibility**
 
-Veritas is an AI-powered tool that evaluates the replicability of scientific research projects. Given a paper and repository, it runs a three-phase pipeline — **Analyze**, **Replicate**, **Evaluate** — producing comprehensive replication reports with PASS/FAIL checklists and execution evidence.
+Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and repository, it runs a four-phase pipeline — **Analyze**, **Replicate**, **Assess Fixes**, **Evaluate** — producing replication reports with execution evidence, fix severity ratings, and PASS/FAIL checklists.
+
+The replication agent actively fixes issues it encounters (deprecated APIs, missing dependencies, configuration problems) rather than stopping at the first error. Every fix is tracked and rated for severity, so the final report honestly reflects both the results and what it took to get them.
 
 ## How It Works
 
@@ -11,31 +13,37 @@ Input (Paper PDF + Repository)
         |
   1. ANALYZE
   |  - Generate a checklist of verification items tailored to the paper
-  |  - Generate a structured replication plan (steps, commands, expected outcomes)
+  |  - Generate a scoped replication plan (steps, commands, expected outcomes)
         |
   2. REPLICATE
-  |  - Execute the replication plan inside a Docker container
-  |  - An AI agent (Claude/Codex/Gemini) runs the code, collects output
-  |  - Gather execution evidence (exit codes, stdout, produced files)
+  |  - Execute the plan inside a Docker container on a writable copy of the repo
+  |  - An AI agent (Claude/Codex/Gemini) runs the code, actively fixing issues
+  |  - Collect execution evidence + structured fix records
         |
-  3. EVALUATE
-  |  - Score each checklist item against the code and execution evidence
-  |  - Produce PASS/FAIL verdicts with rationale
+  3. ASSESS FIXES
+  |  - Rate each applied fix as minor / major / critical
+  |  - Assess what each fix implies about reproducibility quality
         |
-  4. REPORT
-     - Aggregate results into a markdown + PDF report
+  4. EVALUATE
+  |  - Score checklist items against evidence, with fix severity as context
+  |  - Fixes are context, not automatic penalties
+        |
+  5. REPORT
+     - Aggregate into markdown + PDF with a Fixes Applied section
 ```
 
 Rather than using a fixed set of evaluation criteria, Veritas generates a checklist dynamically for each paper. An LLM reads the paper and repository, then produces targeted verification items based on the specific claims, methods, datasets, and statistical analyses present in that work. For more details on the AutoChecklist methodology, see [ChicagoHAI/AutoChecklist](https://github.com/ChicagoHAI/AutoChecklist).
 
 ## Features
 
-- **Three-phase pipeline**: Analyze, Replicate, Evaluate with execution evidence
+- **Active fix-and-continue replication**: The agent patches deprecated APIs, installs missing tools, and adjusts configurations — then reports what it changed
+- **Fix severity assessment**: A separate LLM pass rates each fix (minor/major/critical) so results are honest about what it took to reproduce
 - **Dynamic checklists**: LLM-generated verification items tailored to each paper
-- **Docker-based replication**: Code runs inside a CUDA-enabled container with the AI agent
+- **Docker-based replication**: Code runs inside a CUDA-enabled container; the original repo stays read-only
 - **Multi-provider support**: Works with Claude Code, Codex CLI, and Gemini CLI
+- **Scoped replication**: `--mode main` (default) targets key claims; `--mode full` coming soon
 - **Five evaluation dimensions**: Code quality, consistency, generalization, replication, instruction following
-- **Cross-platform**: Runs on Windows, macOS, and Linux (GPU acceleration on Linux with NVIDIA)
+- **Cross-platform**: Windows, macOS, and Linux (GPU acceleration on Linux with NVIDIA)
 
 ## Installation
 
@@ -58,6 +66,8 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 
 ```bash
 ./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
+./veritas evaluate --repo ./myrepo --mode main      # key claims only (default)
+./veritas evaluate --repo ./myrepo --provider codex  # use a different provider
 ./veritas extract-plan paper.pdf                     # plan only
 ./veritas report ./evaluation                        # regenerate report
 ./veritas shell                                      # interactive container
@@ -68,7 +78,7 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 ./veritas help
 ```
 
-Run `./veritas evaluate --help` for the full option list (provider, evaluations selection, paper/repo/output paths, timeout, etc.).
+Run `./veritas evaluate --help` for the full option list.
 
 ## Evaluation Dimensions
 
@@ -84,22 +94,29 @@ Veritas evaluates across five dimensions. The specific checklist items within ea
 
 ## Output Structure
 
-After evaluation, the output directory contains:
+After evaluation, the output directory is organized by pipeline phase:
 
 ```
 evaluation/
-├── checklist.json               # Generated verification checklist
-├── replication_plan.json        # Structured replication plan
+├── analyze/
+│   ├── checklist.json             # Generated verification checklist
+│   └── replication_plan.json      # Scoped replication plan
 ├── replication/
-│   ├── execution_stdout.log     # Container execution log (sanitized)
-│   └── evidence.json            # Collected execution evidence
-├── code_evaluation.json         # Code quality scores
-├── consistency_evaluation.json  # Consistency scores
-├── generalization_evaluation.json
-├── replication_evaluation.json
-├── instruction_following_evaluation.json
-├── replication_report.md        # Final markdown report
-└── replication_report.pdf       # Final PDF report
+│   ├── codebase/                  # Patched repo (writable copy with agent's fixes)
+│   ├── codebase.diff              # Unified diff of all changes the agent made
+│   ├── replication_log.json       # Step-by-step execution log with fix records
+│   └── evidence_summary.json      # Environment and execution evidence
+├── evaluate/
+│   ├── fix_severity.json          # Fix severity ratings (minor/major/critical)
+│   ├── code_evaluation.json       # Code quality scores
+│   ├── consistency_evaluation.json
+│   ├── generalization_evaluation.json
+│   ├── replication_evaluation.json
+│   └── instruction_following_evaluation.json
+├── report/
+│   ├── replication_report.md      # Final markdown report
+│   └── replication_report.pdf     # Final PDF report
+└── prompts/                       # Debug: rendered prompts sent to the LLM
 ```
 
 ## Docker Container
@@ -116,13 +133,7 @@ GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/
 
 ### Credentials
 
-Veritas mounts your AI CLI credential files (read-only) into the container so the agent can authenticate. It mounts only the minimal auth files needed:
-
-| CLI | File mounted |
-|-----|-------------|
-| Claude | `~/.claude/.credentials.json` |
-| Codex | `~/.codex/auth.json` |
-| Gemini | `~/.gemini/oauth_creds.json`, `~/.gemini/google_accounts.json` |
+Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.gemini`) into the container so the agent can authenticate. Run `./veritas login <provider>` to set up credentials before your first evaluation.
 
 ### Environment Variables
 
@@ -138,13 +149,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > ~/.veritas/.env
 ### Using with Different Providers
 
 ```bash
-# Use Claude (default)
-./veritas evaluate --repo ./project --paper paper.pdf --provider claude
-
-# Use Codex
+./veritas evaluate --repo ./project --paper paper.pdf --provider claude   # default
 ./veritas evaluate --repo ./project --paper paper.pdf --provider codex
-
-# Use Gemini
 ./veritas evaluate --repo ./project --paper paper.pdf --provider gemini
 ```
 
@@ -160,5 +166,5 @@ echo "ANTHROPIC_API_KEY=sk-..." > ~/.veritas/.env
 
 ## Acknowledgments
 
-- Built upon research from the [idea-explorer](https://github.com/ChicagoHAI/idea-explorer) project
+- Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo)
 - Evaluation criteria adapted from [eval_agent](https://github.com/ChicagoHAI/eval_agent)

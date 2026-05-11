@@ -1,11 +1,22 @@
-"""Evidence parsing for replication results."""
+"""Parsing for replication plans and gathering of execution evidence."""
 
 import json
 import re
 from pathlib import Path
 from typing import Optional
 
-from veritas.core.models import ReplicationPlan, ExecutionEvidence, StepOutcome
+from veritas.core.models.replication import (
+    ReplicationPlan,
+    ExecutionEvidence,
+    StepOutcome,
+)
+
+
+# Filenames written by the replication agent inside the container and read
+# back here. Both names are also referenced in
+# ``templates/replication/session_instructions.md`` (the agent contract).
+REPLICATION_LOG_FILE = "replication_log.json"
+EVIDENCE_SUMMARY_FILE = "evidence_summary.json"
 
 
 _VALID_JSON_ESCAPES = frozenset('"\\/bfnrtu')
@@ -82,7 +93,7 @@ def _extract_json(text: str) -> str:
             except json.JSONDecodeError:
                 pass
 
-    raise ValueError("Could not parse replication plan from response")
+    raise ValueError("Could not parse JSON from response")
 
 
 def parse_replication_plan_response(response: str) -> ReplicationPlan:
@@ -106,7 +117,7 @@ def gather_evidence(replication_dir: Path) -> Optional[ExecutionEvidence]:
     if not replication_dir.exists():
         return None
 
-    log_path = replication_dir / "replication_log.json"
+    log_path = replication_dir / REPLICATION_LOG_FILE
     if not log_path.exists():
         return None
 
@@ -116,7 +127,7 @@ def gather_evidence(replication_dir: Path) -> Optional[ExecutionEvidence]:
         return None
 
     # Read optional summary for environment info
-    summary_path = replication_dir / "evidence_summary.json"
+    summary_path = replication_dir / EVIDENCE_SUMMARY_FILE
     environment = {}
     if summary_path.exists():
         try:

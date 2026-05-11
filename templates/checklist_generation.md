@@ -136,7 +136,7 @@ Remember: each question should be phrased such that answering 'yes' means the re
 
 ## Output
 
-Save the checklist to `{{ output_dir }}/checklist.json` with this format:
+Save the checklist to `{{ output_dir }}/analyze/checklist.json` with this format:
 
 ```json
 {

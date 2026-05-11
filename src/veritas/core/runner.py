@@ -7,10 +7,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config
-from veritas.core.checklist import Checklist, parse_checklist_response
-from veritas.core.models import ReplicationPlan, ExecutionEvidence
-from veritas.core.evidence import parse_replication_plan_response, gather_evidence
+from veritas.core.config import Config, OUTPUT_SUBDIRS
+from veritas.core.pipeline_state import PipelineState
+from veritas.core.checklist import parse_checklist_response
+from veritas.core.models.checklist import Checklist
+from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
+from veritas.core.models.fix_severity import FixSeverityAssessment
+from veritas.core.replication import (
+    parse_replication_plan_response,
+    gather_evidence,
+    _extract_json,
+)
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
@@ -39,7 +46,7 @@ class RunResult:
 
 
 class ReplicationRunner:
-    """Orchestrates the three-phase replication evaluation process."""
+    """Orchestrates the replication evaluation pipeline."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -48,14 +55,83 @@ class ReplicationRunner:
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
-        """Run the full three-phase pipeline: analyze -> replicate -> evaluate -> report."""
+        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report.
+
+        Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
+        are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
+        """
         try:
             self._setup_output_dir()
+            state = PipelineState(self.config.output_dir)
+
+            if state.state.get('inputs') is None:
+                state.record_inputs(self.config.repo_path, self.config.paper_path)
+            else:
+                state.validate_inputs(self.config.repo_path, self.config.paper_path)
+                self._announce_resume(state)
+
             plan_path = self._extract_plan()
-            checklist, replication_plan = self._analyze()
-            evidence = self._replicate(replication_plan)
-            results = self._evaluate(checklist, evidence, plan_path)
-            report_path, pdf_path = self._report(results, evidence)
+
+            # analyze
+            if state.is_stage_completed('analyze'):
+                print("[OK] analyze: skipped (already completed)")
+                checklist, replication_plan = self._load_analyze_artifacts()
+            else:
+                state.start_stage('analyze')
+                try:
+                    checklist, replication_plan = self._analyze()
+                    state.complete_stage('analyze', success=True)
+                except Exception:
+                    state.complete_stage('analyze', success=False)
+                    raise
+
+            # replicate
+            if state.is_stage_completed('replicate'):
+                print("[OK] replicate: skipped (already completed)")
+                evidence = gather_evidence(self.config.replication_dir)
+            else:
+                state.start_stage('replicate')
+                try:
+                    evidence = self._replicate(replication_plan)
+                    state.complete_stage('replicate', success=True)
+                except Exception:
+                    state.complete_stage('replicate', success=False)
+                    raise
+
+            # assess_fixes
+            if state.is_stage_completed('assess_fixes'):
+                print("[OK] assess_fixes: skipped (already completed)")
+                fix_assessment = self._load_fix_assessment()
+            else:
+                state.start_stage('assess_fixes')
+                try:
+                    fix_assessment = self._assess_fixes(evidence)
+                    state.complete_stage('assess_fixes', success=True)
+                except Exception:
+                    state.complete_stage('assess_fixes', success=False)
+                    raise
+
+            # evaluate
+            if state.is_stage_completed('evaluate'):
+                print("[OK] evaluate: skipped (already completed)")
+                results = self._load_evaluate_artifacts()
+            else:
+                already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
+                # don't reset outputs.completed_categories if we're resuming a half-done evaluate
+                if state.get_stage_status('evaluate') != 'in_progress':
+                    state.start_stage('evaluate')
+                try:
+                    results = self._evaluate_with_resume(
+                        checklist, evidence, plan_path, fix_assessment,
+                        state, already_done=already_done,
+                    )
+                    state.complete_stage('evaluate', success=True)
+                except Exception:
+                    state.complete_stage('evaluate', success=False)
+                    raise
+
+            report_path, pdf_path = self._report(results, evidence, fix_assessment)
+            state.mark_completed()
 
             return RunResult(
                 success=True,
@@ -68,8 +144,6 @@ class ReplicationRunner:
             return RunResult(success=False, error=str(e))
 
         finally:
-            # Sanitize the full output tree after all phases (analyze + replicate + evaluate)
-            # so files written by any phase are scrubbed — even if a phase crashed.
             try:
                 sanitize_logs_directory(self.config.output_dir)
             except Exception:
@@ -78,7 +152,8 @@ class ReplicationRunner:
     def _setup_output_dir(self):
         """Create the output directory structure."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        (self.config.output_dir / "replication").mkdir(exist_ok=True)
+        for subdir in OUTPUT_SUBDIRS:
+            (self.config.output_dir / subdir).mkdir(exist_ok=True)
 
     def _extract_plan(self) -> Optional[Path]:
         """Get existing plan or extract from paper."""
@@ -93,7 +168,7 @@ class ReplicationRunner:
             plan_content = self.plan_extractor.extract(
                 self.config.paper_path, with_evidence=True
             )
-            plan_path = self.config.output_dir / "extracted_plan.md"
+            plan_path = self.config.extracted_plan_path
             plan_path.write_text(plan_content, encoding='utf-8')
             return plan_path
 
@@ -117,10 +192,10 @@ class ReplicationRunner:
             paper_path=self.config.paper_path if self.config.has_paper else None,
         )
 
-        prompt_path = self.config.output_dir / "checklist_generation_prompt.txt"
+        prompt_path = self.config.prompts_dir / "checklist_generation_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_json_path = self.config.output_dir / "checklist.json"
+        output_json_path = self.config.checklist_path
         stdout = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
@@ -169,12 +244,13 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             checklist_items=checklist.items,
             paper_path=self.config.paper_path if self.config.has_paper else None,
+            mode=self.config.mode,
         )
 
-        prompt_path = self.config.output_dir / "replication_plan_prompt.txt"
+        prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_path = self.config.output_dir / "replication_plan.json"
+        output_path = self.config.replication_plan_path
         stdout = self._invoke_provider(
             prompt=prompt,
             working_dir=self.config.repo_path,
@@ -275,14 +351,15 @@ class ReplicationRunner:
 
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
+            paper_path=self.config.paper_path,
         )
 
-        log_path = self.config.output_dir / "replication" / "execution_stdout.log"
+        log_path = self.config.replication_dir / "execution_stdout.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write session instructions to a prompt file so the provider
         # can be pointed at it the same way as the other phases.
-        prompt_path = self.config.output_dir / "replication_session_prompt.txt"
+        prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
         stdout = self._invoke_provider(
@@ -295,7 +372,7 @@ class ReplicationRunner:
         if stdout:
             log_path.write_text(stdout, encoding='utf-8')
 
-        evidence = gather_evidence(self.config.output_dir / "replication")
+        evidence = gather_evidence(self.config.replication_dir)
 
         if evidence:
             print(f"  Replication completed: {evidence.steps_succeeded}/{evidence.steps_attempted} steps succeeded")
@@ -304,38 +381,64 @@ class ReplicationRunner:
 
         return evidence
 
+    # -- Fix Assessment ----------------------------------------------------
+
+    def _assess_fixes(self, evidence: Optional[ExecutionEvidence]) -> FixSeverityAssessment:
+        """Assess severity of fixes applied during replication.
+
+        Runs a separate LLM pass over the fix records. Skips the LLM call
+        entirely when no fixes were applied.
+        """
+        if evidence is None:
+            return FixSeverityAssessment.empty()
+
+        all_fixes = evidence.all_fixes_applied
+        if not all_fixes:
+            print("No fixes applied during replication, skipping severity assessment")
+            return FixSeverityAssessment.empty()
+
+        print(f"Assessing severity of {len(all_fixes)} fix(es)...")
+
+        prompt = self.prompt_generator.generate_fix_severity_prompt(
+            fixes=[f.to_dict() for f in all_fixes],
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.prompts_dir / "fix_severity_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        output_path = self.config.fix_severity_path
+        stdout = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            output_path=output_path,
+            timeout=self.config.evaluate_timeout,
+        )
+
+        response_text = None
+        if output_path.exists():
+            response_text = output_path.read_text(encoding='utf-8').strip()
+        if not response_text and stdout:
+            response_text = stdout
+
+        if not response_text:
+            print("  Warning: Fix severity assessment returned no output")
+            return FixSeverityAssessment.empty()
+
+        try:
+            raw = _extract_json(response_text)
+            data = json.loads(raw)
+            assessment = FixSeverityAssessment.from_dict(data)
+            output_path.write_text(
+                json.dumps(assessment.to_dict(), indent=2), encoding='utf-8'
+            )
+            print(f"  Fix assessment: {assessment.minor_count} minor, {assessment.major_count} major, {assessment.critical_count} critical")
+            return assessment
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: Could not parse fix severity assessment: {e}")
+            return FixSeverityAssessment.empty()
+
     # -- Phase 3: Evaluate -------------------------------------------------
-
-    def _evaluate(  
-        self,
-        checklist: Checklist,
-        evidence: Optional[ExecutionEvidence],
-        plan_path: Optional[Path],
-    ) -> List[EvaluationResult]:
-        """Phase 3: Score checklist items using evidence."""
-        results = []
-
-        for eval_name in self.config.evaluations:
-            print(f"Running {eval_name} evaluation...")
-
-            items = checklist.get_items_by_category(eval_name)
-            if not items:
-                print(f"  Skipping {eval_name} — no checklist items generated for this category")
-                results.append(EvaluationResult(
-                    name=eval_name, success=True, items=[], pass_rate=None,
-                ))
-                continue
-
-            result = self._run_single_evaluation(eval_name, items, plan_path, evidence)
-            results.append(result)
-
-            if result.success:
-                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
-                print(f"  {eval_name} completed — {pct}")
-            else:
-                print(f"  {eval_name} failed: {result.error}")
-
-        return results
 
     def _run_single_evaluation(
         self,
@@ -343,6 +446,7 @@ class ReplicationRunner:
         checklist_items: List,
         plan_path: Optional[Path],
         evidence: Optional[ExecutionEvidence] = None,
+        fix_assessment: Optional[FixSeverityAssessment] = None,
     ) -> EvaluationResult:
         """Run scoring for one category's checklist items."""
         try:
@@ -353,12 +457,13 @@ class ReplicationRunner:
                 plan_path=plan_path,
                 output_dir=self.config.output_dir,
                 evidence=evidence,
+                fix_assessment=fix_assessment,
             )
 
-            prompt_path = self.config.output_dir / f"{eval_name}_prompt.txt"
+            prompt_path = self.config.prompts_dir / f"{eval_name}_prompt.txt"
             prompt_path.write_text(prompt, encoding='utf-8')
 
-            output_json_path = self.config.output_dir / f"{eval_name}_evaluation.json"
+            output_json_path = self.config.evaluation_path(eval_name)
 
             stdout = self._invoke_provider(
                 prompt=prompt,
@@ -394,7 +499,7 @@ class ReplicationRunner:
 
     # -- Report ------------------------------------------------------------
 
-    def _report(self, results, evidence=None):
+    def _report(self, results, evidence=None, fix_assessment=None):
         """Generate the final report."""
         return self.report_generator.generate_from_results(
             results=results,
@@ -402,7 +507,105 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             generate_pdf=self.config.generate_pdf,
             evidence=evidence,
+            fix_assessment=fix_assessment,
         )
+
+    # -- Resume helpers ----------------------------------------------------
+
+    def _announce_resume(self, state: PipelineState) -> None:
+        """Print the resume banner. Called when state file already had stages."""
+        created = state.state.get('created_at', 'unknown time')
+        print(f"WARNING: Found existing pipeline state from {created}. Resuming.")
+        print("   Pass --restart to start fresh.")
+
+    def _load_analyze_artifacts(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
+        """Load checklist and replication plan from disk for a skipped analyze phase."""
+        with open(self.config.checklist_path, encoding='utf-8') as f:
+            checklist = Checklist.from_dict(json.load(f))
+
+        replication_plan: Optional[ReplicationPlan] = None
+        if self.config.replication_plan_path.exists():
+            with open(self.config.replication_plan_path, encoding='utf-8') as f:
+                replication_plan = ReplicationPlan.from_dict(json.load(f))
+        return checklist, replication_plan
+
+    def _load_fix_assessment(self) -> FixSeverityAssessment:
+        """Load fix severity assessment from disk (or empty if no fixes were applied)."""
+        if not self.config.fix_severity_path.exists():
+            return FixSeverityAssessment.empty()
+        with open(self.config.fix_severity_path, encoding='utf-8') as f:
+            return FixSeverityAssessment.from_dict(json.load(f))
+
+    def _load_evaluation_result(self, eval_name: str) -> EvaluationResult:
+        """Read a single per-category evaluation JSON and build an EvaluationResult."""
+        output_path = self.config.evaluation_path(eval_name)
+        if not output_path.exists():
+            return EvaluationResult(
+                name=eval_name, success=False,
+                error=f"Output file missing on resume: {output_path.name}",
+            )
+        with open(output_path, encoding='utf-8') as f:
+            data = json.load(f)
+        return EvaluationResult(
+            name=eval_name,
+            success=True,
+            items=data.get("items", []),
+            pass_rate=data.get("pass_rate"),
+            output_path=output_path,
+        )
+
+    def _load_evaluate_artifacts(self) -> List[EvaluationResult]:
+        """Load per-category evaluation results from disk for a skipped evaluate phase."""
+        return [self._load_evaluation_result(name) for name in self.config.evaluations]
+
+    def _evaluate_with_resume(
+        self,
+        checklist: Checklist,
+        evidence: Optional[ExecutionEvidence],
+        plan_path: Optional[Path],
+        fix_assessment: Optional[FixSeverityAssessment],
+        state: PipelineState,
+        already_done: List[str],
+    ) -> List[EvaluationResult]:
+        """Score checklist items per category, skipping those already completed in a previous run.
+
+        Records each newly-completed category in the state's ``outputs.completed_categories``
+        list as it goes, so an interruption mid-loop can be resumed at the right point.
+        """
+        results: List[EvaluationResult] = []
+        completed = list(already_done)
+
+        for eval_name in self.config.evaluations:
+            if eval_name in already_done:
+                print(f"  Skipping {eval_name} (already complete from previous run)")
+                results.append(self._load_evaluation_result(eval_name))
+                continue
+
+            print(f"Running {eval_name} evaluation...")
+            items = checklist.get_items_by_category(eval_name)
+            if not items:
+                print(f"  Skipping {eval_name} - no checklist items generated for this category")
+                results.append(EvaluationResult(
+                    name=eval_name, success=True, items=[], pass_rate=None,
+                ))
+                completed.append(eval_name)
+                state.update_stage_outputs('evaluate', {'completed_categories': completed})
+                continue
+
+            result = self._run_single_evaluation(
+                eval_name, items, plan_path, evidence, fix_assessment,
+            )
+            results.append(result)
+
+            if result.success:
+                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
+                print(f"  {eval_name} completed - {pct}")
+                completed.append(eval_name)
+                state.update_stage_outputs('evaluate', {'completed_categories': completed})
+            else:
+                print(f"  {eval_name} failed: {result.error}")
+
+        return results
 
     # -- Provider Invocation -----------------------------------------------
 
@@ -435,10 +638,10 @@ class ReplicationRunner:
 
     def _invoke_claude(self, prompt, working_dir, output_path, timeout):
         try:
-            prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
+            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             claude = self._resolve_cli("claude")
-            cmd = [claude, "-p", str(prompt_file), "--output-format", "text", "--dangerously-skip-permissions"]
+            cmd = [claude, "-p", prompt, "--output-format", "text", "--dangerously-skip-permissions"]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',
@@ -475,10 +678,10 @@ class ReplicationRunner:
 
     def _invoke_gemini(self, prompt, working_dir, output_path, timeout):
         try:
-            prompt_file = self.config.output_dir / f"current_prompt_{output_path.stem}.txt"
+            prompt_file = self.config.prompts_dir / f"current_prompt_{output_path.stem}.txt"
             prompt_file.write_text(prompt, encoding='utf-8')
             gemini = self._resolve_cli("gemini")
-            cmd = [gemini, "-p", str(prompt_file), "--yolo", "--skip-trust"]
+            cmd = [gemini, "-p", prompt, "--yolo", "--skip-trust"]
             result = subprocess.run(
                 cmd, cwd=working_dir, timeout=timeout,
                 capture_output=True, encoding='utf-8',

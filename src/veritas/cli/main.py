@@ -75,6 +75,16 @@ def evaluate(
         "--evaluate-timeout",
         help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
     ),
+    mode: str = typer.Option(
+        "main",
+        "--mode",
+        help="Replication scope: 'main' targets key claims, 'full' targets all results (not yet implemented)",
+    ),
+    restart: bool = typer.Option(
+        False,
+        "--restart",
+        help="Discard previous run state and start fresh.",
+    ),
 ):
     """
     Evaluate the replicability of a scientific project.
@@ -88,6 +98,12 @@ def evaluate(
 
     # Determine output directory
     output_dir = output or (repo / "evaluation")
+
+    if restart:
+        state_file = output_dir / ".veritas" / "pipeline_state.json"
+        if state_file.exists():
+            state_file.unlink()
+            console.print("[yellow]Discarded previous pipeline state.[/yellow]")
 
     # Parse evaluations
     eval_list = None
@@ -106,6 +122,7 @@ def evaluate(
         analyze_timeout=analyze_timeout,
         replicate_timeout=replicate_timeout,
         evaluate_timeout=evaluate_timeout,
+        mode=mode,
     )
 
     # Run evaluation

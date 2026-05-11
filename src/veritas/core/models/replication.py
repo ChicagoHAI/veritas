@@ -1,8 +1,8 @@
-"""Data models for replication plan and execution evidence."""
+"""Replication plan and execution evidence dataclasses."""
 
 import json
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 
 @dataclass
@@ -56,6 +56,32 @@ class ReplicationPlan:
 
 
 @dataclass
+class AppliedFix:
+    """A fix applied by the replication agent during execution."""
+    file_path: str
+    description: str
+    original_error: str
+    diff_snippet: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "file_path": self.file_path,
+            "description": self.description,
+            "original_error": self.original_error,
+            "diff_snippet": self.diff_snippet,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AppliedFix":
+        return cls(
+            file_path=data.get("file_path", ""),
+            description=data.get("description", ""),
+            original_error=data.get("original_error", ""),
+            diff_snippet=data.get("diff_snippet", ""),
+        )
+
+
+@dataclass
 class StepOutcome:
     """The outcome of executing a single replication step."""
     step_id: int
@@ -66,7 +92,7 @@ class StepOutcome:
     stderr: str = ""
     output_files: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
-    suggested_fix: Optional[str] = None
+    fixes_applied: List[AppliedFix] = field(default_factory=list)
     code_modified: bool = False
     notes: str = ""
 
@@ -84,7 +110,7 @@ class StepOutcome:
             "stderr": self.stderr,
             "output_files": self.output_files,
             "duration_seconds": self.duration_seconds,
-            "suggested_fix": self.suggested_fix,
+            "fixes_applied": [f.to_dict() for f in self.fixes_applied],
             "code_modified": self.code_modified,
             "notes": self.notes,
         }
@@ -100,7 +126,7 @@ class StepOutcome:
             stderr=data.get("stderr", ""),
             output_files=data.get("output_files", []),
             duration_seconds=data.get("duration_seconds", 0.0),
-            suggested_fix=data.get("suggested_fix"),
+            fixes_applied=[AppliedFix.from_dict(f) for f in data.get("fixes_applied", [])],
             code_modified=data.get("code_modified", False),
             notes=data.get("notes", ""),
         )
@@ -134,6 +160,13 @@ class ExecutionEvidence:
         for s in self.step_outcomes:
             files.extend(s.output_files)
         return files
+
+    @property
+    def all_fixes_applied(self) -> List[AppliedFix]:
+        fixes = []
+        for s in self.step_outcomes:
+            fixes.extend(s.fixes_applied)
+        return fixes
 
     def to_dict(self) -> Dict[str, Any]:
         return {

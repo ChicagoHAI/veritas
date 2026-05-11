@@ -1,6 +1,6 @@
 # Veritas
 
-Veritas is a replication agent that evaluates whether scientific papers can be reproduced. It runs a 3-phase pipeline: analyze the paper/repo, replicate the methodology inside Docker, then evaluate the results.
+Veritas is a replication agent that evaluates whether scientific papers can be reproduced. It runs a 4-phase pipeline: analyze the paper/repo, replicate the methodology inside Docker (actively fixing issues), assess fix severity, then evaluate the results.
 
 ## Project Status
 
@@ -16,8 +16,6 @@ Basic implementation is complete, but a significant redesign is in flight based 
 - **Veritas should be highly modularized** — components (execution environment, LLM provider, PDF extractor, scoring method, output format) should be swappable via flags or config.
 
 Open questions still pending lab input:
-- Where is the line between "minor fix" and "too broken"?
-- What scope of the paper should replication cover (everything / key results / whatever the methods section describes / user-configurable)?
 - What specific components need to be swappable for "modularization"?
 
 ## Commands
@@ -31,6 +29,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 # Select provider
 ./veritas evaluate --repo ./my-project --provider codex
+
+# Select replication scope
+./veritas evaluate --repo ./my-project --mode main  # key claims (default)
 
 # Select specific evaluation dimensions
 ./veritas evaluate --repo ./my-project --evaluations code,consistency
@@ -53,19 +54,23 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 ## Architecture
 
-3-phase pipeline orchestrated by `ReplicationRunner` in `src/veritas/core/runner.py`:
+4-phase pipeline orchestrated by `ReplicationRunner` in `src/veritas/core/runner.py`:
 
-1. **Analyze** (`_analyze`) — generates checklist from paper+repo, then a replication plan
-2. **Replicate** (`_replicate`) — runs the plan inside a Docker container via an AI agent; collects execution evidence
-3. **Evaluate** (`_evaluate`) — scores the checklist against code and evidence, per category
+1. **Analyze** (`_analyze`) — generates checklist from paper+repo, then a scoped replication plan
+2. **Replicate** (`_replicate`) — runs the plan via an AI agent that actively fixes issues; collects execution evidence and fix records
+3. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical)
+4. **Evaluate** (`_evaluate_with_resume`) — scores the checklist against code and evidence, with fix severity as context; supports per-category resume
+
+Output is organized into phase subdirectories: `analyze/`, `replication/` (includes `codebase/` with the patched repo and `codebase.diff`), `evaluate/`, `report/`, and `prompts/`.
 
 ### Key modules (`src/veritas/core/`)
 
 - `runner.py` — orchestrator; provider invocation (`_invoke_claude/codex/gemini`); JSON repair re-prompt logic
-- `config.py` — `Config` dataclass; `VALID_PROVIDERS` and `ALL_EVALUATIONS` constants
-- `checklist.py` — `ChecklistItem` / `Checklist` data models and parsing
-- `models.py` — `ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`
-- `evidence.py` — parses execution evidence; `_extract_json` / `_fix_json_escapes` repair logic
+- `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, `ALL_EVALUATIONS`, and output-structure constants (`*_SUBDIR`, `*_FILE`)
+- `checklist.py` — `parse_checklist_response()`
+- `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` repair logic
+- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` so failed runs resume from the last completed phase
+- `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `checklist.py` (`Checklist`, `ChecklistItem`)
 - `plan_extractor.py` — PDF → plan extraction
 - `report_generator.py` — markdown + PDF report generation (pandoc-based)
 
@@ -78,9 +83,10 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 ### Templates (`templates/`)
 
 - `checklist_generation.md` — phase 1: generates the evaluation checklist
-- `replication/plan_generation.md` — phase 1: generates the replication plan
-- `replication/session_instructions.md` — phase 2: instructions for the agent inside Docker
-- `evaluation/scoring.txt` — phase 3: scores checklist items per category
+- `replication/plan_generation.md` — phase 1: generates the scoped replication plan
+- `replication/session_instructions.md` — phase 2: active fix-and-continue instructions for the agent
+- `evaluation/fix_severity.md` — phase 3: rates each applied fix as minor/major/critical
+- `evaluation/scoring.txt` — phase 4: scores checklist items per category (fix-aware)
 
 All templates are Jinja2, rendered by `src/veritas/templates/prompt_generator.py`.
 
@@ -90,8 +96,8 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 
 ## Gotchas
 
-- **The replication agent is currently told NOT to modify source code.** The scope of what the agent is allowed to change is being redesigned (see issue #12) before touching `templates/replication/session_instructions.md`. The current behavior is the reason v1 output scores are artificially low. Not Docker-specific.
-- **The user's repo is bind-mounted read-only** at `/workspace/repo` by the wrapper; agent writes go to `/workspace/output`.
+- **The replication agent actively fixes issues.** The agent works on a writable copy of the repo at `/workspace/output/replication/codebase/`. It may patch deprecated APIs, install missing tools, and fix configuration issues. Every fix is tracked in `StepOutcome.fixes_applied` and rated for severity by a separate post-replicate LLM pass. The original repo at `/workspace/repo` remains read-only.
+- **The user's repo is bind-mounted read-only** at `/workspace/repo` by the wrapper. The entrypoint copies it to `/workspace/output/replication/codebase/` for the agent to modify. An EXIT trap generates a unified diff at `/workspace/output/replication/codebase.diff`.
 - **Provider CLI resolution is cross-platform** — `_resolve_cli()` in `runner.py` handles Windows `.cmd` shims via `shutil.which()`. Don't hardcode paths.
 - **Windows Git Bash requires `winpty` for interactive subcommands** — mintty uses Windows pipes instead of Unix ptys, so `docker run -it` fails with "the input device is not a TTY". The top-level `./veritas` wrapper auto-re-execs under `winpty` when detected; if `winpty` is missing, `get_tty_flag` falls back to `-i`-only (scripted use works; interactive sessions like `./veritas shell` and `./veritas login` are degraded). Modern Git for Windows ships with `winpty` by default. Linux and macOS are unaffected.
 - **JSON responses from LLMs are unreliable.** `evidence.py` has multi-strategy extraction (raw → markdown blocks → brace matching) and escape repair. If adding new LLM-parsed fields, route through `_extract_json()`. A planned change to structured JSON output format (`--output-format stream-json`) should eventually reduce the need for this.

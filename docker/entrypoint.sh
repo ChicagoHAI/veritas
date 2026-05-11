@@ -36,9 +36,9 @@ if [ "${VERITAS_LOGIN_ONLY:-0}" != "1" ] && [ -d "$HOME/.codex-host" ]; then
     export CODEX_HOME="$HOME/.codex-container"
 fi
 
-# Set up credential files from read-only mounts at /tmp/.
-# Individual auth files are mounted (not full dirs) to avoid
-# OS-specific config and bloat. We copy them into writable $HOME/.
+# Copy credential files from /tmp/ mounts (if present) into writable $HOME/.
+# The wrapper may mount credential dirs at /tmp/.{claude,codex,gemini}
+# when the home directory isn't directly writable.
 for dir in .claude .codex .gemini; do
     if [ -d "/tmp/$dir" ] && [ "$(ls -A /tmp/$dir 2>/dev/null)" ]; then
         mkdir -p "$HOME/$dir"
@@ -89,5 +89,17 @@ done
 
 echo "==================================="
 echo ""
+
+# Create a writable copy of the repo for the replication agent.
+# The original mount at /workspace/repo stays read-only.
+if [ -d /workspace/repo ] && [ -d /workspace/output ]; then
+    mkdir -p /workspace/output/replication
+    cp -a /workspace/repo /workspace/output/replication/codebase
+
+    # Generate a unified diff of agent changes on exit, regardless of
+    # how the main process terminates.
+    trap 'diff -ruN /workspace/repo /workspace/output/replication/codebase \
+        > /workspace/output/replication/codebase.diff 2>/dev/null || true' EXIT
+fi
 
 exec "$@"

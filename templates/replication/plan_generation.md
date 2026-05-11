@@ -36,21 +36,27 @@ Explore the repository and generate a replication plan — a sequence of concret
 For each step, provide:
 - A clear description of what to do
 - A command hint (the likely command to run)
-- The expected outcome if the code works correctly
+- The expected outcome if the code works correctly — be specific. Include concrete values from the paper where available (e.g., "accuracy reaches ~87%", "figure shows three peaks", "loss converges below 0.5"). The replication agent uses these to know if results look correct.
 
 Focus on steps that produce **verifiable evidence** — commands that generate output files, print metrics, or produce error messages.
+
+{% if mode == 'main' %}
+## Scope
+
+Focus on the paper's **key claims and primary results** — the main figures, central tables, and core metrics that support the paper's conclusions. Do not attempt to reproduce supplementary analyses, ablation studies, or appendix material unless they are essential to the main argument.
+{% endif %}
 
 ## Rules
 
 - Order steps logically: setup first, then execution, then verification
 - Include 3-10 steps (enough to cover the key claims, not exhaustive)
-- The agent executing this plan will work inside a Docker container with the repo mounted at `/workspace/repo`
-- The agent will NOT modify the repository's source code
+- The agent executing this plan will work on a writable copy of the repo at `/workspace/output/replication/codebase/`
+- The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
 - If you find multiple entry points or experiments, prioritize the main/primary one
 
 ## Output
 
-Save the plan to `{{ output_dir }}/replication_plan.json` with this format:
+Save the plan to `{{ output_dir }}/analyze/replication_plan.json` with this format:
 
 ```json
 {
