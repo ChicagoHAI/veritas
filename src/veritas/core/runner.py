@@ -22,7 +22,7 @@ from veritas.core.replication import (
 from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.security import sanitize_logs_directory
+from veritas.utils.security import sanitize_logs_directory, sanitize_text
 
 # Provider invocation tables. Each provider has a CLI command (cli name plus
 # any required positional subcommand or print flag), a transcript-output flag
@@ -754,6 +754,7 @@ class ReplicationRunner:
         try:
             with open(log_path, open_mode, encoding="utf-8") as log_f:
                 for line in iter(process.stdout.readline, ""):
+                    line = sanitize_text(line)
                     print(line, end="")
                     log_f.write(line)
             return_code = process.wait()
