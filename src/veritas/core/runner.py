@@ -47,6 +47,23 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+# Per-field stage invalidation rules. When an input or config field changes
+# between runs against the same output dir, the listed stages are dropped from
+# pipeline state so they re-run. Every output-affecting field currently
+# invalidates all four stages — the dict shape is preserved so finer-grained
+# rules can be added later (e.g. an evaluation-only config knob).
+FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
+    # Inputs
+    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    # Config
+    'provider':      ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'mode':          ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+}
+
+
 @dataclass
 class EvaluationResult:
     """Result of a single evaluation."""
@@ -89,9 +106,9 @@ class ReplicationRunner:
 
             if state.state.get('inputs') is None:
                 state.record_inputs(self.config.repo_path, self.config.paper_path)
+                state.record_config(self._config_fingerprint())
             else:
-                state.validate_inputs(self.config.repo_path, self.config.paper_path)
-                self._announce_resume(state)
+                self._reconcile_with_prior_run(state)
 
             plan_path = self._extract_plan()
 
@@ -583,6 +600,67 @@ class ReplicationRunner:
         created = state.state.get('created_at', 'unknown time')
         print(f"WARNING: Found existing pipeline state from {created}. Resuming.")
         print("   Pass --restart to start fresh.")
+
+    def _config_fingerprint(self) -> Dict[str, Any]:
+        """Return config fields that affect output content.
+
+        Only fields that change what the pipeline produces are included.
+        Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
+        excluded so changing them between runs doesn't trigger needless
+        re-runs.
+        """
+        return {
+            'provider': self.config.provider,
+            'mode': self.config.mode,
+            'plan_provided': self.config.has_plan,
+        }
+
+    def _reconcile_with_prior_run(self, state: PipelineState) -> None:
+        """Detect input/config changes against the recorded run and invalidate
+        affected stages so they re-run with the new values.
+
+        Without this, re-running on the same output dir with different flags
+        (e.g. a different ``--provider``) silently reuses stage outputs from
+        the prior run, producing a report that doesn't match the requested
+        configuration.
+        """
+        self._announce_resume(state)
+
+        input_changes = state.detect_input_changes(
+            self.config.repo_path, self.config.paper_path,
+        )
+
+        current_config = self._config_fingerprint()
+        if state.state.get('config') is None:
+            # State predates config tracking. Adopt the current config as the
+            # baseline rather than treating every field as "changed." Users
+            # who actually changed flags since the prior run won't be caught
+            # this one time — surface the limitation so they can --restart.
+            print("NOTE: prior pipeline state predates config tracking. Recording")
+            print("   current config as baseline; pass --restart if any of provider,")
+            print("   mode, or --plan differ from the prior run.")
+            state.record_config(current_config)
+            config_changes: List[str] = []
+        else:
+            config_changes = state.detect_config_changes(current_config)
+
+        all_changes = input_changes + config_changes
+        if not all_changes:
+            return
+
+        affected = set()
+        for field in all_changes:
+            affected.update(FINGERPRINT_INVALIDATES.get(field, ()))
+        affected_sorted = sorted(affected)
+
+        print(f"WARNING: detected changes since prior run: {all_changes}")
+        print(f"  Invalidating stages: {affected_sorted}")
+        state.invalidate_stages(affected_sorted)
+
+        if input_changes:
+            state.record_inputs(self.config.repo_path, self.config.paper_path)
+        if config_changes:
+            state.record_config(current_config)
 
     def _load_analyze_artifacts(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
         """Load checklist and replication plan from disk for a skipped analyze phase."""
