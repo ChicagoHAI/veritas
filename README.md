@@ -39,6 +39,8 @@ Rather than using a fixed set of evaluation criteria, Veritas generates a checkl
 - **Active fix-and-continue replication**: The agent patches deprecated APIs, installs missing tools, and adjusts configurations — then reports what it changed
 - **Fix severity assessment**: A separate LLM pass rates each fix (minor/major/critical) so results are honest about what it took to reproduce
 - **Dynamic checklists**: LLM-generated verification items tailored to each paper
+- **Resumable pipeline**: Completed phases are checkpointed; a re-run after a crash, OOM, or Ctrl+C picks up where it left off instead of restarting from scratch
+- **Streaming JSONL transcripts**: Every provider invocation streams a structured event log to disk for post-hoc inspection and debugging
 - **Docker-based replication**: Code runs inside a CUDA-enabled container; the original repo stays read-only
 - **Multi-provider support**: Works with Claude Code, Codex CLI, and Gemini CLI
 - **Scoped replication**: `--mode main` (default) targets key claims; `--mode full` coming soon
@@ -68,6 +70,7 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 ./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
 ./veritas evaluate --repo ./myrepo --mode main      # key claims only (default)
 ./veritas evaluate --repo ./myrepo --provider codex  # use a different provider
+./veritas evaluate --repo ./myrepo --restart        # discard prior state and start fresh
 ./veritas extract-plan paper.pdf                     # plan only
 ./veritas report ./evaluation                        # regenerate report
 ./veritas shell                                      # interactive container
@@ -79,6 +82,12 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 ```
 
 Run `./veritas evaluate --help` for the full option list.
+
+## Resuming Runs
+
+A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, replicate, assess-fixes, and evaluate are tracked atomically, and the evaluate phase additionally records per-category sub-completion so a half-finished scoring pass resumes where it left off.
+
+Resume is automatic and prints a banner so the skip behavior isn't a surprise. Pass `--restart` to discard the state file and run everything from scratch.
 
 ## Evaluation Dimensions
 
@@ -99,24 +108,35 @@ After evaluation, the output directory is organized by pipeline phase:
 ```
 evaluation/
 ├── analyze/
-│   ├── checklist.json             # Generated verification checklist
-│   └── replication_plan.json      # Scoped replication plan
+│   ├── checklist.json                       # Generated verification checklist
+│   ├── replication_plan.json                # Scoped replication plan
+│   ├── checklist_transcript.jsonl           # Streamed agent transcript (checklist gen)
+│   └── replication_plan_transcript.jsonl    # Streamed agent transcript (plan gen)
 ├── replication/
-│   ├── codebase/                  # Patched repo (writable copy with agent's fixes)
-│   ├── codebase.diff              # Unified diff of all changes the agent made
-│   ├── replication_log.json       # Step-by-step execution log with fix records
-│   └── evidence_summary.json      # Environment and execution evidence
+│   ├── codebase/                            # Patched repo (writable copy with agent's fixes)
+│   ├── codebase.diff                        # Unified diff of all changes the agent made
+│   ├── replication_log.json                 # Step-by-step execution log with fix records
+│   ├── evidence_summary.json                # Environment and execution evidence
+│   └── replication_transcript.jsonl         # Streamed agent transcript (replicate phase)
 ├── evaluate/
-│   ├── fix_severity.json          # Fix severity ratings (minor/major/critical)
-│   ├── code_evaluation.json       # Code quality scores
+│   ├── fix_severity.json                    # Fix severity ratings (minor/major/critical)
+│   ├── fix_severity_transcript.jsonl
+│   ├── code_evaluation.json                 # Code quality scores
+│   ├── code_transcript.jsonl
 │   ├── consistency_evaluation.json
+│   ├── consistency_transcript.jsonl
 │   ├── generalization_evaluation.json
+│   ├── generalization_transcript.jsonl
 │   ├── replication_evaluation.json
-│   └── instruction_following_evaluation.json
+│   ├── replication_transcript.jsonl
+│   ├── instruction_following_evaluation.json
+│   └── instruction_following_transcript.jsonl
 ├── report/
-│   ├── replication_report.md      # Final markdown report
-│   └── replication_report.pdf     # Final PDF report
-└── prompts/                       # Debug: rendered prompts sent to the LLM
+│   ├── replication_report.md                # Final markdown report
+│   └── replication_report.pdf               # Final PDF report
+├── prompts/                                 # Debug: rendered prompts sent to the LLM
+└── .veritas/
+    └── pipeline_state.json                  # Resume checkpoint (per-phase status)
 ```
 
 ## Docker Container
