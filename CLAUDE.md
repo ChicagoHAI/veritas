@@ -65,7 +65,7 @@ Output is organized into phase subdirectories: `analyze/`, `replication/` (inclu
 
 ### Key modules (`src/veritas/core/`)
 
-- `runner.py` — orchestrator; provider invocation (`_invoke_claude/codex/gemini`); JSON repair re-prompt logic
+- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`)
 - `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, `ALL_EVALUATIONS`, and output-structure constants (`*_SUBDIR`, `*_FILE`)
 - `checklist.py` — `parse_checklist_response()`
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` repair logic
