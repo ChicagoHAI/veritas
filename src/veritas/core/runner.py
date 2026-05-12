@@ -135,14 +135,20 @@ class ReplicationRunner:
                     raise
 
             # evaluate
-            if state.is_stage_completed('evaluate'):
+            already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
+            missing_categories = [name for name in self.config.evaluations if name not in already_done]
+
+            if state.is_stage_completed('evaluate') and not missing_categories:
                 print("[OK] evaluate: skipped (already completed)")
                 results = self._load_evaluate_artifacts()
             else:
-                already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
-                # don't reset outputs.completed_categories if we're resuming a half-done evaluate
                 if state.get_stage_status('evaluate') != 'in_progress':
                     state.start_stage('evaluate')
+                    # start_stage zeroes the outputs dict; restore the categories
+                    # completed in prior runs so _evaluate_with_resume can skip
+                    # them rather than re-running.
+                    if already_done:
+                        state.update_stage_outputs('evaluate', {'completed_categories': already_done})
                 try:
                     results = self._evaluate_with_resume(
                         checklist, evidence, plan_path, fix_assessment,
