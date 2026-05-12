@@ -11,7 +11,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 STATE_DIR = ".veritas"
@@ -33,6 +33,7 @@ class PipelineState:
             self.state = {
                 'created_at': datetime.now().isoformat(),
                 'inputs': None,
+                'config': None,
                 'stages': {},
                 'current_stage': None,
                 'completed': False,
@@ -100,6 +101,23 @@ class PipelineState:
         self.state['completed_at'] = datetime.now().isoformat()
         self._save()
 
+    def invalidate_stages(self, stages: List[str]) -> None:
+        """Drop named stages from state so they re-run on the next invocation.
+
+        Also clears the top-level ``completed`` flag if any stage was invalidated,
+        since the run is no longer fully done.
+        """
+        invalidated = False
+        for name in stages:
+            if name in self.state['stages']:
+                del self.state['stages'][name]
+                invalidated = True
+        if invalidated:
+            self.state['completed'] = False
+            self.state['completed_at'] = None
+        self.state['current_stage'] = None
+        self._save()
+
     # -- Stage queries -------------------------------------------------------
 
     def get_stage_status(self, name: str) -> Optional[str]:
@@ -119,7 +137,7 @@ class PipelineState:
         repo_path: Path,
         paper_path: Optional[Path],
     ) -> None:
-        """Stash inputs into ``state['inputs']`` on first run."""
+        """Stash inputs into ``state['inputs']``. Also called to refresh after invalidation."""
         self.state['inputs'] = {
             'repo_path': str(Path(repo_path).resolve()),
             'paper_path': str(Path(paper_path).resolve()) if paper_path else None,
@@ -127,38 +145,56 @@ class PipelineState:
         }
         self._save()
 
-    def validate_inputs(
+    def detect_input_changes(
         self,
         repo_path: Path,
         paper_path: Optional[Path],
-    ) -> bool:
-        """Return True if inputs match the recorded run; False (and print warning) otherwise.
+    ) -> List[str]:
+        """Return names of input fields that differ from the recorded run.
 
-        Does not abort — the caller decides what to do with a False result.
+        Returns an empty list when no inputs were recorded yet (first run) or
+        when everything matches. Field names are ``repo_path``, ``paper_path``,
+        and ``paper_sha256``; the caller handles user-facing messaging and
+        stage invalidation.
         """
         recorded = self.state.get('inputs')
         if recorded is None:
-            return True
+            return []
 
         current_repo = str(Path(repo_path).resolve())
         current_paper = str(Path(paper_path).resolve()) if paper_path else None
         current_sha = _sha256_of_file(paper_path) if paper_path else None
 
-        mismatches = []
+        changed = []
         if recorded.get('repo_path') != current_repo:
-            mismatches.append(f"repo_path: {recorded.get('repo_path')}  ->  {current_repo}")
+            changed.append('repo_path')
         if recorded.get('paper_path') != current_paper:
-            mismatches.append(f"paper_path: {recorded.get('paper_path')}  ->  {current_paper}")
+            changed.append('paper_path')
         if recorded.get('paper_sha256') != current_sha:
-            mismatches.append(f"paper_sha256: {recorded.get('paper_sha256')}  ->  {current_sha}")
+            changed.append('paper_sha256')
+        return changed
 
-        if mismatches:
-            print("WARNING: inputs differ from previous run. Resuming anyway:")
-            for m in mismatches:
-                print(f"     {m}")
-            print("   Pass --restart if this isn't what you want.")
-            return False
-        return True
+    # -- Config fingerprinting ----------------------------------------------
+
+    def record_config(self, config: Dict[str, Any]) -> None:
+        """Stash a config fingerprint into ``state['config']``.
+
+        Also called to refresh after invalidation so the next resume compares
+        against the new baseline.
+        """
+        self.state['config'] = dict(config)
+        self._save()
+
+    def detect_config_changes(self, current: Dict[str, Any]) -> List[str]:
+        """Return names of config fields that differ from the recorded run.
+
+        Returns an empty list when no config was recorded yet (first run or
+        a state file that predates config tracking) or when everything matches.
+        Only fields present in ``current`` are compared; recorded-only fields
+        are ignored so the schema can grow without breaking older states.
+        """
+        recorded = self.state.get('config') or {}
+        return [k for k in current if recorded.get(k) != current.get(k)]
 
 
 def _sha256_of_file(path: Optional[Path]) -> Optional[str]:
