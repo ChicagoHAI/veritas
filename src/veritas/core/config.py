@@ -28,10 +28,15 @@ EVALUATE_SUBDIR = "evaluate"
 REPORT_SUBDIR = "report"
 PROMPTS_SUBDIR = "prompts"
 
+# New subdirectories introduced by the claim-verification pipeline.
+ASSESS_SUBDIR = "assess"
+VERIFY_SUBDIR = "verify"
+
 OUTPUT_SUBDIRS = (
     ANALYZE_SUBDIR,
     REPLICATION_SUBDIR,
-    EVALUATE_SUBDIR,
+    ASSESS_SUBDIR,
+    VERIFY_SUBDIR,
     REPORT_SUBDIR,
     PROMPTS_SUBDIR,
 )
@@ -44,6 +49,15 @@ EXTRACTED_PLAN_FILE = "extracted_plan.md"
 FIX_SEVERITY_FILE = "fix_severity.json"
 REPORT_MD_FILE = "replication_report.md"
 REPORT_PDF_FILE = "replication_report.pdf"
+
+# Claim-verification pipeline filenames.
+PAPER_CLAIMS_FILE = "paper_claims.json"
+VERDICTS_FILE = "verdicts.json"
+REPLICATION_SCORE_FILE = "replication_score.json"
+VERIFY_FILE_SUFFIX = ".json"  # per-claim files: ``verify/<claim_id>.json``
+
+PAPER_CLAIMS_TRANSCRIPT_FILE = "paper_claims_transcript.jsonl"
+VERIFY_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"  # ``verify/<claim_id>_transcript.jsonl``
 
 # Per-category evaluation files: ``<category>_evaluation.json`` under
 # ``<output>/evaluate/``. The suffix is also referenced in
@@ -86,6 +100,7 @@ class Config:
     analyze_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
     evaluate_timeout: Optional[int] = None
+    verify_timeout: Optional[int] = None
 
     # Runtime settings
     verbose: bool = False
@@ -144,6 +159,14 @@ class Config:
         return self.output_dir / EVALUATE_SUBDIR
 
     @property
+    def assess_dir(self) -> Path:
+        return self.output_dir / ASSESS_SUBDIR
+
+    @property
+    def verify_dir(self) -> Path:
+        return self.output_dir / VERIFY_SUBDIR
+
+    @property
     def report_dir(self) -> Path:
         return self.output_dir / REPORT_SUBDIR
 
@@ -167,7 +190,7 @@ class Config:
 
     @property
     def fix_severity_path(self) -> Path:
-        return self.evaluate_dir / FIX_SEVERITY_FILE
+        return self.assess_dir / FIX_SEVERITY_FILE
 
     @property
     def report_md_path(self) -> Path:
@@ -180,6 +203,30 @@ class Config:
     def evaluation_path(self, category: str) -> Path:
         """Path to the per-category evaluation JSON, e.g. ``code_evaluation.json``."""
         return self.evaluate_dir / f"{category}{EVALUATION_FILE_SUFFIX}"
+
+    @property
+    def paper_claims_path(self) -> Path:
+        return self.analyze_dir / PAPER_CLAIMS_FILE
+
+    @property
+    def verdicts_path(self) -> Path:
+        return self.verify_dir / VERDICTS_FILE
+
+    @property
+    def replication_score_path(self) -> Path:
+        return self.verify_dir / REPLICATION_SCORE_FILE
+
+    def verify_path(self, claim_id: str) -> Path:
+        """Path to the per-claim verdict JSON, e.g. ``verify/C1.json``."""
+        return self.verify_dir / f"{claim_id}{VERIFY_FILE_SUFFIX}"
+
+    def verify_transcript_path(self, claim_id: str) -> Path:
+        """Path to the per-claim verifier transcript, e.g. ``verify/C1_transcript.jsonl``."""
+        return self.verify_dir / f"{claim_id}{VERIFY_TRANSCRIPT_FILE_SUFFIX}"
+
+    @property
+    def paper_claims_transcript_path(self) -> Path:
+        return self.analyze_dir / PAPER_CLAIMS_TRANSCRIPT_FILE
 
     # -- Transcript files (JSONL streamed from provider invocations) --------
 
@@ -197,7 +244,7 @@ class Config:
 
     @property
     def fix_severity_transcript_path(self) -> Path:
-        return self.evaluate_dir / FIX_SEVERITY_TRANSCRIPT_FILE
+        return self.assess_dir / FIX_SEVERITY_TRANSCRIPT_FILE
 
     def evaluation_transcript_path(self, category: str) -> Path:
         """Path to the per-category evaluation transcript, e.g. ``code_transcript.jsonl``."""
