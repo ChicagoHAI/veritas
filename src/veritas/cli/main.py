@@ -64,11 +64,6 @@ def evaluate(
         "--replicate-timeout",
         help="Timeout in seconds for the replicate phase (per LLM call). Default: no timeout.",
     ),
-    evaluate_timeout: Optional[int] = typer.Option(
-        None,
-        "--evaluate-timeout",
-        help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
-    ),
     verify_timeout: Optional[int] = typer.Option(
         None,
         "--verify-timeout",
@@ -114,7 +109,6 @@ def evaluate(
         generate_pdf=generate_pdf,
         analyze_timeout=analyze_timeout,
         replicate_timeout=replicate_timeout,
-        evaluate_timeout=evaluate_timeout,
         verify_timeout=verify_timeout,
         mode=mode,
     )

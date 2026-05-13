@@ -4,14 +4,12 @@ import json
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
 from veritas.core.pipeline_state import PipelineState
-from veritas.core.checklist import parse_checklist_response
-from veritas.core.models.checklist import Checklist
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
@@ -65,17 +63,6 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
     'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
-
-
-@dataclass
-class EvaluationResult:
-    """Result of a single evaluation."""
-    name: str
-    success: bool
-    items: Optional[List[Dict[str, str]]] = None
-    pass_rate: Optional[float] = None
-    error: Optional[str] = None
-    output_path: Optional[Path] = None
 
 
 @dataclass
@@ -536,7 +523,7 @@ class ReplicationRunner:
             prompt=prompt,
             working_dir=self.config.output_dir,
             log_path=log_path,
-            timeout=self.config.evaluate_timeout,
+            timeout=None,
         )
 
         if not success:
@@ -564,67 +551,6 @@ class ReplicationRunner:
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: Could not parse fix severity assessment: {e}")
             return FixSeverityAssessment.empty()
-
-    # -- Phase 3: Evaluate -------------------------------------------------
-
-    def _run_single_evaluation(
-        self,
-        eval_name: str,
-        checklist_items: List,
-        plan_path: Optional[Path],
-        evidence: Optional[ExecutionEvidence] = None,
-        fix_assessment: Optional[FixSeverityAssessment] = None,
-    ) -> EvaluationResult:
-        """Run scoring for one category's checklist items."""
-        try:
-            prompt = self.prompt_generator.generate_scoring_prompt(
-                category_name=eval_name,
-                checklist_items=checklist_items,
-                repo_path=self.config.repo_path,
-                plan_path=plan_path,
-                output_dir=self.config.output_dir,
-                evidence=evidence,
-                fix_assessment=fix_assessment,
-            )
-
-            prompt_path = self.config.prompts_dir / f"{eval_name}_prompt.txt"
-            prompt_path.write_text(prompt, encoding='utf-8')
-
-            output_json_path = self.config.evaluation_path(eval_name)
-            log_path = self.config.evaluation_transcript_path(eval_name)
-
-            success = self._invoke_provider(
-                prompt=prompt,
-                working_dir=self.config.repo_path,
-                log_path=log_path,
-                timeout=self.config.evaluate_timeout,
-            )
-
-            if not success:
-                return EvaluationResult(
-                    name=eval_name, success=False,
-                    error=f"Provider invocation failed (transcript: {log_path})",
-                )
-
-            if not output_json_path.exists():
-                return EvaluationResult(
-                    name=eval_name, success=False,
-                    error=f"Output file not produced: {output_json_path}",
-                )
-
-            with open(output_json_path, encoding='utf-8') as f:
-                data = json.load(f)
-
-            return EvaluationResult(
-                name=eval_name,
-                success=True,
-                items=data.get("items", []),
-                pass_rate=data.get("pass_rate"),
-                output_path=output_json_path,
-            )
-
-        except Exception as e:
-            return EvaluationResult(name=eval_name, success=False, error=str(e))
 
     # -- Phase 4: Verify ---------------------------------------------------
 
@@ -903,77 +829,6 @@ class ReplicationRunner:
             return FixSeverityAssessment.empty()
         with open(self.config.fix_severity_path, encoding='utf-8') as f:
             return FixSeverityAssessment.from_dict(json.load(f))
-
-    def _load_evaluation_result(self, eval_name: str) -> EvaluationResult:
-        """Read a single per-category evaluation JSON and build an EvaluationResult."""
-        output_path = self.config.evaluation_path(eval_name)
-        if not output_path.exists():
-            return EvaluationResult(
-                name=eval_name, success=False,
-                error=f"Output file missing on resume: {output_path.name}",
-            )
-        with open(output_path, encoding='utf-8') as f:
-            data = json.load(f)
-        return EvaluationResult(
-            name=eval_name,
-            success=True,
-            items=data.get("items", []),
-            pass_rate=data.get("pass_rate"),
-            output_path=output_path,
-        )
-
-    def _load_evaluate_artifacts(self) -> List[EvaluationResult]:
-        """Load per-category evaluation results from disk for a skipped evaluate phase."""
-        return [self._load_evaluation_result(name) for name in self.config.evaluations]
-
-    def _evaluate_with_resume(
-        self,
-        checklist: Checklist,
-        evidence: Optional[ExecutionEvidence],
-        plan_path: Optional[Path],
-        fix_assessment: Optional[FixSeverityAssessment],
-        state: PipelineState,
-        already_done: List[str],
-    ) -> List[EvaluationResult]:
-        """Score checklist items per category, skipping those already completed in a previous run.
-
-        Records each newly-completed category in the state's ``outputs.completed_categories``
-        list as it goes, so an interruption mid-loop can be resumed at the right point.
-        """
-        results: List[EvaluationResult] = []
-        completed = list(already_done)
-
-        for eval_name in self.config.evaluations:
-            if eval_name in already_done:
-                print(f"  Skipping {eval_name} (already complete from previous run)")
-                results.append(self._load_evaluation_result(eval_name))
-                continue
-
-            print(f"Running {eval_name} evaluation...")
-            items = checklist.get_items_by_category(eval_name)
-            if not items:
-                print(f"  Skipping {eval_name} - no checklist items generated for this category")
-                results.append(EvaluationResult(
-                    name=eval_name, success=True, items=[], pass_rate=None,
-                ))
-                completed.append(eval_name)
-                state.update_stage_outputs('evaluate', {'completed_categories': completed})
-                continue
-
-            result = self._run_single_evaluation(
-                eval_name, items, plan_path, evidence, fix_assessment,
-            )
-            results.append(result)
-
-            if result.success:
-                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
-                print(f"  {eval_name} completed - {pct}")
-                completed.append(eval_name)
-                state.update_stage_outputs('evaluate', {'completed_categories': completed})
-            else:
-                print(f"  {eval_name} failed: {result.error}")
-
-        return results
 
     # -- Provider Invocation -----------------------------------------------
 

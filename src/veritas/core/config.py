@@ -1,8 +1,8 @@
 """Configuration for Veritas."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 
 # All valid AI providers
@@ -11,20 +11,10 @@ VALID_PROVIDERS = ["claude", "codex", "gemini"]
 # Valid replication scope modes
 VALID_MODES = ["main", "full"]
 
-# All available evaluation types
-ALL_EVALUATIONS = [
-    "code",           # Code quality evaluation
-    "consistency",    # Consistency between docs, code, and claims
-    "generalization", # Generalization testing
-    "replication",    # Replicability assessment
-    "instruction_following",    # Instruction following (for AI-generated work)
-]
-
 
 # Output directory structure — each phase writes into its own subdir.
 ANALYZE_SUBDIR = "analyze"
 REPLICATION_SUBDIR = "replication"
-EVALUATE_SUBDIR = "evaluate"
 REPORT_SUBDIR = "report"
 PROMPTS_SUBDIR = "prompts"
 
@@ -43,7 +33,6 @@ OUTPUT_SUBDIRS = (
 
 
 # Well-known output filenames produced by the pipeline.
-CHECKLIST_FILE = "checklist.json"
 REPLICATION_PLAN_FILE = "replication_plan.json"
 EXTRACTED_PLAN_FILE = "extracted_plan.md"
 FIX_SEVERITY_FILE = "fix_severity.json"
@@ -59,20 +48,13 @@ VERIFY_FILE_SUFFIX = ".json"  # per-claim files: ``verify/<claim_id>.json``
 PAPER_CLAIMS_TRANSCRIPT_FILE = "paper_claims_transcript.jsonl"
 VERIFY_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"  # ``verify/<claim_id>_transcript.jsonl``
 
-# Per-category evaluation files: ``<category>_evaluation.json`` under
-# ``<output>/evaluate/``. The suffix is also referenced in
-# ``templates/evaluation/scoring.txt``.
-EVALUATION_FILE_SUFFIX = "_evaluation.json"
-
 # Per-phase JSONL transcripts of the agent's streaming output. Each provider
 # invocation writes its event stream to one of these files; on a parse-repair
 # re-invocation, events are appended to the same file so the failed attempt
 # and the repair attempt land in one place.
-CHECKLIST_TRANSCRIPT_FILE = "checklist_transcript.jsonl"
 REPLICATION_PLAN_TRANSCRIPT_FILE = "replication_plan_transcript.jsonl"
 REPLICATION_TRANSCRIPT_FILE = "replication_transcript.jsonl"
 FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
-EVALUATION_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"
 
 
 @dataclass
@@ -89,7 +71,6 @@ class Config:
     generate_pdf: bool = True
 
     # Evaluation settings
-    evaluations: Optional[List[str]] = None
     provider: str = "claude"
     mode: str = "main"
 
@@ -99,7 +80,6 @@ class Config:
     # resume mechanism to recover the work.
     analyze_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
-    evaluate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
 
     # Runtime settings
@@ -116,15 +96,6 @@ class Config:
             self.output_dir = Path(self.output_dir)
         else:
             self.output_dir = self.repo_path / "evaluation"
-
-        # Default to all evaluations
-        if self.evaluations is None:
-            self.evaluations = ALL_EVALUATIONS.copy()
-
-        # Validate evaluations
-        for e in self.evaluations:
-            if e not in ALL_EVALUATIONS:
-                raise ValueError(f"Unknown evaluation type: {e}. Valid options: {ALL_EVALUATIONS}")
 
         # Validate provider
         if self.provider.lower() not in VALID_PROVIDERS:
@@ -155,10 +126,6 @@ class Config:
         return self.output_dir / REPLICATION_SUBDIR
 
     @property
-    def evaluate_dir(self) -> Path:
-        return self.output_dir / EVALUATE_SUBDIR
-
-    @property
     def assess_dir(self) -> Path:
         return self.output_dir / ASSESS_SUBDIR
 
@@ -175,10 +142,6 @@ class Config:
         return self.output_dir / PROMPTS_SUBDIR
 
     # -- Well-known output files --------------------------------------------
-
-    @property
-    def checklist_path(self) -> Path:
-        return self.analyze_dir / CHECKLIST_FILE
 
     @property
     def replication_plan_path(self) -> Path:
@@ -199,10 +162,6 @@ class Config:
     @property
     def report_pdf_path(self) -> Path:
         return self.report_dir / REPORT_PDF_FILE
-
-    def evaluation_path(self, category: str) -> Path:
-        """Path to the per-category evaluation JSON, e.g. ``code_evaluation.json``."""
-        return self.evaluate_dir / f"{category}{EVALUATION_FILE_SUFFIX}"
 
     @property
     def paper_claims_path(self) -> Path:
@@ -231,10 +190,6 @@ class Config:
     # -- Transcript files (JSONL streamed from provider invocations) --------
 
     @property
-    def checklist_transcript_path(self) -> Path:
-        return self.analyze_dir / CHECKLIST_TRANSCRIPT_FILE
-
-    @property
     def replication_plan_transcript_path(self) -> Path:
         return self.analyze_dir / REPLICATION_PLAN_TRANSCRIPT_FILE
 
@@ -245,7 +200,3 @@ class Config:
     @property
     def fix_severity_transcript_path(self) -> Path:
         return self.assess_dir / FIX_SEVERITY_TRANSCRIPT_FILE
-
-    def evaluation_transcript_path(self, category: str) -> Path:
-        """Path to the per-category evaluation transcript, e.g. ``code_transcript.jsonl``."""
-        return self.evaluate_dir / f"{category}{EVALUATION_TRANSCRIPT_FILE_SUFFIX}"
