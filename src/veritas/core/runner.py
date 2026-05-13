@@ -57,13 +57,13 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 # rules can be added later (e.g. an evaluation-only config knob).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'mode':          ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -82,7 +82,8 @@ class EvaluationResult:
 class RunResult:
     """Result of the full replication run."""
     success: bool
-    evaluations: Optional[List[EvaluationResult]] = None
+    verdicts: Optional[List[ClaimVerdict]] = None
+    score: Optional[ReplicationScore] = None
     report_path: Optional[Path] = None
     pdf_path: Optional[Path] = None
     error: Optional[str] = None
@@ -154,37 +155,39 @@ class ReplicationRunner:
                     state.complete_stage('assess_fixes', success=False)
                     raise
 
-            # evaluate
-            already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
-            missing_categories = [name for name in self.config.evaluations if name not in already_done]
+            # verify
+            already_done = state.get_stage_outputs('verify').get('completed_claims', [])
+            missing_claims = [c.id for c in claims.claims if c.id not in already_done]
 
-            if state.is_stage_completed('evaluate') and not missing_categories:
-                print("[OK] evaluate: skipped (already completed)")
-                results = self._load_evaluate_artifacts()
+            if state.is_stage_completed('verify') and not missing_claims:
+                print("[OK] verify: skipped (already completed)")
+                verdicts = self._load_verify_artifacts(claims)
             else:
-                if state.get_stage_status('evaluate') != 'in_progress':
-                    state.start_stage('evaluate')
-                    # start_stage zeroes the outputs dict; restore the categories
-                    # completed in prior runs so _evaluate_with_resume can skip
-                    # them rather than re-running.
+                if state.get_stage_status('verify') != 'in_progress':
+                    state.start_stage('verify')
                     if already_done:
-                        state.update_stage_outputs('evaluate', {'completed_categories': already_done})
+                        state.update_stage_outputs('verify', {'completed_claims': already_done})
                 try:
-                    results = self._evaluate_with_resume(
-                        checklist, evidence, plan_path, fix_assessment,
+                    verdicts = self._verify_with_resume(
+                        claims, evidence, replication_plan, fix_assessment,
                         state, already_done=already_done,
                     )
-                    state.complete_stage('evaluate', success=True)
+                    state.complete_stage('verify', success=True)
                 except Exception:
-                    state.complete_stage('evaluate', success=False)
+                    state.complete_stage('verify', success=False)
                     raise
 
-            report_path, pdf_path = self._report(results, evidence, fix_assessment)
+            score = self._score_after_verify(claims, verdicts)
+
+            report_path, pdf_path = self._report(
+                claims, verdicts, score, evidence, fix_assessment,
+            )
             state.mark_completed()
 
             return RunResult(
                 success=True,
-                evaluations=results,
+                verdicts=verdicts,
+                score=score,
                 report_path=report_path,
                 pdf_path=pdf_path,
             )
@@ -623,12 +626,190 @@ class ReplicationRunner:
         except Exception as e:
             return EvaluationResult(name=eval_name, success=False, error=str(e))
 
+    # -- Phase 4: Verify ---------------------------------------------------
+
+    def _run_single_verify(
+        self,
+        claim: PaperClaim,
+        evidence: Optional[ExecutionEvidence],
+        replication_plan: Optional[ReplicationPlan],
+        fix_assessment: Optional[FixSeverityAssessment],
+    ) -> Optional[ClaimVerdict]:
+        """Verify one claim against replication evidence.
+
+        Returns the parsed verdict on success, ``None`` on failure (which
+        leaves ``verify/{claim_id}.json`` absent so the next run re-attempts).
+        """
+        plan_step_ids: List[int] = []
+        if replication_plan is not None:
+            plan_step_ids = [
+                s.id for s in replication_plan.steps if claim.id in s.verifies
+            ]
+
+        codebase_dir = self.config.replication_dir / "codebase"
+        codebase_diff = self.config.replication_dir / "codebase.diff"
+        replication_log = self.config.replication_dir / "replication_log.json"
+        fix_severity_file = self.config.fix_severity_path
+
+        prompt = self.prompt_generator.generate_verify_prompt(
+            claim=claim,
+            codebase_dir=codebase_dir,
+            codebase_diff_path=codebase_diff,
+            replication_log_path=replication_log,
+            fix_severity_path=fix_severity_file,
+            plan_step_ids=plan_step_ids,
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.prompts_dir / f"verify_{claim.id}_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        output_json_path = self.config.verify_path(claim.id)
+        log_path = self.config.verify_transcript_path(claim.id)
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.repo_path,
+            log_path=log_path,
+            timeout=self.config.verify_timeout,
+        )
+
+        if not success:
+            print(f"  Warning: verifier invocation failed for {claim.id} (transcript: {log_path})")
+            return None
+
+        if not output_json_path.exists():
+            print(f"  Warning: verifier did not write {output_json_path}")
+            return None
+
+        response_text = output_json_path.read_text(encoding='utf-8').strip()
+        if not response_text:
+            print(f"  Warning: {output_json_path} is empty")
+            return None
+
+        try:
+            raw = _extract_json(response_text)
+            data = json.loads(raw)
+            verdict = ClaimVerdict.from_dict(data)
+        except (ValueError, json.JSONDecodeError, KeyError) as e:
+            print(f"  Warning: could not parse verdict for {claim.id}: {e}")
+            return None
+
+        output_json_path.write_text(
+            json.dumps(verdict.to_dict(), indent=2), encoding='utf-8'
+        )
+        return verdict
+
+    def _load_verdict(self, claim_id: str) -> Optional[ClaimVerdict]:
+        """Read a single per-claim verdict JSON. Returns None if missing or unparseable."""
+        output_path = self.config.verify_path(claim_id)
+        if not output_path.exists():
+            return None
+        try:
+            with open(output_path, encoding='utf-8') as f:
+                data = json.load(f)
+            return ClaimVerdict.from_dict(data)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            return None
+
+    def _load_verify_artifacts(self, claims: PaperClaims) -> List[ClaimVerdict]:
+        """Load all available per-claim verdicts from disk."""
+        verdicts: List[ClaimVerdict] = []
+        for c in claims.claims:
+            v = self._load_verdict(c.id)
+            if v is not None:
+                verdicts.append(v)
+        return verdicts
+
+    def _verify_with_resume(
+        self,
+        claims: PaperClaims,
+        evidence: Optional[ExecutionEvidence],
+        replication_plan: Optional[ReplicationPlan],
+        fix_assessment: Optional[FixSeverityAssessment],
+        state: PipelineState,
+        already_done: List[str],
+    ) -> List[ClaimVerdict]:
+        """Run verification per-claim with per-claim resume.
+
+        Resume primitive: ``verify/<claim_id>.json`` exists => skip. The
+        ``state.outputs.completed_claims`` list is updated as each verdict
+        lands on disk so the resume banner can summarize progress accurately.
+        """
+        results: List[ClaimVerdict] = []
+        completed = list(already_done)
+
+        for claim in claims.claims:
+            output_path = self.config.verify_path(claim.id)
+            if output_path.exists():
+                v = self._load_verdict(claim.id)
+                if v is not None:
+                    print(f"  Skipping {claim.id} (already verified)")
+                    results.append(v)
+                    if claim.id not in completed:
+                        completed.append(claim.id)
+                        state.update_stage_outputs('verify', {'completed_claims': completed})
+                    continue
+                print(f"  {claim.id} verdict file unparseable; re-attempting")
+                output_path.unlink()
+
+            print(f"Verifying {claim.id} ({claim.tier}/{claim.type})...")
+            verdict = self._run_single_verify(
+                claim, evidence, replication_plan, fix_assessment,
+            )
+
+            if verdict is not None:
+                results.append(verdict)
+                completed.append(claim.id)
+                state.update_stage_outputs('verify', {'completed_claims': completed})
+                print(f"  {claim.id}: {verdict.status}")
+            else:
+                print(f"  {claim.id}: verifier failed (no verdict written; retry on next run)")
+
+        return results
+
+    def _score_after_verify(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+    ) -> ReplicationScore:
+        """Compute the Replication Score and persist the aggregate verdict files."""
+        score = compute_replication_score(claims, verdicts)
+
+        self.config.verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config.verdicts_path.write_text(
+            json.dumps([v.to_dict() for v in verdicts], indent=2),
+            encoding='utf-8',
+        )
+        self.config.replication_score_path.write_text(
+            json.dumps(score.to_dict(), indent=2),
+            encoding='utf-8',
+        )
+
+        if score.score is not None:
+            print(f"Replication Score: {score.score * 100:.1f}%")
+        else:
+            print("Replication Score: not computable")
+        for flag in score.flags:
+            print(f"  Flag: {flag}")
+
+        return score
+
     # -- Report ------------------------------------------------------------
 
-    def _report(self, results, evidence=None, fix_assessment=None):
+    def _report(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+        score: ReplicationScore,
+        evidence=None,
+        fix_assessment=None,
+    ):
         """Generate the final report."""
         return self.report_generator.generate_from_results(
-            results=results,
+            claims=claims,
+            verdicts=verdicts,
+            score=score,
             config=self.config,
             output_dir=self.config.output_dir,
             generate_pdf=self.config.generate_pdf,
