@@ -121,7 +121,7 @@ class PromptGenerator:
         output_dir: Path,
     ) -> str:
         """Generate prompt for assessing fix severity."""
-        template = self.env.get_template("evaluation/fix_severity.md")
+        template = self.env.get_template("assess/fix_severity.md")
         context = {
             "fixes": fixes,
             "output_dir": str(output_dir.absolute()),
