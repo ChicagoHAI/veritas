@@ -14,6 +14,9 @@ from veritas.core.checklist import parse_checklist_response
 from veritas.core.models.checklist import Checklist
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
+from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
+from veritas.core.paper_claims import parse_paper_claims_response
+from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     parse_replication_plan_response,
     gather_evidence,
@@ -115,11 +118,11 @@ class ReplicationRunner:
             # analyze
             if state.is_stage_completed('analyze'):
                 print("[OK] analyze: skipped (already completed)")
-                checklist, replication_plan = self._load_analyze_artifacts()
+                claims, replication_plan = self._load_analyze_artifacts()
             else:
                 state.start_stage('analyze')
                 try:
-                    checklist, replication_plan = self._analyze()
+                    claims, replication_plan = self._analyze()
                     state.complete_stage('analyze', success=True)
                 except Exception:
                     state.complete_stage('analyze', success=False)
@@ -222,27 +225,36 @@ class ReplicationRunner:
 
     # -- Phase 1: Analyze --------------------------------------------------
 
-    def _analyze(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
-        """Phase 1: Generate checklist and replication plan."""
-        checklist = self._generate_checklist()
-        replication_plan = self._generate_replication_plan(checklist)
-        return checklist, replication_plan
+    def _analyze(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
+        """Phase 1: Extract paper claims, then generate a claim-aware replication plan."""
+        claims = self._generate_paper_claims()
+        replication_plan = self._generate_replication_plan(claims)
+        if replication_plan is not None:
+            self._validate_plan_claim_refs(replication_plan, claims)
+        return claims, replication_plan
 
-    def _generate_checklist(self) -> Checklist:
-        """Generate a personalized checklist."""
-        print("Generating personalized checklist...")
+    def _generate_paper_claims(self) -> PaperClaims:
+        """Extract structured claims from the paper."""
+        if not self.config.has_paper:
+            raise RuntimeError(
+                "Paper claims extraction requires a paper (--paper). "
+                "Paper-less mode is not supported in this version."
+            )
 
-        prompt = self.prompt_generator.generate_checklist_prompt(
+        print("Extracting paper claims...")
+
+        prompt = self.prompt_generator.generate_paper_claims_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_path=self.config.paper_path if self.config.has_paper else None,
+            paper_path=self.config.paper_path,
+            mode=self.config.mode,
         )
 
-        prompt_path = self.config.prompts_dir / "checklist_generation_prompt.txt"
+        prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_json_path = self.config.checklist_path
-        log_path = self.config.checklist_transcript_path
+        output_json_path = self.config.paper_claims_path
+        log_path = self.config.paper_claims_transcript_path
 
         success = self._invoke_provider(
             prompt=prompt,
@@ -253,54 +265,60 @@ class ReplicationRunner:
 
         if not success:
             raise RuntimeError(
-                f"Checklist generation failed: provider invocation did not succeed (transcript: {log_path})"
+                f"Paper claims extraction failed: provider invocation did not succeed (transcript: {log_path})"
             )
 
         if not output_json_path.exists():
             raise RuntimeError(
-                f"Checklist generation failed: agent did not write {output_json_path}"
+                f"Paper claims extraction failed: agent did not write {output_json_path}"
             )
 
         response_text = output_json_path.read_text(encoding='utf-8').strip()
         if not response_text:
             raise RuntimeError(
-                f"Checklist generation failed: {output_json_path} is empty"
+                f"Paper claims extraction failed: {output_json_path} is empty"
             )
 
         try:
-            checklist = parse_checklist_response(response_text)
+            claims = parse_paper_claims_response(response_text)
         except ValueError as e:
-            print(f"  Warning: Could not parse checklist: {e}")
+            print(f"  Warning: Could not parse paper claims: {e}")
             print("  Retrying with repair prompt...")
-            checklist = self._repair_json_response(
+            claims = self._repair_json_response(
                 original_prompt=prompt,
                 broken_output=response_text,
                 output_path=output_json_path,
                 log_path=log_path,
-                parser=parse_checklist_response,
+                parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
             )
 
-        if checklist is None:
+        if claims is None:
             raise RuntimeError(
-                "Checklist generation failed: could not parse response even after repair"
+                "Paper claims extraction failed: could not parse response even after repair"
             )
 
         output_json_path.write_text(
-            json.dumps(checklist.to_dict(), indent=2), encoding='utf-8'
+            json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
 
-        print(f"  Generated {len(checklist.items)} checklist items across {len(checklist.categories)} categories")
-        return checklist
+        n_headline = len(claims.by_tier("headline"))
+        n_supporting = len(claims.by_tier("supporting"))
+        n_setup = len(claims.by_tier("setup"))
+        print(
+            f"  Extracted {len(claims.claims)} claims "
+            f"({n_headline} headline, {n_supporting} supporting, {n_setup} setup)"
+        )
+        return claims
 
-    def _generate_replication_plan(self, checklist: Checklist) -> Optional[ReplicationPlan]:
-        """Generate a replication plan based on the checklist."""
+    def _generate_replication_plan(self, claims: PaperClaims) -> Optional[ReplicationPlan]:
+        """Generate a replication plan whose steps reference claim IDs."""
         print("Generating replication plan...")
 
         prompt = self.prompt_generator.generate_replication_plan_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            checklist_items=checklist.items,
+            claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
         )
@@ -353,6 +371,31 @@ class ReplicationRunner:
         )
         print(f"  Generated replication plan with {len(plan.steps)} steps")
         return plan
+
+    def _validate_plan_claim_refs(
+        self,
+        plan: ReplicationPlan,
+        claims: PaperClaims,
+    ) -> None:
+        """Warn if plan steps reference claim IDs that don't exist in the claims set.
+
+        Non-fatal — a misreferenced ID just means the verifier won't get the
+        step-id hint for that claim. Surfaced so the user knows the analyze
+        phase's two outputs disagreed.
+        """
+        valid_ids = claims.claim_ids()
+        unknown_refs: Dict[int, List[str]] = {}
+        for step in plan.steps:
+            bad = [cid for cid in step.verifies if cid not in valid_ids]
+            if bad:
+                unknown_refs[step.id] = bad
+
+        if unknown_refs:
+            print(
+                "  Warning: replication plan references claim IDs that don't exist:"
+            )
+            for step_id, bad in unknown_refs.items():
+                print(f"    Step {step_id}: {', '.join(bad)}")
 
     def _repair_json_response(
         self,
@@ -662,16 +705,16 @@ class ReplicationRunner:
         if config_changes:
             state.record_config(current_config)
 
-    def _load_analyze_artifacts(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
-        """Load checklist and replication plan from disk for a skipped analyze phase."""
-        with open(self.config.checklist_path, encoding='utf-8') as f:
-            checklist = Checklist.from_dict(json.load(f))
+    def _load_analyze_artifacts(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
+        """Load paper claims and replication plan from disk for a skipped analyze phase."""
+        with open(self.config.paper_claims_path, encoding='utf-8') as f:
+            claims = PaperClaims.from_dict(json.load(f))
 
         replication_plan: Optional[ReplicationPlan] = None
         if self.config.replication_plan_path.exists():
             with open(self.config.replication_plan_path, encoding='utf-8') as f:
                 replication_plan = ReplicationPlan.from_dict(json.load(f))
-        return checklist, replication_plan
+        return claims, replication_plan
 
     def _load_fix_assessment(self) -> FixSeverityAssessment:
         """Load fix severity assessment from disk (or empty if no fixes were applied)."""

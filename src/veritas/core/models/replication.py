@@ -12,6 +12,7 @@ class ReplicationStep:
     description: str
     command_hint: str
     expected_outcome: str
+    verifies: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -19,6 +20,7 @@ class ReplicationStep:
             "description": self.description,
             "command_hint": self.command_hint,
             "expected_outcome": self.expected_outcome,
+            "verifies": list(self.verifies),
         }
 
     @classmethod
@@ -28,6 +30,7 @@ class ReplicationStep:
             description=data["description"],
             command_hint=data.get("command_hint", ""),
             expected_outcome=data.get("expected_outcome", ""),
+            verifies=list(data.get("verifies", [])),
         )
 
 

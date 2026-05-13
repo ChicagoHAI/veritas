@@ -10,6 +10,7 @@ from veritas.core.models.checklist import ChecklistItem
 
 if TYPE_CHECKING:
     from veritas.core.models.replication import ExecutionEvidence, ReplicationPlan
+    from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict
 
 
 CATEGORY_DISPLAY_NAMES = {
@@ -53,6 +54,23 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_paper_claims_prompt(
+        self,
+        repo_path: Path,
+        output_dir: Path,
+        paper_path: Path,
+        mode: str = "main",
+    ) -> str:
+        """Generate prompt for paper-claim extraction."""
+        template = self.env.get_template("analyze/paper_claims_extraction.md")
+        context = {
+            "repo_path": str(repo_path.absolute()),
+            "output_dir": str(output_dir.absolute()),
+            "paper_path": str(paper_path),
+            "mode": mode,
+        }
+        return template.render(**context)
+
     def generate_scoring_prompt(
         self,
         category_name: str,
@@ -81,22 +99,45 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_verify_prompt(
+        self,
+        claim: "PaperClaim",
+        codebase_dir: Path,
+        codebase_diff_path: Path,
+        replication_log_path: Path,
+        fix_severity_path: Path,
+        plan_step_ids: List[int],
+        output_dir: Path,
+    ) -> str:
+        """Generate per-claim verifier prompt."""
+        template = self.env.get_template("verify/single_claim.md")
+        context = {
+            "claim": claim,
+            "codebase_dir": str(codebase_dir.absolute()),
+            "codebase_diff_path": str(codebase_diff_path.absolute()),
+            "replication_log_path": str(replication_log_path.absolute()),
+            "fix_severity_path": str(fix_severity_path.absolute()),
+            "plan_step_ids": plan_step_ids,
+            "output_dir": str(output_dir.absolute()),
+        }
+        return template.render(**context)
+
     def generate_replication_plan_prompt(
         self,
         repo_path: Path,
         output_dir: Path,
-        checklist_items: List[ChecklistItem],
+        claims: "PaperClaims",
         paper_path: Optional[Path] = None,
         mode: str = "main",
     ) -> str:
-        """Generate prompt for creating a replication plan."""
+        """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
         context = {
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
-            "checklist_items": checklist_items,
+            "claims": claims,
             "mode": mode,
         }
         return template.render(**context)
