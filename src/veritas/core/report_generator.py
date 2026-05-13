@@ -1,33 +1,49 @@
-"""Generate replication reports from evaluation results."""
+"""Generate replication reports from per-claim verdicts and Replication Score."""
 
 import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from veritas.core.config import (
     Config,
-    ALL_EVALUATIONS,
-    EVALUATE_SUBDIR,
-    EVALUATION_FILE_SUFFIX,
     REPORT_SUBDIR,
     REPORT_MD_FILE,
     REPORT_PDF_FILE,
+    VERIFY_SUBDIR,
+    VERDICTS_FILE,
+    REPLICATION_SCORE_FILE,
+    PAPER_CLAIMS_FILE,
+    ANALYZE_SUBDIR,
+)
+from veritas.core.models.paper_claims import (
+    ClaimVerdict,
+    PaperClaim,
+    PaperClaims,
+    ReplicationScore,
 )
 
 
-class ReportGenerator:
-    """Generates comprehensive replication reports."""
+# Header label for each tier in the report.
+TIER_DISPLAY = {
+    "headline": "Headline",
+    "supporting": "Supporting",
+    "setup": "Setup",
+}
 
-    # Display names for each evaluation category
-    EVAL_DISPLAY_NAMES = {
-        "code": "Code Quality",
-        "consistency": "Consistency",
-        "generalization": "Generalization",
-        "replication": "Replicability",
-        "instruction_following": "Instruction Following",
-    }
+# Display label for each verdict status.
+STATUS_DISPLAY = {
+    "match": "match",
+    "partial": "partial",
+    "no_match": "no match",
+    "not_attempted": "not attempted",
+    "not_applicable": "n/a",
+}
+
+
+class ReportGenerator:
+    """Generate the Replication Report."""
 
     def generate(
         self,
@@ -36,28 +52,27 @@ class ReportGenerator:
         generate_pdf: bool = True,
         generate_md: bool = True,
     ) -> Tuple[Optional[Path], Optional[Path]]:
-        """
-        Generate a replication report from evaluation JSON files.
+        """Re-render the report from on-disk artifacts.
 
-        Args:
-            evaluation_dir: Directory containing evaluation JSON files
-            output_path: Output path for the report
-            generate_pdf: Whether to generate PDF
-            generate_md: Whether to generate markdown
-
-        Returns:
-            Tuple of (markdown_path, pdf_path)
+        Reads paper_claims.json, verdicts.json, replication_score.json from
+        the output directory and regenerates the markdown + PDF.
         """
-        results = self._collect_results(evaluation_dir)
-        md_content = self._generate_markdown_report(results)
+        claims = self._load_claims(evaluation_dir)
+        verdicts = self._load_verdicts(evaluation_dir)
+        score = self._load_score(evaluation_dir)
+
+        md_content = self._render(
+            claims=claims, verdicts=verdicts, score=score,
+            evidence=None, fix_assessment=None,
+        )
 
         if output_path is None:
             output_path = evaluation_dir / REPORT_SUBDIR / REPORT_MD_FILE
         else:
             output_path = Path(output_path)
 
-        md_path = None
-        pdf_path = None
+        md_path: Optional[Path] = None
+        pdf_path: Optional[Path] = None
 
         if generate_md:
             md_path = output_path.with_suffix(".md")
@@ -66,197 +81,171 @@ class ReportGenerator:
 
         if generate_pdf:
             pdf_path = output_path.with_suffix(".pdf")
-            report_dir = output_path.parent
-            report_dir.mkdir(parents=True, exist_ok=True)
-            self._generate_pdf(md_content, pdf_path, report_dir)
+            pdf_path.parent.mkdir(parents=True, exist_ok=True)
+            self._generate_pdf(md_content, pdf_path, pdf_path.parent)
 
         return md_path, pdf_path
 
     def generate_from_results(
         self,
-        results: List[Any],  # List[EvaluationResult]
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+        score: ReplicationScore,
         config: Config,
         output_dir: Path,
         generate_pdf: bool = True,
         evidence=None,
         fix_assessment=None,
     ) -> Tuple[Optional[Path], Optional[Path]]:
-        """
-        Generate report from EvaluationResult objects.
-
-        Args:
-            results: List of EvaluationResult objects
-            config: Configuration object
-            output_dir: Output directory
-            generate_pdf: Whether to generate PDF
-            evidence: Optional ExecutionEvidence from replication phase
-            fix_assessment: Optional FixSeverityAssessment from fix assessment phase
-
-        Returns:
-            Tuple of (markdown_path, pdf_path)
-        """
-        results_dict = {}
-        for result in results:
-            results_dict[result.name] = {
-                "success": result.success,
-                "items": result.items or [],
-                "pass_rate": result.pass_rate,
-                "error": result.error,
-            }
-
-        md_content = self._generate_markdown_report(results_dict, evidence=evidence, fix_assessment=fix_assessment)
+        """Render the report from live in-memory data."""
+        md_content = self._render(
+            claims=claims, verdicts=verdicts, score=score,
+            evidence=evidence, fix_assessment=fix_assessment,
+        )
 
         report_dir = output_dir / REPORT_SUBDIR
         md_path = report_dir / REPORT_MD_FILE
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md_content, encoding='utf-8')
 
-        pdf_path = None
+        pdf_path: Optional[Path] = None
         if generate_pdf:
             pdf_path = report_dir / REPORT_PDF_FILE
             self._generate_pdf(md_content, pdf_path, report_dir)
 
         return md_path, pdf_path
 
-    def _collect_results(self, evaluation_dir: Path) -> Dict[str, Any]:
-        """Collect all evaluation JSON results in the new items+pass_rate format."""
-        results = {}
+    # -- Loading helpers (used by the standalone ``generate``) --------------
 
-        for eval_name in ALL_EVALUATIONS:
-            filepath = evaluation_dir / EVALUATE_SUBDIR / f"{eval_name}{EVALUATION_FILE_SUFFIX}"
-            if filepath.exists():
-                try:
-                    with open(filepath, encoding='utf-8') as f:
-                        data = json.load(f)
-                    results[eval_name] = {
-                        "success": True,
-                        "items": data.get("items", []),
-                        "pass_rate": data.get("pass_rate"),
-                    }
-                except Exception as e:
-                    results[eval_name] = {"success": False, "error": str(e)}
+    def _load_claims(self, evaluation_dir: Path) -> Optional[PaperClaims]:
+        path = evaluation_dir / ANALYZE_SUBDIR / PAPER_CLAIMS_FILE
+        if not path.exists():
+            return None
+        with open(path, encoding='utf-8') as f:
+            return PaperClaims.from_dict(json.load(f))
 
-        return results
+    def _load_verdicts(self, evaluation_dir: Path) -> List[ClaimVerdict]:
+        path = evaluation_dir / VERIFY_SUBDIR / VERDICTS_FILE
+        if not path.exists():
+            return []
+        with open(path, encoding='utf-8') as f:
+            return [ClaimVerdict.from_dict(d) for d in json.load(f)]
 
-    def _generate_markdown_report(self, results: Dict[str, Any], evidence=None, fix_assessment=None) -> str:
-        """Generate the markdown report content."""
+    def _load_score(self, evaluation_dir: Path) -> Optional[ReplicationScore]:
+        path = evaluation_dir / VERIFY_SUBDIR / REPLICATION_SCORE_FILE
+        if not path.exists():
+            return None
+        with open(path, encoding='utf-8') as f:
+            return ReplicationScore.from_dict(json.load(f))
+
+    # -- Rendering ----------------------------------------------------------
+
+    def _render(
+        self,
+        claims: Optional[PaperClaims],
+        verdicts: List[ClaimVerdict],
+        score: Optional[ReplicationScore],
+        evidence=None,
+        fix_assessment=None,
+    ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report = f"# Replication Report\n\n**Generated:** {now}\n\n---\n\n"
 
-        # Calculate overall score from all items across categories
-        total_items = 0
-        passed_items = 0
-        for eval_data in results.values():
-            if eval_data.get("success") and eval_data.get("items"):
-                for item in eval_data["items"]:
-                    total_items += 1
-                    if item.get("answer", "").upper() == "YES":
-                        passed_items += 1
+        report += self._render_executive_summary(score)
 
-        overall_score = (passed_items / total_items * 100) if total_items > 0 else 0
+        if claims is not None and verdicts:
+            report += self._render_tier_breakdown(claims, verdicts, score)
+            report += self._render_per_claim_table(claims, verdicts)
 
-        # Build report
-        report = f"""# Replication Report
+        if score is not None and score.flags:
+            report += self._render_flags(score.flags)
 
-**Generated:** {now}
+        if evidence is not None:
+            report += self._render_replication_section(evidence)
 
----
+        if fix_assessment is not None and fix_assessment.total_fixes > 0:
+            report += self._render_fixes_section(fix_assessment)
 
-## Executive Summary
-
-**Overall Replicability Score: {overall_score:.1f}%** ({passed_items}/{total_items} checks passed)
-
-"""
-        # Score interpretation
-        if overall_score >= 80:
-            report += "**High Replicability** - The project demonstrates strong reproducibility practices.\n\n"
-        elif overall_score >= 60:
-            report += "**Moderate Replicability** - Some areas need improvement for full reproducibility.\n\n"
-        else:
-            report += "**Low Replicability** - Significant issues identified that hinder reproduction.\n\n"
-
-        # Replication evidence section (if available)
-        if evidence:
-            report += self._generate_replication_section(evidence)
-
-        if fix_assessment and fix_assessment.total_fixes > 0:
-            report += self._generate_fixes_section(fix_assessment)
-
-        # Summary table
-        report += "### Quick Summary\n\n"
-        report += "| Evaluation | Pass Rate | Passed | Total |\n"
-        report += "|------------|-----------|--------|-------|\n"
-
-        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
-            if eval_type in results:
-                data = results[eval_type]
-                if data.get("success") and data.get("items"):
-                    items = data["items"]
-                    total = len(items)
-                    passed = sum(1 for it in items if it.get("answer", "").upper() == "YES")
-                    pct = (passed / total * 100) if total > 0 else 0
-                    report += f"| {display_name} | {pct:.1f}% | {passed} | {total} |\n"
-                elif data.get("success"):
-                    report += f"| {display_name} | - | 0 | 0 |\n"
-                else:
-                    report += f"| {display_name} | FAIL | - | - |\n"
-
-        report += "\n---\n\n"
-
-        # Detailed sections using generic method
-        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
-            if eval_type in results:
-                report += self._generate_category_section(display_name, results[eval_type])
-
-        # Recommendations
-        report += self._generate_recommendations(results)
-
+        report += "\n---\n\n*Report generated by Veritas Replication Agent*\n"
         return report
 
-    def _generate_category_section(self, display_name: str, data: Dict) -> str:
-        """Generate a report section for a single evaluation category.
+    def _render_executive_summary(self, score: Optional[ReplicationScore]) -> str:
+        s = "## Executive Summary\n\n"
+        if score is None or score.score is None:
+            s += "**Replication Score: not computable** "
+            if score is not None:
+                s += f"({score.counted_claims}/{score.total_claims} claims counted)\n\n"
+            else:
+                s += "(no score data on disk)\n\n"
+            return s
+        s += f"**Replication Score: {score.score * 100:.1f}%** "
+        s += f"({score.counted_claims}/{score.total_claims} claims counted)\n\n"
+        return s
 
-        Args:
-            display_name: Human-readable category name (e.g. "Code Quality")
-            data: Dict with success, items, pass_rate, and optionally error
+    def _render_tier_breakdown(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+        score: Optional[ReplicationScore],
+    ) -> str:
+        s = "## Tier Breakdown\n\n"
+        s += "| Tier | Match | Partial | No match | Not attempted | n/a | Missing | Total |\n"
+        s += "|---|---|---|---|---|---|---|---|\n"
+        if score is None:
+            return s + "\n*(no score data on disk)*\n\n"
 
-        Returns:
-            Markdown string for the section
-        """
-        if not data.get("success"):
-            error = data.get("error", "Unknown error")
-            section = f"## {display_name}\n\n"
-            section += f"[ERROR] Evaluation failed: {error}\n\n"
-            return section
+        for tier in ("headline", "supporting", "setup"):
+            counts = getattr(score, tier)
+            total = sum(counts.values())
+            if total == 0:
+                continue
+            s += (
+                f"| {TIER_DISPLAY[tier]} "
+                f"| {counts.get('match', 0)} "
+                f"| {counts.get('partial', 0)} "
+                f"| {counts.get('no_match', 0)} "
+                f"| {counts.get('not_attempted', 0)} "
+                f"| {counts.get('not_applicable', 0)} "
+                f"| {counts.get('missing', 0)} "
+                f"| {total} |\n"
+            )
+        return s + "\n"
 
-        items = data.get("items", [])
-        if not items:
-            section = f"## {display_name}\n\n"
-            section += "No checklist items generated.\n\n"
-            return section
+    def _render_per_claim_table(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+    ) -> str:
+        verdict_by_id = {v.claim_id: v for v in verdicts}
+        s = "## Per-Claim Verdicts\n\n"
+        s += "| ID | Tier | Type | Status | Rationale | Evidence |\n"
+        s += "|---|---|---|---|---|---|\n"
+        for c in claims.claims:
+            v = verdict_by_id.get(c.id)
+            if v is None:
+                s += f"| {c.id} | {c.tier} | {c.type} | **missing** | (no verdict produced) | — |\n"
+                continue
+            rationale = (v.rationale or "").replace("|", "\\|").replace("\n", " ")
+            if len(rationale) > 180:
+                rationale = rationale[:177] + "..."
+            evidence_count = len(v.evidence_refs)
+            s += (
+                f"| {c.id} | {c.tier} | {c.type} "
+                f"| {STATUS_DISPLAY.get(v.status, v.status)} "
+                f"| {rationale} "
+                f"| {evidence_count} file(s) |\n"
+            )
+        return s + "\n"
 
-        total = len(items)
-        passed = sum(1 for it in items if it.get("answer", "").upper() == "YES")
-        pass_rate = data.get("pass_rate")
-        if pass_rate is not None:
-            pct = pass_rate * 100
-        else:
-            pct = (passed / total * 100) if total > 0 else 0
+    def _render_flags(self, flags: List[str]) -> str:
+        if not flags:
+            return ""
+        s = "## Flags\n\n"
+        for f in flags:
+            s += f"- {f}\n"
+        return s + "\n"
 
-        section = f"## {display_name} — {pct:.1f}% ({passed}/{total})\n\n"
-
-        for item in items:
-            question = item.get("question", "")
-            answer = item.get("answer", "").upper()
-            rationale = item.get("rationale", "")
-            tag = "[YES]" if answer == "YES" else "[NO]"
-            section += f"- {tag} {question}\n"
-            if answer != "YES" and rationale:
-                section += f"  - {rationale}\n"
-
-        section += "\n"
-        return section
-
-    def _generate_replication_section(self, evidence) -> str:
+    def _render_replication_section(self, evidence) -> str:
         """Generate the Replication Attempt section."""
         section = "## Replication Attempt\n\n"
 
@@ -308,7 +297,7 @@ class ReportGenerator:
         section += "\n"
         return section
 
-    def _generate_fixes_section(self, fix_assessment) -> str:
+    def _render_fixes_section(self, fix_assessment) -> str:
         """Generate the Fixes Applied section."""
         section = "## Fixes Applied\n\n"
         section += f"**Total fixes:** {fix_assessment.total_fixes} "
@@ -323,57 +312,6 @@ class ReportGenerator:
             for i, fix in enumerate(fix_assessment.fixes, 1):
                 section += f"| {i} | {fix.fix_description} | {fix.severity} | {fix.reproducibility_impact} |\n"
             section += "\n"
-
-        return section
-
-    def _generate_recommendations(self, results: Dict) -> str:
-        """Generate recommendations based on failed checklist items."""
-        section = "## Recommendations\n\n"
-
-        recommendations = []
-
-        for eval_type, display_name in self.EVAL_DISPLAY_NAMES.items():
-            if eval_type not in results:
-                continue
-            data = results[eval_type]
-            if not data.get("success"):
-                continue
-
-            items = data.get("items", [])
-            pass_rate = data.get("pass_rate")
-
-            # Identify categories with failures
-            failed_items = [it for it in items if it.get("answer", "").upper() != "YES"]
-            if not failed_items:
-                continue
-
-            if pass_rate is not None and pass_rate < 0.5:
-                recommendations.append(
-                    f"**{display_name}** has a low pass rate ({pass_rate * 100:.0f}%). "
-                    f"Address the following failed checks:"
-                )
-            elif failed_items:
-                recommendations.append(
-                    f"**{display_name}** has {len(failed_items)} failed check(s):"
-                )
-
-            for it in failed_items:
-                q = it.get("question", "Unknown")
-                r = it.get("rationale", "")
-                detail = f"  - {q}"
-                if r:
-                    detail += f" — {r}"
-                recommendations.append(detail)
-
-        if recommendations:
-            section += "\n"
-            for rec in recommendations:
-                section += f"{rec}\n"
-        else:
-            section += "No critical recommendations - the project demonstrates good reproducibility practices.\n"
-
-        section += "\n---\n\n"
-        section += "*Report generated by Veritas Replication Agent*\n"
 
         return section
 
