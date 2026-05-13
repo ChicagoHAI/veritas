@@ -2,7 +2,7 @@
 
 **A Replication Agent for Evaluating Scientific Reproducibility**
 
-Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and repository, it runs a four-phase pipeline — **Analyze**, **Replicate**, **Assess Fixes**, **Evaluate** — producing replication reports with execution evidence, fix severity ratings, and PASS/FAIL checklists.
+Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and repository, it runs a four-phase pipeline — **Analyze**, **Replicate**, **Assess Fixes**, **Verify** — producing a Replication Report with a single tier-weighted Replication Score plus per-claim verdicts, execution evidence, and fix severity ratings.
 
 The replication agent actively fixes issues it encounters (deprecated APIs, missing dependencies, configuration problems) rather than stopping at the first error. Every fix is tracked and rated for severity, so the final report honestly reflects both the results and what it took to get them.
 
@@ -12,8 +12,8 @@ The replication agent actively fixes issues it encounters (deprecated APIs, miss
 Input (Paper PDF + Repository)
         |
   1. ANALYZE
-  |  - Generate a checklist of verification items tailored to the paper
-  |  - Generate a scoped replication plan (steps, commands, expected outcomes)
+  |  - Extract structured paper claims (paper_claims.json)
+  |  - Generate a claim-aware replication plan (replication_plan.json)
         |
   2. REPLICATE
   |  - Execute the plan inside a Docker container on a writable copy of the repo
@@ -24,27 +24,30 @@ Input (Paper PDF + Repository)
   |  - Rate each applied fix as minor / major / critical
   |  - Assess what each fix implies about reproducibility quality
         |
-  4. EVALUATE
-  |  - Score checklist items against evidence, with fix severity as context
-  |  - Fixes are context, not automatic penalties
+  4. VERIFY
+  |  - One verifier invocation per claim against produced evidence
+  |  - Per-claim structured verdict (match / partial / no_match / not_attempted / not_applicable)
+  |  - Tier-weighted Replication Score aggregation
         |
   5. REPORT
-     - Aggregate into markdown + PDF with a Fixes Applied section
+     - Headline Replication Score with tier breakdown
+     - Per-claim verdict table with rationales
+     - Replication evidence, fixes-applied section, environment summary
 ```
 
-Rather than using a fixed set of evaluation criteria, Veritas generates a checklist dynamically for each paper. An LLM reads the paper and repository, then produces targeted verification items based on the specific claims, methods, datasets, and statistical analyses present in that work. For more details on the AutoChecklist methodology, see [ChicagoHAI/AutoChecklist](https://github.com/ChicagoHAI/AutoChecklist).
+Rather than scoring papers on a fixed rubric, Veritas extracts each paper's specific reproducible claims and adjudicates them one at a time against the evidence the replication actually produced. The Replication Score is a tier-weighted fraction (headline = weight 3, supporting = 2, setup = 1) of `match`-or-`partial` verdicts among adjudicated claims.
 
 ## Features
 
 - **Active fix-and-continue replication**: The agent patches deprecated APIs, installs missing tools, and adjusts configurations — then reports what it changed
 - **Fix severity assessment**: A separate LLM pass rates each fix (minor/major/critical) so results are honest about what it took to reproduce
-- **Dynamic checklists**: LLM-generated verification items tailored to each paper
-- **Resumable pipeline**: Completed phases are checkpointed; a re-run after a crash, OOM, or Ctrl+C picks up where it left off instead of restarting from scratch
+- **Per-claim verification**: Each paper claim is adjudicated independently against produced evidence (5 typed shapes: scalar, scalar_range, table, qualitative, figure)
+- **Replication Score**: A single tier-weighted number summarising whether the paper's claims were reproduced
+- **Resumable pipeline**: Completed phases are checkpointed; the verify phase additionally resumes per-claim (a death after claim 17 doesn't redo 1-16)
 - **Streaming JSONL transcripts**: Every provider invocation streams a structured event log to disk for post-hoc inspection and debugging
 - **Docker-based replication**: Code runs inside a CUDA-enabled container; the original repo stays read-only
 - **Multi-provider support**: Works with Claude Code, Codex CLI, and Gemini CLI
-- **Scoped replication**: `--mode main` (default) targets key claims; `--mode full` coming soon
-- **Five evaluation dimensions**: Code quality, consistency, generalization, replication, instruction following
+- **Scoped extraction**: `--mode main` (default) extracts headline+supporting claims; `--mode full` coming soon
 - **Cross-platform**: Windows, macOS, and Linux (GPU acceleration on Linux with NVIDIA)
 
 ## Installation
@@ -68,7 +71,7 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 
 ```bash
 ./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
-./veritas evaluate --repo ./myrepo --mode main      # key claims only (default)
+./veritas evaluate --repo ./myrepo --mode main      # headline+supporting claims (default)
 ./veritas evaluate --repo ./myrepo --provider codex  # use a different provider
 ./veritas evaluate --repo ./myrepo --restart        # discard prior state and start fresh
 ./veritas extract-plan paper.pdf                     # plan only
@@ -85,21 +88,27 @@ Run `./veritas evaluate --help` for the full option list.
 
 ## Resuming Runs
 
-A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, replicate, assess-fixes, and evaluate are tracked atomically, and the evaluate phase additionally records per-category sub-completion so a half-finished scoring pass resumes where it left off.
+A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, replicate, assess_fixes, and verify are tracked, and the verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
 
 Resume is automatic and prints a banner so the skip behavior isn't a surprise. Pass `--restart` to discard the state file and run everything from scratch.
 
-## Evaluation Dimensions
+## Claim Types and Tiers
 
-Veritas evaluates across five dimensions. The specific checklist items within each dimension are generated dynamically based on the paper's content.
+Veritas extracts claims into five shape-typed categories. Each claim also carries a tier that determines its weight in the Replication Score.
 
-| Dimension | What it assesses |
-|-----------|-----------------|
-| **Code Quality** | Does the code run? Is it correct, non-redundant, and relevant? |
-| **Consistency** | Do results match conclusions? Does implementation match the plan? |
-| **Generalization** | Do findings hold across different models, data, or methods? |
-| **Replication** | Can the work be reproduced from documentation? Are results deterministic? |
-| **Instruction Following** | Does the implementation serve the stated objectives? |
+| Claim Type | Use for | Verifier behavior |
+|-----------|---------|-------------------|
+| **scalar** | A single numerical result | Compare to paper_value within tolerance (5% match, 30% partial) |
+| **scalar_range** | A numerical range or set | Check range overlap or set containment |
+| **table** | A tabular result with rows × cols | Per-cell comparison |
+| **qualitative** | A descriptive observation | Paraphrase-match between description and observed behavior |
+| **figure** | A paper figure the code produces | Read the figure file (multimodal); structural match against described features |
+
+| Tier | Weight | Use for |
+|------|--------|---------|
+| **headline** | 3 | The paper's central reproducible result (typically 1-3 per paper) |
+| **supporting** | 2 | Intermediate measurements, secondary figures, qualitative observations |
+| **setup** | 1 | Borderline configuration assertions (rare) |
 
 ## Output Structure
 
@@ -108,35 +117,32 @@ After evaluation, the output directory is organized by pipeline phase:
 ```
 evaluation/
 ├── analyze/
-│   ├── checklist.json                       # Generated verification checklist
-│   ├── replication_plan.json                # Scoped replication plan
-│   ├── checklist_transcript.jsonl           # Streamed agent transcript (checklist gen)
-│   └── replication_plan_transcript.jsonl    # Streamed agent transcript (plan gen)
+│   ├── paper_claims.json                    # Structured paper claims
+│   ├── replication_plan.json                # Claim-aware replication plan
+│   ├── paper_claims_transcript.jsonl
+│   └── replication_plan_transcript.jsonl
 ├── replication/
 │   ├── codebase/                            # Patched repo (writable copy with agent's fixes)
 │   ├── codebase.diff                        # Unified diff of all changes the agent made
 │   ├── replication_log.json                 # Step-by-step execution log with fix records
-│   ├── evidence_summary.json                # Environment and execution evidence
-│   └── replication_transcript.jsonl         # Streamed agent transcript (replicate phase)
-├── evaluate/
+│   ├── evidence_summary.json
+│   └── replication_transcript.jsonl
+├── assess/
 │   ├── fix_severity.json                    # Fix severity ratings (minor/major/critical)
-│   ├── fix_severity_transcript.jsonl
-│   ├── code_evaluation.json                 # Code quality scores
-│   ├── code_transcript.jsonl
-│   ├── consistency_evaluation.json
-│   ├── consistency_transcript.jsonl
-│   ├── generalization_evaluation.json
-│   ├── generalization_transcript.jsonl
-│   ├── replication_evaluation.json
-│   ├── replication_transcript.jsonl
-│   ├── instruction_following_evaluation.json
-│   └── instruction_following_transcript.jsonl
+│   └── fix_severity_transcript.jsonl
+├── verify/
+│   ├── C1.json                              # Per-claim structured verdict
+│   ├── C1_transcript.jsonl                  # Per-claim verifier transcript
+│   ├── C2.json
+│   ├── ...
+│   ├── verdicts.json                        # Aggregated verdicts
+│   └── replication_score.json               # Replication Score + tier breakdown
 ├── report/
-│   ├── replication_report.md                # Final markdown report
-│   └── replication_report.pdf               # Final PDF report
+│   ├── replication_report.md
+│   └── replication_report.pdf
 ├── prompts/                                 # Debug: rendered prompts sent to the LLM
 └── .veritas/
-    └── pipeline_state.json                  # Resume checkpoint (per-phase status)
+    └── pipeline_state.json                  # Resume checkpoint (schema_version=2)
 ```
 
 ## Docker Container
@@ -174,17 +180,6 @@ echo "ANTHROPIC_API_KEY=sk-..." > ~/.veritas/.env
 ./veritas evaluate --repo ./project --paper paper.pdf --provider gemini
 ```
 
-### Running Specific Evaluations
-
-```bash
-# Only code and consistency
-./veritas evaluate --repo ./project -e code,consistency
-
-# Only replication
-./veritas evaluate --repo ./project -e replication
-```
-
 ## Acknowledgments
 
 - Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo)
-- Evaluation criteria adapted from [eval_agent](https://github.com/ChicagoHAI/eval_agent)
