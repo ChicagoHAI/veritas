@@ -52,7 +52,7 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Every output-affecting field currently
 # invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. an evaluation-only config knob).
+# rules can be added later (e.g. a knob that only affects the verify phase).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
     'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'verify'),
@@ -86,7 +86,7 @@ class ReplicationRunner:
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
-        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report.
+        """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
 
         Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
         are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
@@ -156,7 +156,7 @@ class ReplicationRunner:
                         state.update_stage_outputs('verify', {'completed_claims': already_done})
                 try:
                     verdicts = self._verify_with_resume(
-                        claims, evidence, replication_plan, fix_assessment,
+                        claims, replication_plan,
                         state, already_done=already_done,
                     )
                     state.complete_stage('verify', success=True)
@@ -557,9 +557,7 @@ class ReplicationRunner:
     def _run_single_verify(
         self,
         claim: PaperClaim,
-        evidence: Optional[ExecutionEvidence],
         replication_plan: Optional[ReplicationPlan],
-        fix_assessment: Optional[FixSeverityAssessment],
     ) -> Optional[ClaimVerdict]:
         """Verify one claim against replication evidence.
 
@@ -650,9 +648,7 @@ class ReplicationRunner:
     def _verify_with_resume(
         self,
         claims: PaperClaims,
-        evidence: Optional[ExecutionEvidence],
         replication_plan: Optional[ReplicationPlan],
-        fix_assessment: Optional[FixSeverityAssessment],
         state: PipelineState,
         already_done: List[str],
     ) -> List[ClaimVerdict]:
@@ -680,9 +676,7 @@ class ReplicationRunner:
                 output_path.unlink()
 
             print(f"Verifying {claim.id} ({claim.tier}/{claim.type})...")
-            verdict = self._run_single_verify(
-                claim, evidence, replication_plan, fix_assessment,
-            )
+            verdict = self._run_single_verify(claim, replication_plan)
 
             if verdict is not None:
                 results.append(verdict)
@@ -843,8 +837,8 @@ class ReplicationRunner:
         """Run the configured provider as a subprocess; stream its JSONL
         transcript to ``log_path``; return True on success.
 
-        The agent is expected to write its actual results (checklist JSON,
-        replication plan JSON, etc.) to known disk paths during the run.
+        The agent is expected to write its actual results (paper-claims JSON,
+        replication-plan JSON, per-claim verdict JSON, etc.) to known disk paths during the run.
         ``log_path`` only captures the conversation transcript — it is
         never the source of the agent's answer.
 

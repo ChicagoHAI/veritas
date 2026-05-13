@@ -1,4 +1,4 @@
-"""Generate prompts for evaluation agents."""
+"""Generate prompts for the claim-verification pipeline."""
 
 from __future__ import annotations
 

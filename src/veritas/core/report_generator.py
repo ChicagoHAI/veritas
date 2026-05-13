@@ -4,7 +4,7 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from veritas.core.config import (
     Config,
@@ -19,7 +19,6 @@ from veritas.core.config import (
 )
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
-    PaperClaim,
     PaperClaims,
     ReplicationScore,
 )
@@ -103,7 +102,7 @@ class ReportGenerator:
             evidence=evidence, fix_assessment=fix_assessment,
         )
 
-        report_dir = output_dir / REPORT_SUBDIR
+        report_dir = config.report_dir
         md_path = report_dir / REPORT_MD_FILE
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md_content, encoding='utf-8')

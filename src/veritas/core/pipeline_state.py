@@ -1,4 +1,4 @@
-"""Pipeline state tracker for resumable evaluation phases.
+"""Pipeline state tracker for resumable pipeline phases.
 
 Persists per-stage status, timestamps, and arbitrary per-stage outputs to
 ``<output_dir>/.veritas/pipeline_state.json``. ``ReplicationRunner`` consults
@@ -52,8 +52,8 @@ class PipelineState:
 
         The pre-refactor pipeline produced state files without a ``schema_version``
         field (or with version < 2). Output filenames and subdirectory layout
-        changed; reusing those artifacts would mix old per-category evaluation
-        files with new per-claim verdicts. Force the user to ``--restart`` rather
+        changed; reusing those artifacts would mix old evaluation artifacts
+        with new per-claim verdicts. Force the user to ``--restart`` rather
         than silently producing wrong output.
         """
         v = self.state.get('schema_version')
@@ -101,8 +101,8 @@ class PipelineState:
     def update_stage_outputs(self, name: str, outputs: Dict[str, Any]) -> None:
         """Merge outputs into a stage that's still in_progress.
 
-        Used for per-category sub-completion in the ``evaluate`` stage —
-        each completed category is appended to the stage's outputs without
+        Used for per-claim sub-completion in the ``verify`` stage —
+        each completed claim is appended to the stage's outputs without
         marking the whole stage complete.
         """
         if name not in self.state['stages']:

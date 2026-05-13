@@ -110,7 +110,7 @@ class PaperClaims:
     extraction_mode: str = "main"
     claims: List[PaperClaim] = field(default_factory=list)
 
-    def claim_ids(self) -> set:
+    def claim_ids(self) -> "set[str]":
         return {c.id for c in self.claims}
 
     def get_claim(self, claim_id: str) -> Optional[PaperClaim]:
