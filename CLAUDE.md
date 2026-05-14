@@ -87,7 +87,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 - `paper_claims.py` — `parse_paper_claims_response()` reading the analyze-phase LLM output.
 - `verify.py` — `compute_replication_score()`: pure-function tier-weighted aggregation over a list of `ClaimVerdict`s, returning a `ReplicationScore` with per-tier breakdown, missing-verdict list, and edge-case flags.
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` JSON-repair logic.
-- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 2` raises a clear error directing the user to `--restart`.
+- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 3` raises a clear error directing the user to `--restart`.
 - `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep` with `verifies: List[str]`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `paper_claims.py` (`PaperClaim`, `PaperClaims`, `ClaimVerdict`, `ReplicationScore`, `Provenance`, `TIER_WEIGHTS`, `VERDICT_VALUES`).
 - `plan_extractor.py` — PDF → plan extraction (used by the standalone `extract-plan` subcommand; separate from the pipeline's analyze phase).
 - `report_generator.py` — markdown + PDF report generation (Replication Score headline, tier breakdown, per-claim verdict table, flags, replication evidence, fixes-applied section, environment summary).
