@@ -214,7 +214,7 @@ extract_provider() {
 }
 
 # -----------------------------------------------------------------------------
-# .env helpers (mechanical, ported verbatim from NeuriCo)
+# .env helpers (shared input/edit primitives)
 # -----------------------------------------------------------------------------
 
 # Read the current value of an env var from .env (uncommented lines only).
