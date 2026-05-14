@@ -230,9 +230,19 @@ class ReplicationRunner:
     # -- Phase 1: Analyze --------------------------------------------------
 
     def _run_insufficient_spec_bail(self, source_path: Path) -> None:
-        """Stub: full implementation in Task 8."""
-        print(f"[INSUFFICIENT_SPEC] {source_path} — no claims extractable.")
-        # Task 8 will write the actual bail report.
+        """Write the bail report when analyze produces zero claims; downstream phases are skipped."""
+        print(
+            f"\n[INSUFFICIENT_SPEC] Analyze produced 0 claims from {source_path}. "
+            f"Writing bail report and exiting."
+        )
+        report_md = self.prompt_generator.generate_insufficient_spec_report(
+            mode=self.config.mode,
+            source_path=source_path,
+            has_paper=self.config.has_paper,
+        )
+        self.config.report_md_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config.report_md_path.write_text(report_md, encoding='utf-8')
+        print(f"  Report written to {self.config.report_md_path}")
 
     def _generate_paper_claims(self) -> PaperClaims:
         """Generate or load paper claims.

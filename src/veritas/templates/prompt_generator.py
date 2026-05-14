@@ -124,3 +124,18 @@ class PromptGenerator:
             "output_dir": str(output_dir.absolute()),
         }
         return template.render(**context)
+
+    def generate_insufficient_spec_report(
+        self,
+        mode: str,
+        source_path: Path,
+        has_paper: bool,
+    ) -> str:
+        """Render the bail report shown when analyze produces zero claims."""
+        template = self.env.get_template("report/insufficient_spec.md")
+        context = {
+            "mode": mode,
+            "source_path": str(source_path),
+            "has_paper": has_paper,
+        }
+        return template.render(**context)
