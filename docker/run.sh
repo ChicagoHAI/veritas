@@ -214,6 +214,191 @@ extract_provider() {
 }
 
 # -----------------------------------------------------------------------------
+# .env helpers (mechanical, ported verbatim from NeuriCo)
+# -----------------------------------------------------------------------------
+
+# Read the current value of an env var from .env (uncommented lines only).
+get_env_value() {
+    local var_name="$1"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//"
+    fi
+}
+
+# Mask a secret for display (first 4 + last 4 chars; values <=8 chars show ****).
+mask_value() {
+    local val="$1"
+    local len=${#val}
+    if [ "$len" -le 8 ]; then
+        echo "****"
+    else
+        echo "${val:0:4}...${val:len-4:4}"
+    fi
+}
+
+# Read input with masked display (shows * for each character typed).
+# Uses stty rather than `read -s` so it works when stdin is a pipe.
+read_masked() {
+    local __resultvar="$1"
+    local _input="" _char=""
+
+    local old_stty
+    old_stty=$(stty -g < /dev/tty 2>/dev/null)
+    stty -echo < /dev/tty 2>/dev/null
+    trap 'stty '"$old_stty"' < /dev/tty 2>/dev/null; trap - INT TERM' INT TERM
+
+    while true; do
+        IFS= read -r -n 1 _char < /dev/tty
+
+        if [[ -z "$_char" ]]; then
+            break
+        fi
+
+        if [[ "$_char" == $'\x7f' ]] || [[ "$_char" == $'\x08' ]]; then
+            if [ ${#_input} -gt 0 ]; then
+                _input="${_input%?}"
+                echo -ne '\b \b' >&2
+            fi
+        else
+            _input+="$_char"
+            echo -ne '*' >&2
+        fi
+    done
+
+    echo "" >&2
+
+    stty "$old_stty" < /dev/tty 2>/dev/null
+    trap - INT TERM
+
+    printf -v "$__resultvar" '%s' "$_input"
+}
+
+# Return formatted status string for a config variable.
+# Usage: format_status "VAR_NAME" [is_secret]
+format_status() {
+    local var_name="$1"
+    local is_secret="${2:-true}"
+    local val
+    val=$(get_env_value "$var_name")
+    if [ -n "$val" ]; then
+        if [ "$is_secret" = "true" ]; then
+            echo -e "${GREEN}[SET: $(mask_value "$val")]${NC}"
+        else
+            echo -e "${GREEN}[SET: $val]${NC}"
+        fi
+    else
+        echo -e "${DIM}[NOT SET]${NC}"
+    fi
+}
+
+# Write a value to .env: replace existing line, uncomment commented line, or append.
+config_set_env() {
+    local var_name="$1"
+    local value="$2"
+    if grep -q "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+        sed_inplace "s|^${var_name}=.*|${var_name}=${value}|" "$PROJECT_ROOT/.env"
+    elif grep -q "^# *${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+        sed_inplace "s|^# *${var_name}=.*|${var_name}=${value}|" "$PROJECT_ROOT/.env"
+    else
+        echo "${var_name}=${value}" >> "$PROJECT_ROOT/.env"
+    fi
+}
+
+# Prompt for a secret value (masked input). Writes to .env on success.
+# Usage: prompt_secret "Label" "ENV_VAR" "required|optional" "validation_prefix" ["hint"]
+prompt_secret() {
+    local label="$1"
+    local env_var="$2"
+    local required="$3"
+    local prefix="$4"
+
+    if [ "$required" = "required" ]; then
+        echo -e "    ${BOLD}$label${NC} (recommended)"
+    else
+        echo -e "    ${BOLD}$label${NC} (optional)"
+    fi
+
+    if [ -n "$5" ]; then
+        echo -e "    ${DIM}$5${NC}"
+    fi
+
+    local value=""
+    if [ "$required" = "optional" ]; then
+        echo -ne "    > ${DIM}[Enter to skip]${NC} "
+    else
+        echo -ne "    > "
+    fi
+    read_masked value
+
+    if [ -z "$value" ]; then
+        echo -e "    ${DIM}[SKIP]${NC} $label skipped"
+        return 1
+    fi
+
+    echo -e "    ${DIM}Entered: $(mask_value "$value") (${#value} chars)${NC}"
+
+    if [ -n "$prefix" ] && [[ ! "$value" == $prefix* ]]; then
+        echo -e "    ${YELLOW}[WARN]${NC} Expected value starting with '$prefix' — saving anyway"
+    fi
+
+    config_set_env "$env_var" "$value"
+
+    echo -e "    ${GREEN}[OK]${NC} $env_var saved"
+    return 0
+}
+
+# Prompt for a non-secret value with optional default. Sets REPLY.
+prompt_text() {
+    local label="$1"
+    local hint="$2"
+    local default_val="$3"
+
+    echo -e "    ${BOLD}$label${NC} (optional)"
+    if [ -n "$hint" ]; then
+        echo -e "    ${DIM}$hint${NC}"
+    fi
+
+    if [ -n "$default_val" ]; then
+        echo -ne "    > ${DIM}[Enter for '$default_val']${NC} "
+    else
+        echo -ne "    > ${DIM}[Enter to skip]${NC} "
+    fi
+    local value=""
+    read value < /dev/tty
+
+    if [ -z "$value" ]; then
+        REPLY="$default_val"
+    else
+        REPLY="$value"
+    fi
+}
+
+# Numbered menu prompt. Sets REPLY to the selected number (1-based).
+prompt_choice() {
+    local header="$1"
+    shift
+    local options=("$@")
+
+    echo -e "    ${BOLD}$header${NC}"
+    local i=1
+    for opt in "${options[@]}"; do
+        echo "      [$i] $opt"
+        ((i++))
+    done
+
+    local selection=""
+    while true; do
+        echo -ne "    > "
+        read selection < /dev/tty
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#options[@]}" ]; then
+            REPLY="$selection"
+            return
+        fi
+        echo -e "    ${YELLOW}Please enter a number between 1 and ${#options[@]}${NC}"
+    done
+}
+
+# -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
 # don't watch an LLM-call hang for several minutes before realising they
