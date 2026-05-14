@@ -683,6 +683,73 @@ cmd_login() {
         $provider"
 }
 
+# Print a one-page prereqs check. Exits with code 1 if any required tool is
+# missing. Used by cmd_setup as Step 1.
+check_prerequisites() {
+    local all_ok=true
+
+    if command -v docker &> /dev/null; then
+        echo -e "    ${GREEN}[OK]${NC} docker found"
+    else
+        echo -e "    ${RED}[MISSING]${NC} docker not found — install Docker first"
+        all_ok=false
+    fi
+
+    if command -v git &> /dev/null; then
+        echo -e "    ${GREEN}[OK]${NC} git found"
+    else
+        echo -e "    ${YELLOW}[WARN]${NC} git not found (recommended for cloning paper repos)"
+    fi
+
+    if docker info 2>/dev/null | grep -qi nvidia; then
+        echo -e "    ${GREEN}[OK]${NC} nvidia-container-toolkit (GPU support)"
+    else
+        echo -e "    ${DIM}[--]${NC} nvidia-container-toolkit not detected (GPU optional)"
+    fi
+
+    if [ "$all_ok" = false ]; then
+        echo ""
+        echo -e "    ${RED}Missing required tools.${NC} Install them and re-run ./veritas setup."
+        exit 1
+    fi
+}
+
+# Walk the user through editing each of the 6 keys non-interactively (no menu).
+# Used as the .env step inside cmd_setup. Idempotent: skips a key if the user
+# hits Enter without typing.
+setup_env_interactive() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        if [ -f "$PROJECT_ROOT/.env.example" ]; then
+            cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+        else
+            touch "$PROJECT_ROOT/.env"
+        fi
+    fi
+
+    echo -e "    ${DIM}Press Enter to skip any key. Run ./veritas config later to revisit.${NC}"
+    echo ""
+
+    prompt_secret "OpenAI API Key" "OPENAI_API_KEY" "optional" "sk-" \
+        "GPT family — required by hypogenic, PaperBench, many ML papers" || true
+    echo ""
+    prompt_secret "Anthropic API Key" "ANTHROPIC_API_KEY" "optional" "sk-ant-" \
+        "Claude API — independent of veritas's Claude Code OAuth" || true
+    echo ""
+    prompt_secret "Google API Key" "GOOGLE_API_KEY" "optional" "" \
+        "Gemini API access" || true
+    echo ""
+    prompt_secret "OpenRouter API Key" "OPENROUTER_API_KEY" "optional" "sk-or-" \
+        "Multi-model routing (https://openrouter.ai)" || true
+    echo ""
+    prompt_secret "Hugging Face Token" "HF_TOKEN" "optional" "hf_" \
+        "Gated models / datasets (Llama-2, ImageNet)" || true
+    echo ""
+    prompt_secret "Weights & Biases API Key" "WANDB_API_KEY" "optional" "" \
+        "Experiment tracking (https://wandb.ai)" || true
+
+    ensure_env_perms
+}
+
 # -----------------------------------------------------------------------------
 # Interactive .env edit menu
 # -----------------------------------------------------------------------------
@@ -773,6 +840,102 @@ cmd_config() {
         echo -ne "  ${DIM}Press Enter to continue...${NC}"
         read < /dev/tty
     done
+}
+
+# -----------------------------------------------------------------------------
+# Interactive setup wizard. Single unified flow — each step is skippable.
+# Sequence: prerequisites -> image -> provider login -> .env (optional) -> done.
+# -----------------------------------------------------------------------------
+cmd_setup() {
+    show_banner
+
+    echo -e "${BOLD}  Welcome to Veritas${NC}"
+    echo -e "  ${DIM}This wizard will get you set up. Hit Ctrl+C any time to bail.${NC}"
+    echo ""
+
+    # Step 1: prerequisites
+    echo -e "  ${BOLD}Step 1/4: Checking prerequisites${NC}"
+    check_prerequisites
+    echo ""
+
+    # Step 2: docker image
+    echo -e "  ${BOLD}Step 2/4: Docker image${NC}"
+    ensure_image
+    echo ""
+
+    # Step 3: provider login (offer all three; default Claude)
+    echo -e "  ${BOLD}Step 3/4: Log in to an AI provider${NC}"
+    echo -e "    ${DIM}Each provider uses OAuth. Pick one or more — you can add more later.${NC}"
+    echo ""
+
+    local claude_status="" codex_status="" gemini_status=""
+    if [ -s "$HOME/.claude/.credentials.json" ]; then
+        claude_status=" ${GREEN}[already configured]${NC}"
+    fi
+    if [ -d "$HOME/.codex" ] && [ "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
+        codex_status=" ${GREEN}[already configured]${NC}"
+    fi
+    if [ -d "$HOME/.gemini" ] && [ "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+        gemini_status=" ${GREEN}[already configured]${NC}"
+    fi
+
+    echo -e "    ${BOLD}Which providers do you want to log in to?${NC}"
+    echo -e "      [1] Claude (recommended)${claude_status}"
+    echo -e "      [2] Codex${codex_status}"
+    echo -e "      [3] Gemini${gemini_status}"
+    echo "      [4] Skip"
+    echo -e "    ${DIM}Enter one or more numbers, e.g. 1 2 or 1,2,3${NC}"
+    echo -ne "    > "
+    local login_input=""
+    read login_input < /dev/tty
+    login_input="${login_input//,/ }"
+
+    for choice in $login_input; do
+        case "$choice" in
+            1) cmd_login claude ;;
+            2) cmd_login codex ;;
+            3) cmd_login gemini ;;
+            4) echo -e "    ${DIM}[SKIP]${NC} Login deferred — run ./veritas login claude later" ;;
+        esac
+    done
+    echo ""
+
+    # Step 4: .env (optional)
+    echo -e "  ${BOLD}Step 4/4: Replication API keys (.env)${NC}"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "    ${GREEN}[OK]${NC} .env already exists at $PROJECT_ROOT/.env"
+        echo -ne "    Reconfigure? [y/N] "
+        local reconfigure=""
+        read reconfigure < /dev/tty
+        if [[ "$reconfigure" =~ ^[Yy] ]]; then
+            echo ""
+            setup_env_interactive
+        else
+            echo -e "    ${DIM}Keeping existing .env${NC}"
+        fi
+    else
+        echo -e "    ${DIM}If you're replicating a paper that calls LLM APIs (e.g. hypogenic),${NC}"
+        echo -e "    ${DIM}configure keys now. Otherwise hit Enter to skip every prompt.${NC}"
+        echo -ne "    Configure now? [Y/n] "
+        local configure_now=""
+        read configure_now < /dev/tty
+        if [[ ! "$configure_now" =~ ^[Nn] ]]; then
+            echo ""
+            setup_env_interactive
+        else
+            echo -e "    ${DIM}[SKIP]${NC} Run ./veritas config later to add keys"
+        fi
+    fi
+    echo ""
+
+    # Done
+    echo -e "  ${GREEN}Setup complete.${NC}"
+    echo ""
+    echo -e "  ${BOLD}Next steps:${NC}"
+    echo -e "    ${DIM}Run an evaluation:${NC}  ${BOLD}./veritas evaluate --paper paper.pdf --repo ./my-project${NC}"
+    echo -e "    ${DIM}Status check:${NC}     ${BOLD}./veritas status${NC}"
+    echo -e "    ${DIM}Edit keys:${NC}        ${BOLD}./veritas config${NC}"
+    echo ""
 }
 
 # -----------------------------------------------------------------------------
