@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 
 # All valid AI providers
@@ -10,6 +10,9 @@ VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
 # Valid claim-extraction scopes
 VALID_CLAIM_SCOPES = ["main", "full"]
+
+# Input mode literal — distinct from claim_scope
+InputMode = Literal["full", "paper-only", "repo-only"]
 
 
 # Output directory structure — each phase writes into its own subdir.
@@ -61,7 +64,7 @@ class Config:
     """Configuration for a replication evaluation run."""
 
     # Input paths
-    repo_path: Path
+    repo_path: Optional[Path] = None
     paper_path: Optional[Path] = None
 
     # Output settings
@@ -71,6 +74,9 @@ class Config:
     # Evaluation settings
     provider: str = "claude"
     claim_scope: str = "main"
+    mode: InputMode = "full"
+    claims_path: Optional[Path] = None
+    codegen_timeout: Optional[int] = 3600
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
@@ -85,13 +91,18 @@ class Config:
 
     def __post_init__(self):
         # Convert paths to Path objects
-        self.repo_path = Path(self.repo_path)
+        if self.repo_path is not None:
+            self.repo_path = Path(self.repo_path)
         if self.paper_path:
             self.paper_path = Path(self.paper_path)
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
-        else:
+        elif self.repo_path:
             self.output_dir = self.repo_path / "evaluation"
+        else:
+            # Will be properly handled in a follow-up; for now, leave None so
+            # existing callers that supply repo_path keep working.
+            pass
 
         # Validate provider
         if self.provider.lower() not in VALID_PROVIDERS:
@@ -110,6 +121,14 @@ class Config:
     @property
     def has_paper(self) -> bool:
         return self.paper_path is not None and self.paper_path.exists()
+
+    @property
+    def has_repo(self) -> bool:
+        return self.repo_path is not None and self.repo_path.exists()
+
+    @property
+    def has_user_claims(self) -> bool:
+        return self.claims_path is not None and self.claims_path.exists()
 
     # -- Output subdirectories ----------------------------------------------
 
@@ -178,6 +197,14 @@ class Config:
     @property
     def paper_claims_transcript_path(self) -> Path:
         return self.analyze_dir / PAPER_CLAIMS_TRANSCRIPT_FILE
+
+    @property
+    def codegen_complete_sentinel_path(self) -> Path:
+        return self.output_dir / ".veritas" / "codegen_complete"
+
+    @property
+    def codegen_transcript_path(self) -> Path:
+        return self.replication_dir / "codegen_transcript.jsonl"
 
     # -- Transcript files (JSONL streamed from provider invocations) --------
 
