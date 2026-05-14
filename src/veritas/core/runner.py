@@ -141,7 +141,7 @@ class ReplicationRunner:
                 else:
                     state.start_stage('codegen')
                     try:
-                        self._generate_code(claims)
+                        self._generate_code()
                         state.complete_stage('codegen', success=True)
                     except Exception:
                         state.complete_stage('codegen', success=False)
@@ -414,11 +414,12 @@ class ReplicationRunner:
 
     # -- Phase 1.5: Codegen (paper-only mode) ------------------------------
 
-    def _generate_code(self, claims: PaperClaims) -> None:
+    def _generate_code(self) -> None:
         """Paper-only mode: have the agent write the paper's methodology into
         <replication>/codebase/. Resume primitive: sentinel file at
         <output>/.veritas/codegen_complete. Partial codebases from killed sessions
-        are wiped before retry."""
+        are wiped before retry. Anti-leakage: paper_claims.json is intentionally
+        not in this method's scope."""
 
         sentinel = self.config.codegen_complete_sentinel_path
         if sentinel.exists():
@@ -429,6 +430,14 @@ class ReplicationRunner:
 
         # Wipe any partial codebase from a killed prior session
         if codebase_dir.exists() and any(codebase_dir.iterdir()):
+            # Defensive: refuse to rmtree anything not strictly under the output tree
+            resolved = codebase_dir.resolve()
+            output_root = self.config.output_dir.resolve()
+            if output_root not in resolved.parents:
+                raise RuntimeError(
+                    f"Refusing to wipe codebase_dir {resolved}: "
+                    f"not under output tree {output_root}"
+                )
             print(f"  Wiping partial codebase at {codebase_dir} before retry")
             shutil.rmtree(codebase_dir)
         codebase_dir.mkdir(parents=True, exist_ok=True)
