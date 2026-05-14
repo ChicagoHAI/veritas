@@ -24,6 +24,15 @@ from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
 
+
+class _InsufficientSpec(Exception):
+    """Raised when claim extraction yields zero claims. Properly defined in Task 7."""
+    def __init__(self, source_path: Path, mode: str = ""):
+        super().__init__(f"Analyze produced 0 claims (source: {source_path}, mode: {mode})")
+        self.source_path = source_path
+        self.mode = mode
+
+
 # Provider invocation tables. Each provider has a CLI command (cli name plus
 # any required positional subcommand or print flag), a transcript-output flag
 # set (so the JSONL stream lands on stdout for capture), and a permission
@@ -100,17 +109,36 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            # analyze
+            # analyze (claims extraction only)
             if state.is_stage_completed('analyze'):
                 print("[OK] analyze: skipped (already completed)")
-                claims, replication_plan = self._load_analyze_artifacts()
+                claims = self._load_paper_claims()
             else:
                 state.start_stage('analyze')
                 try:
-                    claims, replication_plan = self._analyze()
+                    claims = self._generate_paper_claims()
                     state.complete_stage('analyze', success=True)
+                except _InsufficientSpec as e:
+                    state.complete_stage('analyze', success=False)
+                    self._run_insufficient_spec_bail(e.source_path)
+                    return RunResult(success=True, score=None, report_path=self.config.report_md_path)
                 except Exception:
                     state.complete_stage('analyze', success=False)
+                    raise
+
+            # plan (now its own phase)
+            if state.is_stage_completed('plan'):
+                print("[OK] plan: skipped (already completed)")
+                replication_plan = self._load_replication_plan()
+            else:
+                state.start_stage('plan')
+                try:
+                    replication_plan = self._generate_replication_plan(claims)
+                    if replication_plan is not None:
+                        self._validate_plan_claim_refs(replication_plan, claims)
+                    state.complete_stage('plan', success=True)
+                except Exception:
+                    state.complete_stage('plan', success=False)
                     raise
 
             # replicate
@@ -193,13 +221,10 @@ class ReplicationRunner:
 
     # -- Phase 1: Analyze --------------------------------------------------
 
-    def _analyze(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
-        """Phase 1: Extract paper claims, then generate a claim-aware replication plan."""
-        claims = self._generate_paper_claims()
-        replication_plan = self._generate_replication_plan(claims)
-        if replication_plan is not None:
-            self._validate_plan_claim_refs(replication_plan, claims)
-        return claims, replication_plan
+    def _run_insufficient_spec_bail(self, source_path: Path) -> None:
+        """Stub: full implementation in Task 8."""
+        print(f"[INSUFFICIENT_SPEC] {source_path} — no claims extractable.")
+        # Task 8 will write the actual bail report.
 
     def _generate_paper_claims(self) -> PaperClaims:
         """Extract structured claims from the paper."""
@@ -785,16 +810,19 @@ class ReplicationRunner:
         if config_changes:
             state.record_config(current_config)
 
-    def _load_analyze_artifacts(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
-        """Load paper claims and replication plan from disk for a skipped analyze phase."""
-        with open(self.config.paper_claims_path, encoding='utf-8') as f:
-            claims = PaperClaims.from_dict(json.load(f))
+    def _load_paper_claims(self) -> PaperClaims:
+        """Load paper_claims.json from disk (used when analyze phase is skipped via resume)."""
+        path = self.config.paper_claims_path
+        if not path.exists():
+            raise RuntimeError(f"paper_claims.json missing at {path}")
+        return PaperClaims.from_dict(json.loads(path.read_text(encoding='utf-8')))
 
-        replication_plan: Optional[ReplicationPlan] = None
-        if self.config.replication_plan_path.exists():
-            with open(self.config.replication_plan_path, encoding='utf-8') as f:
-                replication_plan = ReplicationPlan.from_dict(json.load(f))
-        return claims, replication_plan
+    def _load_replication_plan(self) -> Optional[ReplicationPlan]:
+        """Load replication_plan.json from disk (used when plan phase is skipped via resume)."""
+        path = self.config.replication_plan_path
+        if not path.exists():
+            return None
+        return parse_replication_plan_response(path.read_text(encoding='utf-8'))
 
     def _load_fix_assessment(self) -> FixSeverityAssessment:
         """Load fix severity assessment from disk (or empty if no fixes were applied)."""
