@@ -58,7 +58,7 @@ sed_inplace() {
 get_remote_digest() {
     local image="$1"
     local digest
-    digest=$(docker buildx imagetools inspect "$image" 2>/dev/null \
+    digest=$(timeout 5 docker buildx imagetools inspect "$image" 2>/dev/null \
         | awk '/^Digest:/{print $2; exit}')
     echo "$digest"
 }
@@ -494,9 +494,12 @@ is_claude_configured() {
 # -----------------------------------------------------------------------------
 warn_if_outdated() {
     local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
+    # Skip registry probe entirely for locally-built images (no RepoDigests).
+    if [ -z "$local_digest" ]; then
+        return
+    fi
     local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
-
-    if [ -n "$local_digest" ] && [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
+    if [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
         echo -e "${YELLOW}Update available:${NC} newer image on registry. Run './veritas update' to pull."
         echo ""
     fi
@@ -545,37 +548,13 @@ show_banner() {
 show_status() {
     echo -e "  ${BOLD}Status:${NC}"
 
+    # Fast, local checks first so the dashboard is responsive even when the
+    # network or GPU container probe is slow.
+
     if command -v docker &> /dev/null; then
         echo -e "    Docker .............. ${GREEN}[OK]${NC}"
     else
         echo -e "    Docker .............. ${RED}[MISSING]${NC}"
-    fi
-
-    if docker image inspect "$IMAGE_NAME" &> /dev/null; then
-        local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
-        local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
-        if [ -n "$local_digest" ] && [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
-            echo -e "    Docker image ........ ${YELLOW}[UPDATE AVAILABLE]${NC}"
-        else
-            echo -e "    Docker image ........ ${GREEN}[OK]${NC}"
-        fi
-    else
-        echo -e "    Docker image ........ ${YELLOW}[MISSING]${NC} run: ./veritas build (or let first run pull)"
-    fi
-
-    # Two-step GPU probe: toolkit + actual accessibility
-    if docker info 2>/dev/null | grep -qi nvidia; then
-        if docker image inspect "$IMAGE_NAME" &> /dev/null && \
-           docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
-               --query-gpu=name --format=csv,noheader &> /dev/null; then
-            echo -e "    GPU ................. ${GREEN}[OK]${NC} accessible"
-        elif ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
-            echo -e "    GPU ................. ${DIM}[?]${NC} toolkit present; rebuild image to probe"
-        else
-            echo -e "    GPU ................. ${YELLOW}[WARN]${NC} toolkit present but no GPU reachable (WSL/emulated?)"
-        fi
-    else
-        echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
     fi
 
     # .env (replication API keys)
@@ -602,6 +581,49 @@ show_status() {
         echo -e "    Gemini credentials .. ${GREEN}[OK]${NC}"
     else
         echo -e "    Gemini credentials .. ${DIM}[--]${NC}"
+    fi
+
+    # GPU toolkit detection (fast `docker info` check). The slow GPU
+    # container probe is deferred to the end of this function.
+    local gpu_toolkit_present=false
+    if docker info 2>/dev/null | grep -qi nvidia; then
+        gpu_toolkit_present=true
+    fi
+
+    # Docker image — local inspect is fast; the registry digest comparison
+    # is a network call (now bounded by `timeout 5` in get_remote_digest)
+    # and is skipped entirely for locally-built images.
+    if docker image inspect "$IMAGE_NAME" &> /dev/null; then
+        local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
+        if [ -z "$local_digest" ]; then
+            # Locally-built image (no RepoDigests). Skip the registry comparison.
+            echo -e "    Docker image ........ ${GREEN}[OK]${NC} (locally built)"
+        else
+            local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
+            if [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
+                echo -e "    Docker image ........ ${YELLOW}[UPDATE AVAILABLE]${NC}"
+            else
+                echo -e "    Docker image ........ ${GREEN}[OK]${NC}"
+            fi
+        fi
+    else
+        echo -e "    Docker image ........ ${YELLOW}[MISSING]${NC} run: ./veritas build (or let first run pull)"
+    fi
+
+    # Two-step GPU probe: toolkit + actual accessibility. The container spawn
+    # is the slowest check in show_status, so it runs last.
+    if [ "$gpu_toolkit_present" = true ]; then
+        if docker image inspect "$IMAGE_NAME" &> /dev/null && \
+           docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+               --query-gpu=name --format=csv,noheader &> /dev/null; then
+            echo -e "    GPU ................. ${GREEN}[OK]${NC} accessible"
+        elif ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+            echo -e "    GPU ................. ${DIM}[?]${NC} toolkit present; rebuild image to probe"
+        else
+            echo -e "    GPU ................. ${YELLOW}[WARN]${NC} toolkit present but no GPU reachable (WSL/emulated?)"
+        fi
+    else
+        echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
     fi
 
     echo ""
