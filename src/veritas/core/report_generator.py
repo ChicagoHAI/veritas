@@ -143,15 +143,19 @@ class ReportGenerator:
             return ReplicationScore.from_dict(json.load(f))
 
     def _load_mode(self, evaluation_dir: Path) -> Optional[str]:
-        """Recover the input mode from pipeline_state.json, if available."""
+        """Recover the input mode from pipeline_state.json, if available.
+
+        Reads from ``state['config']`` — the canonical location, since ``mode``
+        is a runtime configuration knob, not an input artifact.
+        """
         state_path = evaluation_dir / ".veritas" / "pipeline_state.json"
         if not state_path.exists():
             return None
         try:
             with open(state_path, encoding='utf-8') as f:
                 data = json.load(f)
-            inputs = data.get("inputs") or {}
-            return inputs.get("mode") or data.get("mode")
+            config = data.get("config") or {}
+            return config.get("mode")
         except (OSError, json.JSONDecodeError):
             return None
 

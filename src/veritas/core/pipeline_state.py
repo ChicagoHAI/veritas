@@ -56,7 +56,7 @@ class PipelineState:
         Schema version 3 introduces:
           - The analyze phase split into separate `analyze` (claims-only) and `plan` phases.
           - A new `codegen` phase for paper-only mode.
-          - A `mode` field at the top level recording which input mode produced this run.
+          - A `mode` field in the config fingerprint (`state['config']`) recording which input mode produced this run.
           - A new terminal status `insufficient_spec` for the analyze phase.
 
         Loading an older state file would mix incompatible phase artifacts. Force --restart.
@@ -165,14 +165,16 @@ class PipelineState:
         self,
         repo_path: Optional[Path],
         paper_path: Optional[Path],
-        mode: str,
     ) -> None:
-        """Stash inputs into ``state['inputs']``. Also called to refresh after invalidation."""
+        """Stash inputs into ``state['inputs']``. Also called to refresh after invalidation.
+
+        ``mode`` lives in the config fingerprint (``state['config']``), not here:
+        ``state['inputs']`` is reserved for things you can ``os.stat()``.
+        """
         self.state['inputs'] = {
             'repo_path': str(Path(repo_path).resolve()) if repo_path else None,
             'paper_path': str(Path(paper_path).resolve()) if paper_path else None,
             'paper_sha256': _sha256_of_file(paper_path) if paper_path else None,
-            'mode': mode,
         }
         self._save()
 

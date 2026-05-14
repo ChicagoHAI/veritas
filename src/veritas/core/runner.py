@@ -112,7 +112,7 @@ class ReplicationRunner:
             state = PipelineState(self.config.output_dir)
 
             if state.state.get('inputs') is None:
-                state.record_inputs(self.config.repo_path, self.config.paper_path, self.config.mode)
+                state.record_inputs(self.config.repo_path, self.config.paper_path)
                 state.record_config(self._config_fingerprint())
             else:
                 self._reconcile_with_prior_run(state)
@@ -993,7 +993,7 @@ class ReplicationRunner:
         state.invalidate_stages(affected_sorted)
 
         if input_changes:
-            state.record_inputs(self.config.repo_path, self.config.paper_path, self.config.mode)
+            state.record_inputs(self.config.repo_path, self.config.paper_path)
         if config_changes:
             state.record_config(current_config)
 
