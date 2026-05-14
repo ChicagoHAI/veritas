@@ -504,6 +504,7 @@ rewrite_paths() {
     local counter=0
     local saw_output=false
     local repo_host=""
+    local paper_host=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -521,6 +522,13 @@ rewrite_paths() {
                 local container_path="/workspace/inputs/file${counter}_${basename}"
                 MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
                 ARGS="$ARGS $flag \"$container_path\""
+                # Remember the first --paper host path for the output fallback
+                # when --repo is absent (mode 2).
+                if [ "$1" = "--paper" ] || [ "$1" = "-p" ]; then
+                    if [ -z "$paper_host" ]; then
+                        paper_host="$host_path"
+                    fi
+                fi
                 shift 2
                 ;;
             --repo|-r)
@@ -557,17 +565,27 @@ rewrite_paths() {
         esac
     done
 
-    # If the user didn't specify --output, default to <repo>/evaluation on
-    # the host side. Matches the Python CLI's default intent but lands on
-    # a writable mount — the --repo bind is read-only, so letting the CLI
-    # compute /workspace/repo/evaluation internally would crash with
-    # "Read-only file system" when it tries to mkdir the subdir.
-    if [ "$saw_output" = false ] && [ -n "$repo_host" ]; then
-        local default_output="$repo_host/evaluation"
-        mkdir -p "$default_output"
-        chmod -R a+rwX "$default_output" 2>/dev/null || true
-        MOUNTS="$MOUNTS -v \"$default_output:/workspace/output\""
-        ARGS="$ARGS --output /workspace/output"
+    # If the user didn't specify --output, pick a default on the host side
+    # that lands on a writable mount. The --repo bind is read-only, so
+    # letting the CLI compute /workspace/repo/evaluation internally would
+    # crash with "Read-only file system" when it tries to mkdir the subdir.
+    #
+    # Fallback chain: explicit --output (already handled above) > <repo>/evaluation
+    # > <paper-parent>/evaluation. The Config layer requires at least one of
+    # --paper or --repo, so one of these branches always fires.
+    if [ "$saw_output" = false ]; then
+        local default_output=""
+        if [ -n "$repo_host" ]; then
+            default_output="$repo_host/evaluation"
+        elif [ -n "$paper_host" ]; then
+            default_output="$(dirname "$paper_host")/evaluation"
+        fi
+        if [ -n "$default_output" ]; then
+            mkdir -p "$default_output"
+            chmod -R a+rwX "$default_output" 2>/dev/null || true
+            MOUNTS="$MOUNTS -v \"$default_output:/workspace/output\""
+            ARGS="$ARGS --output /workspace/output"
+        fi
     fi
 }
 

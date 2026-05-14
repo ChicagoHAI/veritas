@@ -91,15 +91,28 @@ echo "==================================="
 echo ""
 
 # Create a writable copy of the repo for the replication agent.
-# The original mount at /workspace/repo stays read-only.
-if [ -d /workspace/repo ] && [ -d /workspace/output ]; then
-    mkdir -p /workspace/output/replication
-    cp -a /workspace/repo /workspace/output/replication/codebase
+# The original mount at /workspace/repo stays read-only. When --repo is
+# absent (mode 2: paper-only), no repo is mounted and the replication
+# phase produces files from scratch into an empty codebase dir.
+if [ -d /workspace/output ]; then
+    mkdir -p /workspace/output/replication/codebase
+    if [ -d /workspace/repo ]; then
+        cp -a /workspace/repo/. /workspace/output/replication/codebase/
+    fi
 
     # Generate a unified diff of agent changes on exit, regardless of
-    # how the main process terminates.
-    trap 'diff -ruN /workspace/repo /workspace/output/replication/codebase \
-        > /workspace/output/replication/codebase.diff 2>/dev/null || true' EXIT
+    # how the main process terminates. With a source repo, diff against
+    # it; without one (mode 2), diff against /dev/null so the file still
+    # lists everything the agent produced.
+    trap '
+        if [ -d /workspace/repo ]; then
+            diff -ruN /workspace/repo /workspace/output/replication/codebase \
+                > /workspace/output/replication/codebase.diff 2>/dev/null || true
+        else
+            diff -ruN /dev/null /workspace/output/replication/codebase \
+                > /workspace/output/replication/codebase.diff 2>/dev/null || true
+        fi
+    ' EXIT
 fi
 
 exec "$@"
