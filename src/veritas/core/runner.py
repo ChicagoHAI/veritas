@@ -968,18 +968,7 @@ class ReplicationRunner:
         )
 
         current_config = self._config_fingerprint()
-        if state.state.get('config') is None:
-            # State predates config tracking. Adopt the current config as the
-            # baseline rather than treating every field as "changed." Users
-            # who actually changed flags since the prior run won't be caught
-            # this one time — surface the limitation so they can --restart.
-            print("NOTE: prior pipeline state predates config tracking. Recording")
-            print("   current config as baseline; pass --restart if any of provider")
-            print("   or claim_scope differ from the prior run.")
-            state.record_config(current_config)
-            config_changes: List[str] = []
-        else:
-            config_changes = state.detect_config_changes(current_config)
+        config_changes = state.detect_config_changes(current_config)
 
         all_changes = input_changes + config_changes
         if not all_changes:
