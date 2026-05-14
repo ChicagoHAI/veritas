@@ -32,13 +32,6 @@ def evaluate(
         exists=True,
         file_okay=False,
     ),
-    plan: Optional[Path] = typer.Option(
-        None,
-        "--plan",
-        help="Path to an existing plan file (optional, will extract from paper if not provided)",
-        exists=True,
-        dir_okay=False,
-    ),
     output: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
@@ -103,7 +96,6 @@ def evaluate(
     config = Config(
         paper_path=paper,
         repo_path=repo,
-        plan_path=plan,
         output_dir=output_dir,
         provider=provider,
         generate_pdf=generate_pdf,

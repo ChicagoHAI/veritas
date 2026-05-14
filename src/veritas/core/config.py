@@ -34,7 +34,6 @@ OUTPUT_SUBDIRS = (
 
 # Well-known output filenames produced by the pipeline.
 REPLICATION_PLAN_FILE = "replication_plan.json"
-EXTRACTED_PLAN_FILE = "extracted_plan.md"
 FIX_SEVERITY_FILE = "fix_severity.json"
 REPORT_MD_FILE = "replication_report.md"
 REPORT_PDF_FILE = "replication_report.pdf"
@@ -64,7 +63,6 @@ class Config:
     # Input paths
     repo_path: Path
     paper_path: Optional[Path] = None
-    plan_path: Optional[Path] = None
 
     # Output settings
     output_dir: Optional[Path] = None
@@ -90,8 +88,6 @@ class Config:
         self.repo_path = Path(self.repo_path)
         if self.paper_path:
             self.paper_path = Path(self.paper_path)
-        if self.plan_path:
-            self.plan_path = Path(self.plan_path)
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
         else:
@@ -110,10 +106,6 @@ class Config:
     @property
     def has_paper(self) -> bool:
         return self.paper_path is not None and self.paper_path.exists()
-
-    @property
-    def has_plan(self) -> bool:
-        return self.plan_path is not None and self.plan_path.exists()
 
     # -- Output subdirectories ----------------------------------------------
 
@@ -146,10 +138,6 @@ class Config:
     @property
     def replication_plan_path(self) -> Path:
         return self.analyze_dir / REPLICATION_PLAN_FILE
-
-    @property
-    def extracted_plan_path(self) -> Path:
-        return self.analyze_dir / EXTRACTED_PLAN_FILE
 
     @property
     def fix_severity_path(self) -> Path:

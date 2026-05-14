@@ -20,7 +20,6 @@ from veritas.core.replication import (
     gather_evidence,
     _extract_json,
 )
-from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -61,7 +60,6 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Config
     'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
     'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -82,7 +80,6 @@ class ReplicationRunner:
     def __init__(self, config: Config):
         self.config = config
         self.prompt_generator = PromptGenerator()
-        self.plan_extractor = PlanExtractor()
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
@@ -100,8 +97,6 @@ class ReplicationRunner:
                 state.record_config(self._config_fingerprint())
             else:
                 self._reconcile_with_prior_run(state)
-
-            plan_path = self._extract_plan()
 
             # analyze
             if state.is_stage_completed('analyze'):
@@ -193,25 +188,6 @@ class ReplicationRunner:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         for subdir in OUTPUT_SUBDIRS:
             (self.config.output_dir / subdir).mkdir(exist_ok=True)
-
-    def _extract_plan(self) -> Optional[Path]:
-        """Get existing plan or extract from paper."""
-        repo_plan = self.config.repo_path / "plan.md"
-        if repo_plan.exists():
-            return repo_plan
-
-        if self.config.has_plan:
-            return self.config.plan_path
-
-        if self.config.has_paper:
-            plan_content = self.plan_extractor.extract(
-                self.config.paper_path, with_evidence=True
-            )
-            plan_path = self.config.extracted_plan_path
-            plan_path.write_text(plan_content, encoding='utf-8')
-            return plan_path
-
-        return None
 
     # -- Phase 1: Analyze --------------------------------------------------
 
@@ -756,7 +732,6 @@ class ReplicationRunner:
         return {
             'provider': self.config.provider,
             'mode': self.config.mode,
-            'plan_provided': self.config.has_plan,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
@@ -781,8 +756,8 @@ class ReplicationRunner:
             # who actually changed flags since the prior run won't be caught
             # this one time — surface the limitation so they can --restart.
             print("NOTE: prior pipeline state predates config tracking. Recording")
-            print("   current config as baseline; pass --restart if any of provider,")
-            print("   mode, or --plan differ from the prior run.")
+            print("   current config as baseline; pass --restart if any of provider")
+            print("   or mode differ from the prior run.")
             state.record_config(current_config)
             config_changes: List[str] = []
         else:
