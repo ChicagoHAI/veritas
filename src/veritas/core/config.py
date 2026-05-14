@@ -197,6 +197,17 @@ class Config:
     def has_user_claims(self) -> bool:
         return self.claims_path is not None and self.claims_path.exists()
 
+    @property
+    def effective_repo_path(self) -> Optional[Path]:
+        """Path to the codebase the pipeline operates on. In paper-only mode this
+        is the codegen output (replication_dir/codebase). In other modes it is the
+        user-supplied repo. Returns None when neither is available (rare; should
+        only occur if called before codegen runs in paper-only mode)."""
+        if self.mode == "paper-only":
+            codebase = self.replication_dir / "codebase"
+            return codebase if codebase.exists() else None
+        return self.repo_path
+
     # -- Output subdirectories ----------------------------------------------
 
     @property

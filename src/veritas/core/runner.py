@@ -389,6 +389,7 @@ class ReplicationRunner:
                 log_path=log_path,
                 parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
+                working_dir=working_dir,
             )
 
         if claims is None:
@@ -483,14 +484,7 @@ class ReplicationRunner:
         """Generate a replication plan whose steps reference claim IDs."""
         print("Generating replication plan...")
 
-        # In paper-only mode, the codegen phase wrote the codebase into
-        # replication_dir/codebase/. In modes 1/3 the user-supplied repo is used.
-        # The plan-gen agent needs both an effective repo path (to render into the
-        # template) and a working directory (for the provider invocation).
-        if self.config.mode == "paper-only":
-            effective_repo_path = self.config.replication_dir / "codebase"
-        else:
-            effective_repo_path = self.config.repo_path
+        effective_repo_path = self.config.effective_repo_path
 
         prompt = self.prompt_generator.generate_replication_plan_prompt(
             repo_path=effective_repo_path,
@@ -539,6 +533,7 @@ class ReplicationRunner:
                 log_path=log_path,
                 parser=parse_replication_plan_response,
                 timeout=self.config.analyze_timeout,
+                working_dir=effective_repo_path,
             )
 
         if plan is None:
@@ -583,6 +578,7 @@ class ReplicationRunner:
         log_path: Path,
         parser,
         timeout: Optional[int],
+        working_dir: Path,
     ):
         """Re-prompt the provider to fix invalid JSON output.
 
@@ -606,7 +602,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=repair_prompt,
-            working_dir=self.config.repo_path,
+            working_dir=working_dir,
             log_path=log_path,
             timeout=timeout,
             append=True,
@@ -661,7 +657,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=session_instructions,
-            working_dir=self.config.repo_path,
+            working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
         )
@@ -781,7 +777,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.verify_timeout,
         )
