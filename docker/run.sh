@@ -684,6 +684,98 @@ cmd_login() {
 }
 
 # -----------------------------------------------------------------------------
+# Interactive .env edit menu
+# -----------------------------------------------------------------------------
+cmd_config() {
+    # Create .env from template on first invocation
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        if [ -f "$PROJECT_ROOT/.env.example" ]; then
+            cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+            echo -e "  ${GREEN}[OK]${NC} Created .env from template"
+        else
+            touch "$PROJECT_ROOT/.env"
+            echo -e "  ${GREEN}[OK]${NC} Created empty .env"
+        fi
+        ensure_env_perms
+        echo ""
+    fi
+
+    while true; do
+        echo ""
+        echo -e "  ${BOLD}Replication API Keys${NC}"
+        echo -e "  ${DIM}Select a key to edit, or 'q' to save and exit.${NC}"
+        echo ""
+        echo -e "  ${BOLD}LLM providers${NC}"
+        echo -e "    ${BOLD}[1]${NC}  OpenAI API Key ......... $(format_status OPENAI_API_KEY true)"
+        echo -e "    ${BOLD}[2]${NC}  Anthropic API Key ...... $(format_status ANTHROPIC_API_KEY true)"
+        echo -e "    ${BOLD}[3]${NC}  Google API Key ......... $(format_status GOOGLE_API_KEY true)"
+        echo -e "    ${BOLD}[4]${NC}  OpenRouter API Key ..... $(format_status OPENROUTER_API_KEY true)"
+        echo ""
+        echo -e "  ${BOLD}Data / experiment infrastructure${NC}"
+        echo -e "    ${BOLD}[5]${NC}  Hugging Face Token ..... $(format_status HF_TOKEN true)"
+        echo -e "    ${BOLD}[6]${NC}  Weights & Biases Key ... $(format_status WANDB_API_KEY true)"
+        echo ""
+        echo -e "    ${BOLD}[q]${NC}  Save & exit"
+        echo ""
+        echo -ne "  > "
+        local choice=""
+        read choice < /dev/tty
+
+        case "$choice" in
+            1)
+                echo ""
+                prompt_secret "OpenAI API Key" "OPENAI_API_KEY" "optional" "sk-" \
+                    "GPT family — required by hypogenic, PaperBench, many ML papers" || true
+                ensure_env_perms
+                ;;
+            2)
+                echo ""
+                prompt_secret "Anthropic API Key" "ANTHROPIC_API_KEY" "optional" "sk-ant-" \
+                    "Claude API — independent of veritas's Claude Code OAuth" || true
+                ensure_env_perms
+                ;;
+            3)
+                echo ""
+                prompt_secret "Google API Key" "GOOGLE_API_KEY" "optional" "" \
+                    "Gemini API access" || true
+                ensure_env_perms
+                ;;
+            4)
+                echo ""
+                prompt_secret "OpenRouter API Key" "OPENROUTER_API_KEY" "optional" "sk-or-" \
+                    "Multi-model routing (https://openrouter.ai)" || true
+                ensure_env_perms
+                ;;
+            5)
+                echo ""
+                prompt_secret "Hugging Face Token" "HF_TOKEN" "optional" "hf_" \
+                    "Gated models / datasets (Llama-2, ImageNet)" || true
+                ensure_env_perms
+                ;;
+            6)
+                echo ""
+                prompt_secret "Weights & Biases API Key" "WANDB_API_KEY" "optional" "" \
+                    "Experiment tracking (https://wandb.ai)" || true
+                ensure_env_perms
+                ;;
+            q|Q|"")
+                echo ""
+                echo -e "  ${GREEN}Saved to .env${NC}"
+                echo ""
+                return
+                ;;
+            *)
+                echo -e "  ${YELLOW}Invalid choice. Enter 1-6 or q to exit.${NC}"
+                ;;
+        esac
+
+        echo ""
+        echo -ne "  ${DIM}Press Enter to continue...${NC}"
+        read < /dev/tty
+    done
+}
+
+# -----------------------------------------------------------------------------
 # Interactive bash shell inside the container (cwd mounted at /workspace)
 # -----------------------------------------------------------------------------
 cmd_shell() {
