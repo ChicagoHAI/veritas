@@ -1209,19 +1209,21 @@ show_help() {
     echo -e "${BOLD}Usage:${NC} ./veritas <command> [args...]"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
+    echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
     echo "  evaluate      Run the full replication pipeline"
     echo "                  e.g. ./veritas evaluate --paper p.pdf --repo ./myrepo"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
     echo "  report        Regenerate a report from an existing evaluation dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
+    echo "  config        Edit replication API keys (.env) interactively"
     echo "  login         Log in to an AI provider (claude|codex|gemini)"
     echo "  build         Build the image locally"
     echo "  update        Pull the latest image from GHCR"
-    echo "  status        Show status dashboard (Docker, image, GPU, credentials)"
+    echo "  status        Show status dashboard (Docker, image, GPU, credentials, .env)"
     echo "  help          Show this help"
     echo ""
     echo -e "${BOLD}First-time setup:${NC}"
-    echo "  1. ./veritas login claude"
+    echo "  1. ./veritas setup"
     echo "  2. ./veritas evaluate --paper <your-paper.pdf> --repo <your-repo>"
     echo ""
 }
@@ -1238,6 +1240,8 @@ main() {
         extract-plan)  cmd_extract_plan "$@" ;;
         report)        cmd_report "$@" ;;
         shell)         cmd_shell "$@" ;;
+        setup)         cmd_setup "$@" ;;
+        config)        cmd_config "$@" ;;
         login)         cmd_login "$@" ;;
         build)         cmd_build ;;
         update)        cmd_update ;;
