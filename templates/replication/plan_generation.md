@@ -70,6 +70,7 @@ Focus on the paper's **headline and supporting claims**. Do not attempt to repro
 - The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
 - If you find multiple entry points or experiments, prioritize the one that targets the headline claim
 - Every result-producing step MUST have at least one claim ID in `verifies`. Setup-only steps may have an empty `verifies` list.
+- **Validate each `verifies` entry.** For every claim ID you list in a step's `verifies`, re-read that claim's `verification` field. The step's `command_hint` must actually run a workflow that produces the specific evidence the verification field asks the verifier to inspect — not merely touch the same file or codepath. If a step doesn't exercise the claim's specific behavior, either modify `command_hint` to do so, or drop the claim ID from `verifies`. Example of the failure to catch: a claim asks for a comparison between an `i_orb`=90° inference and an `i_orb`-sampled inference, the step description says "Run transform.py to generate forward coordinate transforms", and transform.py hardcodes `i_orb = pi/2`. The step touches the relevant area but never runs the second inference, so the cross-reference is wrong — either modify the step to run both inferences, or drop that claim ID from `verifies`.
 - NEVER include the paper's reported numerical result values in `expected_outcome`.
 
 ## Output
