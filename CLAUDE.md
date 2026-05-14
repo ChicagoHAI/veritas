@@ -125,6 +125,7 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **Docker is mandatory.** There is no host-side fallback. The `./veritas` wrapper manages the image lifecycle (pull from GHCR on first run, build locally if pull fails).
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
 - **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped.
+- **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_evaluate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys, but the paper code run during replicate does. New `./veritas setup` and `./veritas config` subcommands manage the file.
 
 ## Testing
 
