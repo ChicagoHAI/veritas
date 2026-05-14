@@ -138,10 +138,14 @@ class Config:
                 f"Unknown mode: {requested}. Valid options: {VALID_INPUT_MODES}"
             )
 
-        inferred = self._infer_mode()
+        # Check --claims pairing first: more specific error than the generic "needs paper or repo"
+        if self.has_user_claims and not (self.has_paper or self.has_repo):
+            raise ValueError(
+                "--claims requires at least --paper or --repo as evidence source"
+            )
 
         if requested == "auto":
-            return inferred
+            return self._infer_mode()
 
         # Explicit mode — validate against the provided inputs
         if requested == "full":
@@ -165,12 +169,6 @@ class Config:
                     f"WARNING: --paper provided but --mode repo-only is set; "
                     f"ignoring paper at {self.paper_path}"
                 )
-
-        # Validate --claims pairing (works the same regardless of explicit/auto mode)
-        if self.has_user_claims and not (self.has_paper or self.has_repo):
-            raise ValueError(
-                "--claims requires at least --paper or --repo as evidence source"
-            )
 
         return requested
 
