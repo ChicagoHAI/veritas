@@ -134,6 +134,19 @@ class ReplicationRunner:
                     state.complete_stage('analyze', success=False)
                     raise
 
+            # codegen (paper-only mode only)
+            if self.config.mode == "paper-only":
+                if state.is_stage_completed('codegen'):
+                    print("[OK] codegen: skipped (already completed)")
+                else:
+                    state.start_stage('codegen')
+                    try:
+                        self._generate_code(claims)
+                        state.complete_stage('codegen', success=True)
+                    except Exception:
+                        state.complete_stage('codegen', success=False)
+                        raise
+
             # plan (now its own phase)
             if state.is_stage_completed('plan'):
                 print("[OK] plan: skipped (already completed)")
@@ -398,6 +411,64 @@ class ReplicationRunner:
             f"({n_h} headline, {n_s} supporting, {n_se} setup)"
         )
         return claims
+
+    # -- Phase 1.5: Codegen (paper-only mode) ------------------------------
+
+    def _generate_code(self, claims: PaperClaims) -> None:
+        """Paper-only mode: have the agent write the paper's methodology into
+        <replication>/codebase/. Resume primitive: sentinel file at
+        <output>/.veritas/codegen_complete. Partial codebases from killed sessions
+        are wiped before retry."""
+
+        sentinel = self.config.codegen_complete_sentinel_path
+        if sentinel.exists():
+            print("[OK] codegen: skipped (sentinel exists from prior completed run)")
+            return
+
+        codebase_dir = self.config.replication_dir / "codebase"
+
+        # Wipe any partial codebase from a killed prior session
+        if codebase_dir.exists() and any(codebase_dir.iterdir()):
+            print(f"  Wiping partial codebase at {codebase_dir} before retry")
+            shutil.rmtree(codebase_dir)
+        codebase_dir.mkdir(parents=True, exist_ok=True)
+
+        print("Generating code from paper...")
+        prompt = self.prompt_generator.generate_codegen_prompt(
+            paper_path=self.config.paper_path,
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.prompts_dir / "codegen_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        log_path = self.config.codegen_transcript_path
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=codebase_dir,
+            log_path=log_path,
+            timeout=self.config.codegen_timeout,
+        )
+
+        if not success:
+            raise RuntimeError(
+                f"Codegen failed: provider invocation did not succeed "
+                f"(transcript: {log_path})"
+            )
+
+        # Sanity check: the codebase should be non-empty
+        contents = list(codebase_dir.iterdir())
+        if not contents:
+            raise RuntimeError(
+                f"Codegen failed: agent did not write any files to {codebase_dir}"
+            )
+
+        n_files = sum(1 for _ in codebase_dir.rglob('*') if _.is_file())
+        print(f"  Codegen wrote {n_files} file(s) to {codebase_dir}")
+
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.touch()
 
     def _generate_replication_plan(self, claims: PaperClaims) -> Optional[ReplicationPlan]:
         """Generate a replication plan whose steps reference claim IDs."""
