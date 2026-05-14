@@ -80,13 +80,10 @@ def evaluate(
         "--analyze-timeout",
         help="Timeout in seconds for the analyze phase. Default: no timeout.",
     ),
-    codegen_timeout: Optional[int] = typer.Option(
-        None,
+    codegen_timeout: int = typer.Option(
+        3600,
         "--codegen-timeout",
-        help=(
-            "Timeout in seconds for the codegen phase (paper-only mode only). "
-            "Default: 3600 (1 hour)."
-        ),
+        help="Timeout in seconds for the codegen phase (paper-only mode only).",
     ),
     replicate_timeout: Optional[int] = typer.Option(
         None,
@@ -144,7 +141,7 @@ def evaluate(
             provider=provider,
             generate_pdf=generate_pdf,
             analyze_timeout=analyze_timeout,
-            codegen_timeout=(codegen_timeout if codegen_timeout is not None else 3600),
+            codegen_timeout=codegen_timeout,
             replicate_timeout=replicate_timeout,
             verify_timeout=verify_timeout,
             claim_scope=scope,
