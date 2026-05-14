@@ -398,6 +398,26 @@ prompt_choice() {
     done
 }
 
+# Print a non-fatal warning if .env is missing. Called from cmd_evaluate /
+# cmd_shell so users running an LLM-based paper get an actionable hint
+# without breaking workflows for papers that don't need keys.
+check_env_file_warn() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "${YELLOW}Note:${NC} no .env found at $PROJECT_ROOT/.env" >&2
+        echo -e "      Papers that call LLM APIs (e.g. hypogenic, PaperBench) will fail without keys." >&2
+        echo -e "      Run ${BOLD}./veritas setup${NC} to configure, or ${BOLD}cp .env.example .env${NC} to start manually." >&2
+        echo "" >&2
+    fi
+}
+
+# Restrict .env to owner-only since it holds raw API keys. Idempotent and
+# silent on missing file — safe to call from any subcommand.
+ensure_env_perms() {
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        chmod 600 "$PROJECT_ROOT/.env" 2>/dev/null || true
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
