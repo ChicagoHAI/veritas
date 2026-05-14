@@ -1034,7 +1034,7 @@ rewrite_paths() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --paper|-p|--plan)
+            --paper|-p)
                 local flag="$1"
                 local host_path
                 host_path=$(realpath "$2" 2>/dev/null || echo "$2")
