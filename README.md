@@ -2,40 +2,48 @@
 
 **A Replication Agent for Evaluating Scientific Reproducibility**
 
-Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and repository, it runs a four-phase pipeline — **Analyze**, **Replicate**, **Assess Fixes**, **Verify** — producing a Replication Report with a single tier-weighted Replication Score plus per-claim verdicts, execution evidence, and fix severity ratings.
+Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and (optionally) a repository, it runs a multi-phase pipeline — **Analyze**, **Codegen** (paper-only mode), **Plan**, **Replicate**, **Assess Fixes**, **Verify** — producing a Replication Report with a single tier-weighted Replication Score plus per-claim verdicts, execution evidence, and fix severity ratings.
 
 The replication agent actively fixes issues it encounters (deprecated APIs, missing dependencies, configuration problems) rather than stopping at the first error. Every fix is tracked and rated for severity, so the final report honestly reflects both the results and what it took to get them.
 
 ## How It Works
 
 ```
-Input (Paper PDF + Repository)
+Input (Paper PDF and/or Repository)
         |
   1. ANALYZE
-  |  - Extract structured paper claims (paper_claims.json)
+  |  - Extract structured paper claims (paper_claims.json) from the paper
+  |    (or from the README in repo-only mode, or from --claims if supplied)
+        |
+  2. CODEGEN  (paper-only mode only)
+  |  - Generate a fresh codebase from the paper's methodology
+  |  - Sentinel-based resume; skipped in full and repo-only modes
+        |
+  3. PLAN
   |  - Generate a claim-aware replication plan (replication_plan.json)
+  |  - Steps reference claim IDs via the `verifies` field
         |
-  2. REPLICATE
-  |  - Execute the plan inside a Docker container on a writable copy of the repo
+  4. REPLICATE
+  |  - Execute the plan inside a Docker container on a writable copy of the codebase
   |  - An AI agent (Claude/Codex/Gemini) runs the code, actively fixing issues
-  |  - Collect execution evidence + structured fix records
+  |  - Collect execution evidence and structured fix records
         |
-  3. ASSESS FIXES
+  5. ASSESS FIXES
   |  - Rate each applied fix as minor / major / critical
   |  - Assess what each fix implies about reproducibility quality
         |
-  4. VERIFY
+  6. VERIFY
   |  - One verifier invocation per claim against produced evidence
   |  - Per-claim structured verdict (match / partial / no_match / not_attempted / not_applicable)
   |  - Tier-weighted Replication Score aggregation
         |
-  5. REPORT
+  REPORT
      - Headline Replication Score with tier breakdown
      - Per-claim verdict table with rationales
      - Replication evidence, fixes-applied section, environment summary
 ```
 
-Rather than scoring papers on a fixed rubric, Veritas extracts each paper's specific reproducible claims and adjudicates them one at a time against the evidence the replication actually produced. The Replication Score is a tier-weighted fraction (headline = weight 3, supporting = 2, setup = 1) of `match`-or-`partial` verdicts among adjudicated claims.
+Rather than scoring papers on a fixed rubric, Veritas extracts each paper's specific reproducible claims and adjudicates them one at a time against the evidence the replication actually produced. The Replication Score is a tier-weighted average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`, `not_attempted=0.0`) with tier weights `headline=3, supporting=2, setup=1`. `not_applicable` claims are excluded from both the numerator and denominator.
 
 ## Features
 
@@ -128,7 +136,7 @@ Note: `--mode` (input mode) is distinct from `--scope` (claim-extraction scope: 
 
 ## Resuming Runs
 
-A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, replicate, assess_fixes, and verify are tracked, and the verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
+A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, codegen (paper-only mode), plan, replicate, assess_fixes, and verify are all tracked. The verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
 
 Resume is automatic and prints a banner so the skip behavior isn't a surprise. Pass `--restart` to discard the state file and run everything from scratch.
 
@@ -182,7 +190,7 @@ evaluation/
 │   └── replication_report.pdf
 ├── prompts/                                 # Debug: rendered prompts sent to the LLM
 └── .veritas/
-    └── pipeline_state.json                  # Resume checkpoint (schema_version=2)
+    └── pipeline_state.json                  # Resume checkpoint (schema_version=3)
 ```
 
 ## Docker Container
