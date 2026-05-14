@@ -14,6 +14,8 @@ VALID_CLAIM_SCOPES = ["main", "full"]
 # Input mode literal — distinct from claim_scope
 InputMode = Literal["full", "paper-only", "repo-only"]
 
+VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
+
 
 # Output directory structure — each phase writes into its own subdir.
 ANALYZE_SUBDIR = "analyze"
@@ -74,7 +76,7 @@ class Config:
     # Evaluation settings
     provider: str = "claude"
     claim_scope: str = "main"
-    mode: InputMode = "full"
+    mode: str = "auto"
     claims_path: Optional[Path] = None
     codegen_timeout: Optional[int] = 3600
 
@@ -90,25 +92,33 @@ class Config:
     verbose: bool = False
 
     def __post_init__(self):
-        # Convert paths to Path objects
+        # Convert input paths to Path objects (if provided)
         if self.repo_path is not None:
             self.repo_path = Path(self.repo_path)
-        if self.paper_path:
+        if self.paper_path is not None:
             self.paper_path = Path(self.paper_path)
+        if self.claims_path is not None:
+            self.claims_path = Path(self.claims_path)
+
+        # Output dir fallback chain: explicit --output wins; else <repo>/eval; else <paper-parent>/eval
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
         elif self.repo_path:
             self.output_dir = self.repo_path / "evaluation"
+        elif self.paper_path:
+            self.output_dir = self.paper_path.parent / "evaluation"
         else:
-            # Will be properly handled in a follow-up; for now, leave None so
-            # existing callers that supply repo_path keep working.
-            pass
+            raise ValueError(
+                "Cannot determine output directory: provide --output, --repo, or --paper"
+            )
 
         # Validate provider
         if self.provider.lower() not in VALID_PROVIDERS:
-            raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
+            raise ValueError(
+                f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}"
+            )
 
-        # Validate claim scope
+        # Validate claim_scope (existing logic, kept as-is)
         if self.claim_scope not in VALID_CLAIM_SCOPES:
             raise ValueError(
                 f"Unknown claim scope: {self.claim_scope}. Valid options: {VALID_CLAIM_SCOPES}"
@@ -117,6 +127,65 @@ class Config:
             raise NotImplementedError(
                 "--scope full is not yet implemented. Use --scope main (default)."
             )
+
+        # Resolve input mode (auto-detect from inputs, or validate explicit mode)
+        self.mode = self._resolve_mode(self.mode)
+
+    def _resolve_mode(self, requested: str) -> str:
+        """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
+        if requested not in VALID_INPUT_MODES:
+            raise ValueError(
+                f"Unknown mode: {requested}. Valid options: {VALID_INPUT_MODES}"
+            )
+
+        inferred = self._infer_mode()
+
+        if requested == "auto":
+            return inferred
+
+        # Explicit mode — validate against the provided inputs
+        if requested == "full":
+            if not self.has_paper or not self.has_repo:
+                raise ValueError(
+                    "--mode full requires both --paper and --repo"
+                )
+        elif requested == "paper-only":
+            if not self.has_paper:
+                raise ValueError("--mode paper-only requires --paper")
+            if self.has_repo:
+                print(
+                    f"WARNING: --repo provided but --mode paper-only is set; "
+                    f"ignoring repo at {self.repo_path}"
+                )
+        elif requested == "repo-only":
+            if not self.has_repo:
+                raise ValueError("--mode repo-only requires --repo")
+            if self.has_paper:
+                print(
+                    f"WARNING: --paper provided but --mode repo-only is set; "
+                    f"ignoring paper at {self.paper_path}"
+                )
+
+        # Validate --claims pairing (works the same regardless of explicit/auto mode)
+        if self.has_user_claims and not (self.has_paper or self.has_repo):
+            raise ValueError(
+                "--claims requires at least --paper or --repo as evidence source"
+            )
+
+        return requested
+
+    def _infer_mode(self) -> str:
+        """Infer mode from which of paper/repo are present."""
+        if self.has_paper and self.has_repo:
+            return "full"
+        if self.has_paper and not self.has_repo:
+            return "paper-only"
+        if self.has_repo and not self.has_paper:
+            return "repo-only"
+        raise ValueError(
+            "At least one of --paper or --repo is required "
+            "(or --claims paired with one of them)"
+        )
 
     @property
     def has_paper(self) -> bool:
