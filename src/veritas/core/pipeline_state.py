@@ -18,9 +18,7 @@ STATE_DIR = ".veritas"
 STATE_FILE = "pipeline_state.json"
 STATE_SCHEMA_VERSION = 3
 
-# Status string for the analyze phase when claim extraction yields zero claims
-# (e.g. README is too thin in repo-only mode). When this status is set, downstream
-# phases are skipped and the report-generator emits a bail report.
+# Terminal status for the analyze phase when claim extraction yields zero claims.
 STATUS_INSUFFICIENT_SPEC = "insufficient_spec"
 
 

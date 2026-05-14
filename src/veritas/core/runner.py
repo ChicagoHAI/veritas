@@ -60,6 +60,8 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Config
     'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
     'claim_scope':   ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -732,6 +734,8 @@ class ReplicationRunner:
         return {
             'provider': self.config.provider,
             'claim_scope': self.config.claim_scope,
+            'mode': self.config.mode,
+            'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
