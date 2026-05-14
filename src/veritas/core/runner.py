@@ -1070,6 +1070,13 @@ class ReplicationRunner:
         With ``append=True`` the transcript file is opened in append mode,
         which is used by the repair-re-invocation path so the original
         failed attempt and the repair attempt land in one transcript file.
+
+        ``expose_api_keys=True`` lets the subprocess inherit the
+        replication API keys (the vars listed in
+        ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
+        this — paper code it runs needs the keys. All other phases must
+        keep the default ``False`` so the keys are not exposed to
+        analyze/plan/codegen/assess/verify subprocesses.
         """
         provider = self.config.provider.lower()
         if provider not in CLI_COMMANDS:
