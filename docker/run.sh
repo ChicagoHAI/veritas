@@ -445,11 +445,7 @@ check_provider_credentials() {
     local provider="$1"
     case "$provider" in
         claude)
-            if [[ "$(uname)" == "Darwin" ]] \
-                && security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
-                return 0
-            fi
-            if [ -s "$HOME/.claude/.credentials.json" ]; then
+            if is_claude_configured; then
                 return 0
             fi
             echo -e "${RED}Claude credentials not found.${NC}" >&2
@@ -477,6 +473,20 @@ check_provider_credentials() {
             exit 1
             ;;
     esac
+}
+
+# Return 0 if Claude OAuth credentials are present on this host, 1 otherwise.
+# On macOS, Claude Code stores credentials in the Keychain; on Linux/Windows
+# they live in ~/.claude/.credentials.json. Check both.
+is_claude_configured() {
+    if [[ "$(uname)" == "Darwin" ]] \
+        && security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
+        return 0
+    fi
+    if [ -s "$HOME/.claude/.credentials.json" ]; then
+        return 0
+    fi
+    return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -569,15 +579,7 @@ show_status() {
     fi
 
     # Credentials
-    local claude_ok=false
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
-            claude_ok=true
-        fi
-    elif [ -s "$HOME/.claude/.credentials.json" ]; then
-        claude_ok=true
-    fi
-    if [ "$claude_ok" = true ]; then
+    if is_claude_configured; then
         echo -e "    Claude credentials .. ${GREEN}[OK]${NC}"
     else
         echo -e "    Claude credentials .. ${DIM}[--]${NC} run: ./veritas login claude"
@@ -869,7 +871,7 @@ cmd_setup() {
     echo ""
 
     local claude_status="" codex_status="" gemini_status=""
-    if [ -s "$HOME/.claude/.credentials.json" ]; then
+    if is_claude_configured; then
         claude_status=" ${GREEN}[already configured]${NC}"
     fi
     if [ -d "$HOME/.codex" ] && [ "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
@@ -890,14 +892,19 @@ cmd_setup() {
     read login_input < /dev/tty
     login_input="${login_input//,/ }"
 
-    for choice in $login_input; do
-        case "$choice" in
-            1) cmd_login claude ;;
-            2) cmd_login codex ;;
-            3) cmd_login gemini ;;
-            4) echo -e "    ${DIM}[SKIP]${NC} Login deferred — run ./veritas login claude later" ;;
-        esac
-    done
+    if [ -z "$login_input" ]; then
+        echo -e "    ${DIM}[SKIP]${NC} No selection — run ./veritas login <provider> later"
+    else
+        for choice in $login_input; do
+            case "$choice" in
+                1) cmd_login claude ;;
+                2) cmd_login codex ;;
+                3) cmd_login gemini ;;
+                4) echo -e "    ${DIM}[SKIP]${NC} Login deferred — run ./veritas login <provider> later" ;;
+                *) echo -e "    ${YELLOW}[WARN]${NC} Ignoring unknown choice '$choice'" ;;
+            esac
+        done
+    fi
     echo ""
 
     # Step 4: .env (optional)
