@@ -578,6 +578,13 @@ show_status() {
         echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
     fi
 
+    # .env (replication API keys)
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "    .env ................ ${GREEN}[OK]${NC}"
+    else
+        echo -e "    .env ................ ${DIM}[--]${NC} run: ./veritas setup (or cp .env.example .env)"
+    fi
+
     # Credentials
     if is_claude_configured; then
         echo -e "    Claude credentials .. ${GREEN}[OK]${NC}"
