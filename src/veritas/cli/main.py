@@ -25,8 +25,8 @@ def evaluate(
         exists=True,
         dir_okay=False,
     ),
-    repo: Path = typer.Option(
-        ...,
+    repo: Optional[Path] = typer.Option(
+        None,
         "--repo", "-r",
         help="Path to the repository to evaluate",
         exists=True,
@@ -35,12 +35,40 @@ def evaluate(
     output: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Output directory for the replication report (default: repo/evaluation)",
+        help="Output directory (default: <repo>/evaluation or <paper-parent>/evaluation)",
     ),
     provider: str = typer.Option(
         "claude",
         "--provider",
         help="AI provider to use (claude, codex, gemini)",
+    ),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help=(
+            "Input mode. 'auto' (default) infers from --paper/--repo presence. "
+            "'full' = paper+repo. 'paper-only' = paper alone (agent writes the code). "
+            "'repo-only' = repo alone (claims extracted from README)."
+        ),
+    ),
+    claims: Optional[Path] = typer.Option(
+        None,
+        "--claims",
+        help=(
+            "Path to a user-authored claims JSON file (same schema as "
+            "<output>/analyze/paper_claims.json). When provided, skips automatic "
+            "claim extraction."
+        ),
+        exists=True,
+        dir_okay=False,
+    ),
+    scope: str = typer.Option(
+        "main",
+        "--scope",
+        help=(
+            "Claim-extraction scope. 'main' targets headline+supporting (default); "
+            "'full' (not yet implemented) includes setup tier."
+        ),
     ),
     generate_pdf: bool = typer.Option(
         True,
@@ -50,22 +78,25 @@ def evaluate(
     analyze_timeout: Optional[int] = typer.Option(
         None,
         "--analyze-timeout",
-        help="Timeout in seconds for the analyze phase (per LLM call). Default: no timeout.",
+        help="Timeout in seconds for the analyze phase. Default: no timeout.",
+    ),
+    codegen_timeout: Optional[int] = typer.Option(
+        None,
+        "--codegen-timeout",
+        help=(
+            "Timeout in seconds for the codegen phase (paper-only mode only). "
+            "Default: 3600 (1 hour)."
+        ),
     ),
     replicate_timeout: Optional[int] = typer.Option(
         None,
         "--replicate-timeout",
-        help="Timeout in seconds for the replicate phase (per LLM call). Default: no timeout.",
+        help="Timeout in seconds for the replicate phase. Default: no timeout.",
     ),
     verify_timeout: Optional[int] = typer.Option(
         None,
         "--verify-timeout",
         help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
-    ),
-    scope: str = typer.Option(
-        "main",
-        "--scope",
-        help="Claim-extraction scope. 'main' targets the paper's headline and supporting claims (default); 'full' (not yet implemented) extracts all tiers including setup-level metadata.",
     ),
     restart: bool = typer.Option(
         False,
@@ -76,15 +107,28 @@ def evaluate(
     """
     Evaluate the replicability of a scientific paper against its code repository.
 
-    Runs a four-phase pipeline (analyze, replicate, assess_fixes, verify) and
-    produces a Replication Score: a single tier-weighted number reflecting how
-    many of the paper's structured claims the replication actually reproduced.
+    Runs a multi-phase pipeline (analyze, plan, codegen [paper-only], replicate,
+    assess_fixes, verify) and produces a Replication Score: a single tier-weighted
+    number reflecting how many of the paper's structured claims the replication
+    actually reproduced.
     """
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
 
-    # Determine output directory
-    output_dir = output or (repo / "evaluation")
+    # Determine output directory: explicit --output wins; else <repo>/eval; else <paper-parent>/eval.
+    # Config.__post_init__ also enforces this chain, but resolving here gives us a
+    # path to write the .veritas/ state directory before constructing the runner.
+    if output is not None:
+        output_dir = output
+    elif repo is not None:
+        output_dir = repo / "evaluation"
+    elif paper is not None:
+        output_dir = paper.parent / "evaluation"
+    else:
+        console.print(
+            "[bold red]Error:[/bold red] at least one of --paper or --repo is required"
+        )
+        raise typer.Exit(1)
 
     if restart:
         state_file = output_dir / ".veritas" / "pipeline_state.json"
@@ -92,25 +136,31 @@ def evaluate(
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
 
-    # Create config
-    config = Config(
-        paper_path=paper,
-        repo_path=repo,
-        output_dir=output_dir,
-        provider=provider,
-        generate_pdf=generate_pdf,
-        analyze_timeout=analyze_timeout,
-        replicate_timeout=replicate_timeout,
-        verify_timeout=verify_timeout,
-        claim_scope=scope,
-    )
+    try:
+        config = Config(
+            paper_path=paper,
+            repo_path=repo,
+            output_dir=output_dir,
+            provider=provider,
+            generate_pdf=generate_pdf,
+            analyze_timeout=analyze_timeout,
+            codegen_timeout=(codegen_timeout if codegen_timeout is not None else 3600),
+            replicate_timeout=replicate_timeout,
+            verify_timeout=verify_timeout,
+            claim_scope=scope,
+            mode=mode,
+            claims_path=claims,
+        )
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
 
-    # Run evaluation
+    console.print(f"[blue]Mode:[/blue] {config.mode}")
+
     runner = ReplicationRunner(config)
 
     try:
         result = runner.run()
-
         if result.success:
             console.print()
             console.print("[bold green]Evaluation completed successfully![/bold green]")
@@ -121,7 +171,6 @@ def evaluate(
             console.print()
             console.print(f"[bold red]Evaluation failed:[/bold red] {result.error}")
             raise typer.Exit(1)
-
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
