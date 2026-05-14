@@ -1,15 +1,20 @@
 # Replication Plan Generation
 
 You are generating a step-by-step replication plan for testing whether a paper's code reproduces the paper's reported results.
+
+**Run mode:** {{ mode }} — {% if mode == "full" %}paper and repository both provided.{% elif mode == "paper-only" %}paper-only mode; the codebase at the repository path was just written from the paper by an earlier phase and may be rough.{% elif mode == "repo-only" %}repo-only mode; no paper available — claims came from the README.{% endif %}
+
 {% if has_paper %}
 ## Paper
 
 You MUST read the PDF directly from this local path:
 {{ paper_path }}
 
-{% endif %}## Repository Path
+{% endif %}{% if has_repo %}## Repository Path
 
 {{ repo_path }}
+
+{% endif %}
 
 ## Paper Claims Summary
 

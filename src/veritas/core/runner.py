@@ -483,8 +483,17 @@ class ReplicationRunner:
         """Generate a replication plan whose steps reference claim IDs."""
         print("Generating replication plan...")
 
+        # In paper-only mode, the codegen phase wrote the codebase into
+        # replication_dir/codebase/. In modes 1/3 the user-supplied repo is used.
+        # The plan-gen agent needs both an effective repo path (to render into the
+        # template) and a working directory (for the provider invocation).
+        if self.config.mode == "paper-only":
+            effective_repo_path = self.config.replication_dir / "codebase"
+        else:
+            effective_repo_path = self.config.repo_path
+
         prompt = self.prompt_generator.generate_replication_plan_prompt(
-            repo_path=self.config.repo_path,
+            repo_path=effective_repo_path,
             output_dir=self.config.output_dir,
             claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
@@ -500,7 +509,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=effective_repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
