@@ -37,8 +37,8 @@ The replication pipeline has already run. Read the relevant files to gather evid
 {% if claim.type == "scalar" %}
 **Scalar claim** — find the replicated value, compare against `paper_value`.
 
-- `match` — replicated value is within 5% relative error of `paper_value` (or, for very small absolute values, within ±1 in the relevant unit).
-- `partial` — within 30% relative error.
+- `match` — if the claim conveys an uncertainty in any form (a `±` marker in the description, a high/low range in `paper_value`, an `*_unc` / `*_sigma` / `*_err` field, or an analogous convention), the replicated value is within ±1σ of `paper_value`. Otherwise within 5% relative error (or, for very small absolute values, within ±1 in the relevant unit).
+- `partial` — within ±2σ if an uncertainty is given, otherwise within 30% relative error.
 - `no_match` — outside 30% relative error AND the discrepancy is not explained by a known critical fix.
 - `not_attempted` — relevant evidence files were never produced.
 - `not_applicable` — the claim isn't checkable from this run's evidence in principle (set `n_a_reason`).
@@ -55,8 +55,8 @@ Populate `structured`::
 {% elif claim.type == "scalar_range" %}
 **Scalar-range claim** — check whether the replicated value(s) fall within the paper's stated range, OR whether the replicated range overlaps the paper's range.
 
-- `match` — replicated value(s) within paper range OR ranges overlap by ≥80% of paper range width.
-- `partial` — ranges overlap but coverage < 80%, or some sub-conditions match and others don't.
+- `match` — replicated value(s) within paper range OR ranges overlap by ≥80% of paper range width. If the range itself carries an uncertainty on its endpoints, treat the paper range as widened by ±1σ when checking containment.
+- `partial` — ranges overlap but coverage < 80%, or some sub-conditions match and others don't. If endpoint uncertainty is given, ±2σ widening defines the partial band.
 - `no_match` — no overlap.
 - `not_attempted` / `not_applicable` — as for scalar.
 
@@ -72,8 +72,8 @@ Populate `structured`::
 {% elif claim.type == "table" %}
 **Table claim** — per-cell comparison against the paper's reported table.
 
-- `match` — every cell within tolerance (5% relative for numerical cells, exact for labels).
-- `partial` — some cells match, others don't.
+- `match` — every cell within tolerance. If the paper table provides per-cell uncertainty (e.g. an explicit `uncertainty` column or `±` markers), every numerical cell is within ±1σ; otherwise within 5% relative error. Label cells must match exactly.
+- `partial` — some cells match, others don't. If uncertainty is given, ±2σ defines the partial band per cell.
 - `no_match` — most cells outside tolerance.
 
 Populate `structured`::
