@@ -418,6 +418,20 @@ ensure_env_perms() {
     fi
 }
 
+# Compute a comma-separated list of variable names defined in .env (uncommented
+# `VAR=value` lines only). Echoed to stdout. Empty string if .env is absent or
+# defines no keys. Used to build `VERITAS_ENV_FILE_KEYS` for the container.
+compute_env_file_keys() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo ""
+        return
+    fi
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$PROJECT_ROOT/.env" 2>/dev/null \
+        | sed 's/=.*//' \
+        | tr '\n' ',' \
+        | sed 's/,$//'
+}
+
 # -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
@@ -676,16 +690,32 @@ cmd_shell() {
     ensure_image
     warn_if_outdated
 
+    check_env_file_warn
+    ensure_env_perms
+
     local tty_flag=$(get_tty_flag)
     local platform_flag=$(get_platform_flags)
     local gpu_flags=$(get_gpu_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    local env_file_flag=""
+    local env_keys_flag=""
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        env_file_flag="--env-file \"$PROJECT_ROOT/.env\""
+        local keys
+        keys=$(compute_env_file_keys)
+        if [ -n "$keys" ]; then
+            env_keys_flag="-e VERITAS_ENV_FILE_KEYS=$keys"
+        fi
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
+        $env_file_flag \
+        $env_keys_flag \
         -v \"$PWD:/workspace\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -806,6 +836,11 @@ cmd_evaluate() {
     local provider=$(extract_provider "$@")
     check_provider_credentials "$provider"
 
+    # Surface a non-fatal hint if .env is missing — papers that need API keys
+    # for their own LLM calls will fail without it.
+    check_env_file_warn
+    ensure_env_perms
+
     rewrite_paths "$@"
 
     local tty_flag=$(get_tty_flag)
@@ -814,10 +849,26 @@ cmd_evaluate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Replication API keys: pass .env into the container only on subcommands
+    # that run paper code. The key-name list lets the Python layer scope
+    # visibility to the replicate phase (see runner.py::_invoke_provider).
+    local env_file_flag=""
+    local env_keys_flag=""
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        env_file_flag="--env-file \"$PROJECT_ROOT/.env\""
+        local keys
+        keys=$(compute_env_file_keys)
+        if [ -n "$keys" ]; then
+            env_keys_flag="-e VERITAS_ENV_FILE_KEYS=$keys"
+        fi
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
+        $env_file_flag \
+        $env_keys_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
