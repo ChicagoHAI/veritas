@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
-from veritas.core.pipeline_state import PipelineState
+from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
@@ -127,7 +127,11 @@ class ReplicationRunner:
                     claims = self._generate_paper_claims()
                     state.complete_stage('analyze', success=True)
                 except _InsufficientSpec as e:
-                    state.complete_stage('analyze', success=False)
+                    state.complete_stage(
+                        'analyze',
+                        success=False,
+                        status_override=STATUS_INSUFFICIENT_SPEC,
+                    )
                     self._run_insufficient_spec_bail(e.source_path)
                     return RunResult(success=True, score=None, report_path=self.config.report_md_path)
                 except Exception:

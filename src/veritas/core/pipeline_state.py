@@ -90,12 +90,13 @@ class PipelineState:
         name: str,
         success: bool,
         outputs: Optional[Dict[str, Any]] = None,
+        status_override: Optional[str] = None,
     ) -> None:
         if name not in self.state['stages']:
             self.state['stages'][name] = {}
 
         self.state['stages'][name].update({
-            'status': 'completed' if success else 'failed',
+            'status': status_override if status_override else ('completed' if success else 'failed'),
             'completed_at': datetime.now().isoformat(),
             'success': success,
             # preserve outputs accumulated via update_stage_outputs (e.g. completed_claims) when caller passes outputs=None
