@@ -207,7 +207,7 @@ class ReportGenerator:
         return s
 
     def _render_code_generation_section(self, output_dir: Path) -> str:
-        """Mode-2 section: summarize the codebase that codegen produced."""
+        """Summarize the codebase that codegen produced (paper-only mode)."""
         codebase_dir = output_dir / "replication" / "codebase"
         section = "## Code Generation\n\n"
         if not codebase_dir.exists():
