@@ -61,7 +61,7 @@ LABEL maintainer="ChicagoHAI"
 ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git git-lfs openssh-client ca-certificates make \
+    build-essential curl git git-lfs openssh-client ca-certificates \
     libcudnn8 \
     && rm -rf /var/lib/apt/lists/*
 
