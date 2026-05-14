@@ -62,9 +62,9 @@ def evaluate(
         "--verify-timeout",
         help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
     ),
-    mode: str = typer.Option(
+    scope: str = typer.Option(
         "main",
-        "--mode",
+        "--scope",
         help="Claim-extraction scope. 'main' targets the paper's headline and supporting claims (default); 'full' (not yet implemented) extracts all tiers including setup-level metadata.",
     ),
     restart: bool = typer.Option(
@@ -102,7 +102,7 @@ def evaluate(
         analyze_timeout=analyze_timeout,
         replicate_timeout=replicate_timeout,
         verify_timeout=verify_timeout,
-        mode=mode,
+        claim_scope=scope,
     )
 
     # Run evaluation

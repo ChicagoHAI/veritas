@@ -8,8 +8,8 @@ from typing import Optional
 # All valid AI providers
 VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
-# Valid replication scope modes
-VALID_MODES = ["main", "full"]
+# Valid claim-extraction scopes
+VALID_CLAIM_SCOPES = ["main", "full"]
 
 
 # Output directory structure — each phase writes into its own subdir.
@@ -70,7 +70,7 @@ class Config:
 
     # Evaluation settings
     provider: str = "claude"
-    mode: str = "main"
+    claim_scope: str = "main"
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
@@ -97,11 +97,15 @@ class Config:
         if self.provider.lower() not in VALID_PROVIDERS:
             raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
 
-        # Validate mode
-        if self.mode not in VALID_MODES:
-            raise ValueError(f"Unknown mode: {self.mode}. Valid options: {VALID_MODES}")
-        if self.mode == "full":
-            raise NotImplementedError("--mode full is not yet implemented. Use --mode main (default).")
+        # Validate claim scope
+        if self.claim_scope not in VALID_CLAIM_SCOPES:
+            raise ValueError(
+                f"Unknown claim scope: {self.claim_scope}. Valid options: {VALID_CLAIM_SCOPES}"
+            )
+        if self.claim_scope == "full":
+            raise NotImplementedError(
+                "--scope full is not yet implemented. Use --scope main (default)."
+            )
 
     @property
     def has_paper(self) -> bool:

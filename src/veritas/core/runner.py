@@ -59,7 +59,7 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'verify'),
     # Config
     'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -213,7 +213,7 @@ class ReplicationRunner:
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path,
-            mode=self.config.mode,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
@@ -286,7 +286,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
-            mode=self.config.mode,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
@@ -731,7 +731,7 @@ class ReplicationRunner:
         """
         return {
             'provider': self.config.provider,
-            'mode': self.config.mode,
+            'claim_scope': self.config.claim_scope,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
@@ -757,7 +757,7 @@ class ReplicationRunner:
             # this one time — surface the limitation so they can --restart.
             print("NOTE: prior pipeline state predates config tracking. Recording")
             print("   current config as baseline; pass --restart if any of provider")
-            print("   or mode differ from the prior run.")
+            print("   or claim_scope differ from the prior run.")
             state.record_config(current_config)
             config_changes: List[str] = []
         else:

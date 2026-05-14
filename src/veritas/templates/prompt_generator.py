@@ -31,7 +31,7 @@ class PromptGenerator:
         repo_path: Path,
         output_dir: Path,
         paper_path: Path,
-        mode: str = "main",
+        claim_scope: str = "main",
     ) -> str:
         """Generate prompt for paper-claim extraction."""
         template = self.env.get_template("analyze/paper_claims_extraction.md")
@@ -39,7 +39,7 @@ class PromptGenerator:
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
             "paper_path": str(paper_path),
-            "mode": mode,
+            "claim_scope": claim_scope,
         }
         return template.render(**context)
 
@@ -72,7 +72,7 @@ class PromptGenerator:
         output_dir: Path,
         claims: "PaperClaims",
         paper_path: Optional[Path] = None,
-        mode: str = "main",
+        claim_scope: str = "main",
     ) -> str:
         """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
@@ -82,7 +82,7 @@ class PromptGenerator:
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
             "claims": claims,
-            "mode": mode,
+            "claim_scope": claim_scope,
         }
         return template.render(**context)
 

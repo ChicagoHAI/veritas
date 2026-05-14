@@ -35,7 +35,7 @@ Output a JSON object with this top-level shape:
         "year": <int if visible, else null>,
         "authors": ["<lastname>", ...]
     },
-    "extraction_mode": "{{ mode }}",
+    "extraction_mode": "{{ claim_scope }}",
     "claims": [ /* claim objects, see below */ ]
 }
 ```
@@ -80,7 +80,7 @@ When choosing tier, favor `supporting` unless the claim is clearly the paper's c
 
 ## Mode
 
-{% if mode == "main" %}
+{% if claim_scope == "main" %}
 This run is in **main mode** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
 {% else %}
 Extract all tiers, including `setup`.
