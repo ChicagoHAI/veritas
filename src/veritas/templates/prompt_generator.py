@@ -112,6 +112,25 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_codegen_prompt(
+        self,
+        paper_path: Path,
+        output_dir: Path,
+    ) -> str:
+        """Generate session instructions for the codegen agent (paper-only mode).
+
+        Rendered with only ``paper_path`` and ``output_dir`` — never with
+        extracted claim content — so the codegen agent reads the paper
+        directly but is structurally prevented from seeing paper-reported
+        result values that would compromise downstream verification.
+        """
+        template = self.env.get_template("codegen/session_instructions.md")
+        context = {
+            "paper_path": str(paper_path),
+            "output_dir": str(output_dir),
+        }
+        return template.render(**context)
+
     def generate_fix_severity_prompt(
         self,
         fixes: List,
