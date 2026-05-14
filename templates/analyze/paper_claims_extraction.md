@@ -26,7 +26,7 @@ verifiable claim, return an empty `claims` array.
 
 ## Your Task
 
-Read the paper. Identify every claim that:
+{% if has_paper %}Read the paper.{% else %}Read the README.{% endif %} Identify every claim that:
 1. Reports a result, observation, measurement, or behavior of the system under study, AND
 2. Could plausibly be checked by inspecting outputs that the paper's code is expected to produce (numbers, ranges, tables, figures, or qualitative behaviors).
 
@@ -64,7 +64,7 @@ Each claim object has these fields:
 | `paper_value` | optional | The value(s) the paper reports. Shape varies by type (see below). Omit for `qualitative` and `figure` claims where no numeric value is stated. |
 | `units` | optional | Physical / statistical units of `paper_value`, where meaningful. |
 | `expected_output_file` | optional | For `figure` and `table` claims when the paper's code is expected to produce a specific file. Path relative to the repo root. |
-| `provenance` | yes | `{"section": "...", "page": <int>, "quote": "..."}` — where in the paper the claim appears. `quote` is the verbatim snippet (≤200 chars). |
+| `provenance` | yes | `{"section": "...", "page": <int>, "quote": "..."}` — where in the paper the claim appears. `quote` is the verbatim snippet (≤200 chars). For repo-only sources where "page" doesn't apply, set `page` to 0. |
 | `verification` | yes | One paragraph of instructions for the *verifier*: what to read, where, and how to decide if the produced evidence supports the claim. |
 | `notes` | optional | Anything else the verifier should know. |
 
