@@ -647,6 +647,8 @@ class ReplicationRunner:
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
             paper_path=self.config.paper_path,
+            repo_path=self.config.repo_path,
+            mode=self.config.mode,
         )
 
         log_path = self.config.replication_transcript_path

@@ -102,6 +102,8 @@ class PromptGenerator:
         self,
         replication_plan: ReplicationPlan,
         paper_path: Optional[Path] = None,
+        repo_path: Optional[Path] = None,
+        mode: str = "full",
     ) -> str:
         """Generate session instructions for the replication agent."""
         template = self.env.get_template("replication/session_instructions.md")
@@ -109,6 +111,8 @@ class PromptGenerator:
             "replication_plan": replication_plan,
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
+            "has_repo": repo_path is not None,
+            "mode": mode,
         }
         return template.render(**context)
 
