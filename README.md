@@ -89,7 +89,7 @@ Or use the interactive UX:
 ./veritas config      # edit .env via masked-input menu later
 ```
 
-`./veritas status` reports whether `.env` is present. The keys are scoped to the replicate phase only — analyze/plan/codegen/verify never see them.
+`./veritas status` reports whether `.env` is present. The keys are scoped to the replicate phase only — analyze, plan, codegen, assess, and verify never see them.
 
 > **Windows note:** `chmod 600` only toggles NTFS's read-only bit on Git Bash; full POSIX owner-only semantics are not available. If you're on a shared Windows host, set the file's NTFS ACL manually.
 
