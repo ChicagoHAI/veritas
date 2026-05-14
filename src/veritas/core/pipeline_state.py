@@ -16,7 +16,12 @@ from typing import Any, Dict, List, Optional
 
 STATE_DIR = ".veritas"
 STATE_FILE = "pipeline_state.json"
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
+
+# Status string for the analyze phase when claim extraction yields zero claims
+# (e.g. README is too thin in repo-only mode). When this status is set, downstream
+# phases are skipped and the report-generator emits a bail report.
+STATUS_INSUFFICIENT_SPEC = "insufficient_spec"
 
 
 class PipelineState:
@@ -50,19 +55,23 @@ class PipelineState:
     def _enforce_schema_version(self) -> None:
         """Raise a clear-message error if the loaded state predates this veritas version.
 
-        The pre-refactor pipeline produced state files without a ``schema_version``
-        field (or with version < 2). Output filenames and subdirectory layout
-        changed; reusing those artifacts would mix old evaluation artifacts
-        with new per-claim verdicts. Force the user to ``--restart`` rather
-        than silently producing wrong output.
+        Schema version 3 introduces:
+          - The analyze phase split into separate `analyze` (claims-only) and `plan` phases.
+          - A new `codegen` phase for paper-only mode.
+          - A `mode` field at the top level recording which input mode produced this run.
+          - A new terminal status `insufficient_spec` for the analyze phase.
+
+        Loading an older state file would mix incompatible phase artifacts. Force --restart.
         """
         v = self.state.get('schema_version')
         if v is None or v < STATE_SCHEMA_VERSION:
             raise RuntimeError(
                 f"Pipeline state file at {self.state_file} predates this version "
                 f"of veritas (schema_version={v!r}, expected >={STATE_SCHEMA_VERSION}). "
-                f"The output layout has changed since this state was recorded. "
-                f"Pass --restart to discard the state file and run the pipeline fresh."
+                f"The output directory structure changed between versions (plan-gen split "
+                f"into its own phase; codegen phase added for paper-only mode; "
+                f"insufficient_spec terminal status added). "
+                f"To start fresh, run with --restart."
             )
 
     # -- Stage transitions ---------------------------------------------------
@@ -155,20 +164,22 @@ class PipelineState:
 
     def record_inputs(
         self,
-        repo_path: Path,
+        repo_path: Optional[Path],
         paper_path: Optional[Path],
+        mode: str,
     ) -> None:
         """Stash inputs into ``state['inputs']``. Also called to refresh after invalidation."""
         self.state['inputs'] = {
-            'repo_path': str(Path(repo_path).resolve()),
+            'repo_path': str(Path(repo_path).resolve()) if repo_path else None,
             'paper_path': str(Path(paper_path).resolve()) if paper_path else None,
             'paper_sha256': _sha256_of_file(paper_path) if paper_path else None,
+            'mode': mode,
         }
         self._save()
 
     def detect_input_changes(
         self,
-        repo_path: Path,
+        repo_path: Optional[Path],
         paper_path: Optional[Path],
     ) -> List[str]:
         """Return names of input fields that differ from the recorded run.
@@ -176,13 +187,13 @@ class PipelineState:
         Returns an empty list when no inputs were recorded yet (first run) or
         when everything matches. Field names are ``repo_path``, ``paper_path``,
         and ``paper_sha256``; the caller handles user-facing messaging and
-        stage invalidation.
+        stage invalidation. (``mode`` is in the config fingerprint, not here.)
         """
         recorded = self.state.get('inputs')
         if recorded is None:
             return []
 
-        current_repo = str(Path(repo_path).resolve())
+        current_repo = str(Path(repo_path).resolve()) if repo_path else None
         current_paper = str(Path(paper_path).resolve()) if paper_path else None
         current_sha = _sha256_of_file(paper_path) if paper_path else None
 
