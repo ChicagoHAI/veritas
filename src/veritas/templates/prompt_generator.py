@@ -28,17 +28,26 @@ class PromptGenerator:
 
     def generate_paper_claims_prompt(
         self,
-        repo_path: Path,
+        repo_path: Optional[Path],
         output_dir: Path,
-        paper_path: Path,
+        paper_path: Optional[Path] = None,
+        readme_path: Optional[Path] = None,
         claim_scope: str = "main",
     ) -> str:
-        """Generate prompt for paper-claim extraction."""
+        """Generate prompt for paper-claim extraction.
+
+        Sources are mode-dependent: a paper PDF (modes 1 / 2) or a repo
+        README (mode 3). At least one of ``paper_path`` or ``readme_path``
+        should be supplied; the template branches on ``has_paper``.
+        """
         template = self.env.get_template("analyze/paper_claims_extraction.md")
         context = {
-            "repo_path": str(repo_path.absolute()),
+            "repo_path": str(Path(repo_path).absolute()) if repo_path else "",
             "output_dir": str(output_dir.absolute()),
-            "paper_path": str(paper_path),
+            "paper_path": str(paper_path) if paper_path else "",
+            "readme_path": str(readme_path) if readme_path else "",
+            "has_paper": paper_path is not None,
+            "has_repo": repo_path is not None,
             "claim_scope": claim_scope,
         }
         return template.render(**context)
@@ -68,20 +77,23 @@ class PromptGenerator:
 
     def generate_replication_plan_prompt(
         self,
-        repo_path: Path,
+        repo_path: Optional[Path],
         output_dir: Path,
         claims: "PaperClaims",
         paper_path: Optional[Path] = None,
+        mode: str = "full",
         claim_scope: str = "main",
     ) -> str:
         """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
         context = {
-            "repo_path": str(repo_path.absolute()),
+            "repo_path": str(Path(repo_path).absolute()) if repo_path else "",
             "output_dir": str(output_dir.absolute()),
             "has_paper": paper_path is not None,
+            "has_repo": repo_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
             "claims": claims,
+            "mode": mode,
             "claim_scope": claim_scope,
         }
         return template.render(**context)

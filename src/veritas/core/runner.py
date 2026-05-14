@@ -26,9 +26,17 @@ from veritas.utils.security import sanitize_logs_directory, sanitize_text
 
 
 class _InsufficientSpec(Exception):
-    """Raised when claim extraction yields zero claims. Properly defined in Task 7."""
-    def __init__(self, source_path: Path, mode: str = ""):
-        super().__init__(f"Analyze produced 0 claims (source: {source_path}, mode: {mode})")
+    """Signal raised when claim extraction returns zero verifiable claims.
+
+    Caught by run() to trigger a clean bail with a dedicated report rather than
+    propagating as a runtime error. source_path identifies what was read (the
+    paper PDF or a README), mode reports which input mode was active.
+    """
+
+    def __init__(self, source_path: Path, mode: str):
+        super().__init__(
+            f"Analyze produced 0 claims (source: {source_path}, mode: {mode})"
+        )
         self.source_path = source_path
         self.mode = mode
 
@@ -227,19 +235,91 @@ class ReplicationRunner:
         # Task 8 will write the actual bail report.
 
     def _generate_paper_claims(self) -> PaperClaims:
-        """Extract structured claims from the paper."""
-        if not self.config.has_paper:
-            raise RuntimeError(
-                "Paper claims extraction requires a paper (--paper). "
-                "Paper-less mode is not supported in this version."
-            )
+        """Generate or load paper claims.
 
+        Sources, in priority order:
+          1. ``--claims`` user file (validate + copy to ``analyze/paper_claims.json``)
+          2. ``--paper`` PDF (extract via LLM)
+          3. ``<repo>/README`` (mode 3 — extract via LLM, treat README as spec)
+
+        Raises ``_InsufficientSpec`` when extraction yields 0 claims.
+        """
+        if self.config.has_user_claims:
+            return self._load_user_claims(self.config.claims_path)
+
+        if self.config.has_paper:
+            return self._extract_claims_from_paper()
+
+        if self.config.has_repo:
+            return self._extract_claims_from_readme()
+
+        raise RuntimeError(
+            "No claim source available: provide --paper, --repo, or --claims"
+        )
+
+    def _load_user_claims(self, path: Path) -> PaperClaims:
+        """Validate a user-supplied claims JSON file and copy it into the output tree."""
+        print(f"Loading user-supplied claims from {path}...")
+        raw = path.read_text(encoding='utf-8')
+        claims = PaperClaims.from_dict(json.loads(raw))
+        if len(claims.claims) == 0:
+            raise _InsufficientSpec(path, self.config.mode)
+
+        self.config.paper_claims_path.write_text(
+            json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
+        )
+
+        n_h = len(claims.by_tier("headline"))
+        n_s = len(claims.by_tier("supporting"))
+        n_se = len(claims.by_tier("setup"))
+        print(
+            f"  Loaded {len(claims.claims)} claims "
+            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
+        )
+        return claims
+
+    def _extract_claims_from_paper(self) -> PaperClaims:
+        """Extract claims via LLM from the paper PDF."""
         print("Extracting paper claims...")
+        return self._run_claim_extraction(
+            readme_path=None,
+            source_for_bail=self.config.paper_path,
+        )
 
+    def _extract_claims_from_readme(self) -> PaperClaims:
+        """Extract claims via LLM from the repo's README (repo-only mode)."""
+        readme_path = self._find_readme()
+        if readme_path is None:
+            raise _InsufficientSpec(
+                self.config.repo_path / "README.md", self.config.mode
+            )
+        print(f"Extracting claims from README at {readme_path}...")
+        return self._run_claim_extraction(
+            readme_path=readme_path,
+            source_for_bail=readme_path,
+        )
+
+    def _find_readme(self) -> Optional[Path]:
+        """Locate a README in the repo root (case variants tried in order)."""
+        if self.config.repo_path is None:
+            return None
+        for name in ("README.md", "README.rst", "readme.md", "Readme.md"):
+            candidate = self.config.repo_path / name
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _run_claim_extraction(
+        self,
+        readme_path: Optional[Path],
+        source_for_bail: Path,
+    ) -> PaperClaims:
+        """Common LLM-driven extraction path. Raises ``_InsufficientSpec`` on 0 claims."""
         prompt = self.prompt_generator.generate_paper_claims_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_path=self.config.paper_path,
+            paper_path=self.config.paper_path if self.config.has_paper else None,
+            readme_path=readme_path,
             claim_scope=self.config.claim_scope,
         )
 
@@ -249,16 +329,18 @@ class ReplicationRunner:
         output_json_path = self.config.paper_claims_path
         log_path = self.config.paper_claims_transcript_path
 
+        working_dir = self.config.repo_path or self.config.output_dir
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=working_dir,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
         if not success:
             raise RuntimeError(
-                f"Paper claims extraction failed: provider invocation did not succeed (transcript: {log_path})"
+                f"Paper claims extraction failed: provider invocation did not succeed "
+                f"(transcript: {log_path})"
             )
 
         if not output_json_path.exists():
@@ -291,16 +373,19 @@ class ReplicationRunner:
                 "Paper claims extraction failed: could not parse response even after repair"
             )
 
+        if len(claims.claims) == 0:
+            raise _InsufficientSpec(source_for_bail, self.config.mode)
+
         output_json_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
 
-        n_headline = len(claims.by_tier("headline"))
-        n_supporting = len(claims.by_tier("supporting"))
-        n_setup = len(claims.by_tier("setup"))
+        n_h = len(claims.by_tier("headline"))
+        n_s = len(claims.by_tier("supporting"))
+        n_se = len(claims.by_tier("setup"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_headline} headline, {n_supporting} supporting, {n_setup} setup)"
+            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
         )
         return claims
 
@@ -313,6 +398,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
+            mode=self.config.mode,
             claim_scope=self.config.claim_scope,
         )
 
