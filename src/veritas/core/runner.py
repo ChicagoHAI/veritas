@@ -63,14 +63,14 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 # rules can be added later (e.g. a knob that only affects the verify phase).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'claim_scope':   ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'claims_path':   ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
