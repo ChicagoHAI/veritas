@@ -58,7 +58,7 @@ You need Docker. Nothing else — no Python, no pandoc, no LaTeX, no provider CL
 ```bash
 git clone https://github.com/ChicagoHAI/veritas.git
 cd veritas
-./veritas login claude      # one-time OAuth sign-in
+./veritas setup             # one-shot: prereqs, image, login, .env
 ./veritas evaluate --paper your_paper.pdf --repo your_repo/
 ```
 
@@ -67,6 +67,31 @@ On first run, `./veritas` pulls `ghcr.io/chicagohai/veritas:latest` (~3GB) from 
 Linux/macOS users: after cloning, the shell scripts are already marked executable in the git index. If you somehow ended up with non-executable scripts, run `chmod +x veritas docker/run.sh scripts/test_docker.sh`.
 
 Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` because `nvidia/cuda` base images have no arm64 build. Rosetta emulation handles it.
+
+## Replication API keys (`.env`)
+
+Veritas's own LLM provider (Claude / Codex / Gemini CLI) signs in via OAuth — no host env vars needed. But papers that call LLM APIs from inside their own code (e.g. hypogenic, PaperBench-style runs) need raw keys like `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in their environment.
+
+Veritas reads keys from a `.env` file at the repo root and passes them into the replication container via `--env-file`:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+$EDITOR .env          # uncomment and set any keys your paper needs
+
+./veritas evaluate --paper paper.pdf --repo ./my-project
+```
+
+Or use the interactive UX:
+
+```bash
+./veritas setup       # one-shot: prereqs, image, login, .env
+./veritas config      # edit .env via masked-input menu later
+```
+
+`./veritas status` reports whether `.env` is present. The keys are scoped to the replicate phase only — analyze/plan/codegen/verify never see them.
+
+> **Windows note:** `chmod 600` only toggles NTFS's read-only bit on Git Bash; full POSIX owner-only semantics are not available. If you're on a shared Windows host, set the file's NTFS ACL manually.
 
 ## Commands
 
@@ -78,6 +103,8 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 ./veritas extract-plan paper.pdf                     # plan only
 ./veritas report ./evaluation                        # regenerate report
 ./veritas shell                                      # interactive container
+./veritas setup                                      # one-shot prereqs + image + login + .env
+./veritas config                                     # edit .env via masked-input menu
 ./veritas login claude                               # provider OAuth
 ./veritas status                                     # dashboard
 ./veritas update                                     # pull latest image
@@ -176,12 +203,7 @@ Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.
 
 ### Environment Variables
 
-API keys and environment variables can be provided via `~/.veritas/.env`:
-
-```bash
-mkdir -p ~/.veritas
-echo "ANTHROPIC_API_KEY=sk-..." > ~/.veritas/.env
-```
+API keys consumed by the paper's own code (e.g. `OPENAI_API_KEY`) are loaded from a `.env` file at the repo root and passed in via `--env-file`. See [Replication API keys](#replication-api-keys-env) above for setup details.
 
 ## Configuration
 
