@@ -38,6 +38,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 # Supply a hand-authored claims JSON (skips automatic extraction)
 ./veritas replicate --repo ./my-project --claims claims.json
 
+# Pre-position a data directory (mounted read-only at /workspace/data/)
+./veritas replicate --paper paper.pdf --data ./prepositioned-data
+
 # Per-phase timeouts (default: no timeout)
 ./veritas replicate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
 
@@ -78,7 +81,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 - **`paper-only`** — paper PDF only. The codegen phase writes the methodology from the paper into a fresh codebase, then the rest of the pipeline runs against that generated codebase.
 - **`repo-only`** — repo only. Claims are extracted from the repo's README; codegen is skipped.
 
-`--mode` is the input-mode selector. `--scope` (separate flag, values `main` / `full`) controls claim-extraction scope (which claim tiers to extract); the two flags are independent. `--claims path/to/claims.json` is a universal override that skips automatic extraction.
+`--mode` is the input-mode selector. `--scope` (separate flag, values `main` / `full`) controls claim-extraction scope (which claim tiers to extract); the two flags are independent. `--claims path/to/claims.json` is a universal override that skips automatic extraction. `--data path/to/data-dir` mounts a host directory read-only at `/workspace/data/`; the path is surfaced to codegen / plan / replicate prompts via `has_data` so the agent uses these files instead of procuring from the network.
 
 ### Key modules (`src/veritas/core/`)
 
@@ -109,12 +112,13 @@ All templates are Jinja2, rendered by `src/veritas/templates/prompt_generator.py
 
 ### Docker
 
-Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
+Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--data`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
 
 ## Gotchas
 
 - **The replication agent actively fixes issues.** The agent works on a writable copy of the repo at `/workspace/output/replication/codebase/`. It may patch deprecated APIs, install missing tools, and fix configuration issues. Every fix is tracked in `StepOutcome.fixes_applied` and rated for severity by a separate post-replicate LLM pass. The original repo at `/workspace/repo` remains read-only.
 - **The user's repo is bind-mounted read-only** at `/workspace/repo` by the wrapper. The entrypoint copies it to `/workspace/output/replication/codebase/` for the agent to modify. An EXIT trap generates a unified diff at `/workspace/output/replication/codebase.diff`.
+- **`--data` is mounted read-only at `/workspace/data/`.** Surfaced to codegen / plan / replicate prompts via `has_data`. Agent writes (downloaded auxiliary files) land in `codebase/data/` instead — the two directories don't collide. `data_path` participates in the input fingerprint as a resolved-path string; changing `--data` between runs invalidates downstream phases.
 - **The replication agent never sees `paper_claims.json`.** The session prompt is rendered with `replication_plan` only; `expected_outcome` is shape-prescriptive (file paths, field names) rather than value-prescriptive. This is the structural defense against leaking paper-reported result values to the replicator.
 - **Verify phase is per-claim with file-exists resume.** A failed verifier call leaves `verify/<claim_id>.json` absent; the next run re-attempts that claim only. State tracks `completed_claims` (not `completed_categories`).
 - **Pipeline state `schema_version` is 3.** Old state files (pre-refactor or `< 3`) raise a clear error directing the user to `--restart`. The bump tracks the analyze/plan split, the new codegen phase for paper-only mode, the `insufficient_spec` terminal status, and the top-level `mode` field; silent reuse would mix incompatible artifacts.
