@@ -1,28 +1,18 @@
-"""Generate prompts for evaluation agents."""
+"""Generate prompts for the claim-verification pipeline."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, List, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from veritas.core.models.checklist import ChecklistItem
-
 if TYPE_CHECKING:
-    from veritas.core.models.replication import ExecutionEvidence, ReplicationPlan
-
-
-CATEGORY_DISPLAY_NAMES = {
-    "code": "Code Quality",
-    "consistency": "Consistency",
-    "generalization": "Generalization",
-    "replication": "Replicability",
-    "instruction_following": "Instruction Following",
-}
+    from veritas.core.models.replication import ReplicationPlan
+    from veritas.core.models.paper_claims import PaperClaims, PaperClaim
 
 
 class PromptGenerator:
-    """Generates prompts for checklist generation, replication, and scoring."""
+    """Generates prompts for claim extraction, replication, and verification."""
 
     def __init__(self, templates_dir: Optional[Path] = None):
         if templates_dir is None:
@@ -36,48 +26,43 @@ class PromptGenerator:
             lstrip_blocks=True,
         )
 
-    def generate_checklist_prompt(
+    def generate_paper_claims_prompt(
         self,
         repo_path: Path,
         output_dir: Path,
-        paper_path: Optional[Path] = None,
+        paper_path: Path,
+        mode: str = "main",
     ) -> str:
-        """Generate prompt for personalized checklist generation."""
-        template = self.env.get_template("checklist_generation.md")
-
+        """Generate prompt for paper-claim extraction."""
+        template = self.env.get_template("analyze/paper_claims_extraction.md")
         context = {
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
-            "has_paper": paper_path is not None,
-            "paper_path": str(paper_path) if paper_path else "",
+            "paper_path": str(paper_path),
+            "mode": mode,
         }
         return template.render(**context)
 
-    def generate_scoring_prompt(
+    def generate_verify_prompt(
         self,
-        category_name: str,
-        checklist_items: List[ChecklistItem],
-        repo_path: Path,
-        plan_path: Optional[Path],
+        claim: "PaperClaim",
+        codebase_dir: Path,
+        codebase_diff_path: Path,
+        replication_log_path: Path,
+        fix_severity_path: Path,
+        plan_step_ids: List[int],
         output_dir: Path,
-        evidence: Optional[ExecutionEvidence] = None,
-        fix_assessment: Optional[Any] = None,
     ) -> str:
-        """Generate prompt for scoring a category's checklist items."""
-        template = self.env.get_template("evaluation/scoring.txt")
-
+        """Generate per-claim verifier prompt."""
+        template = self.env.get_template("verify/single_claim.md")
         context = {
-            "category_name": category_name,
-            "category_display_name": CATEGORY_DISPLAY_NAMES.get(category_name, category_name),
-            "checklist_items": checklist_items,
-            "repo_path": str(repo_path.absolute()),
-            "plan_path": str(plan_path.absolute()) if plan_path else None,
+            "claim": claim,
+            "codebase_dir": str(codebase_dir.absolute()),
+            "codebase_diff_path": str(codebase_diff_path.absolute()),
+            "replication_log_path": str(replication_log_path.absolute()),
+            "fix_severity_path": str(fix_severity_path.absolute()),
+            "plan_step_ids": plan_step_ids,
             "output_dir": str(output_dir.absolute()),
-            "has_plan": plan_path is not None and plan_path.exists(),
-            "has_evidence": evidence is not None,
-            "evidence": evidence,
-            "has_fix_assessment": fix_assessment is not None,
-            "fix_assessment": fix_assessment,
         }
         return template.render(**context)
 
@@ -85,18 +70,18 @@ class PromptGenerator:
         self,
         repo_path: Path,
         output_dir: Path,
-        checklist_items: List[ChecklistItem],
+        claims: "PaperClaims",
         paper_path: Optional[Path] = None,
         mode: str = "main",
     ) -> str:
-        """Generate prompt for creating a replication plan."""
+        """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
         context = {
             "repo_path": str(repo_path.absolute()),
             "output_dir": str(output_dir.absolute()),
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
-            "checklist_items": checklist_items,
+            "claims": claims,
             "mode": mode,
         }
         return template.render(**context)
@@ -121,7 +106,7 @@ class PromptGenerator:
         output_dir: Path,
     ) -> str:
         """Generate prompt for assessing fix severity."""
-        template = self.env.get_template("evaluation/fix_severity.md")
+        template = self.env.get_template("assess/fix_severity.md")
         context = {
             "fixes": fixes,
             "output_dir": str(output_dir.absolute()),

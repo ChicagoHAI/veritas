@@ -1,4 +1,4 @@
-"""Pipeline state tracker for resumable evaluation phases.
+"""Pipeline state tracker for resumable pipeline phases.
 
 Persists per-stage status, timestamps, and arbitrary per-stage outputs to
 ``<output_dir>/.veritas/pipeline_state.json``. ``ReplicationRunner`` consults
@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 STATE_DIR = ".veritas"
 STATE_FILE = "pipeline_state.json"
+STATE_SCHEMA_VERSION = 2
 
 
 class PipelineState:
@@ -29,8 +30,10 @@ class PipelineState:
         if self.state_file.exists():
             with open(self.state_file, 'r', encoding='utf-8') as f:
                 self.state = json.load(f)
+            self._enforce_schema_version()
         else:
             self.state = {
+                'schema_version': STATE_SCHEMA_VERSION,
                 'created_at': datetime.now().isoformat(),
                 'inputs': None,
                 'config': None,
@@ -43,6 +46,24 @@ class PipelineState:
     def _save(self) -> None:
         with open(self.state_file, 'w', encoding='utf-8') as f:
             json.dump(self.state, f, indent=2)
+
+    def _enforce_schema_version(self) -> None:
+        """Raise a clear-message error if the loaded state predates this veritas version.
+
+        The pre-refactor pipeline produced state files without a ``schema_version``
+        field (or with version < 2). Output filenames and subdirectory layout
+        changed; reusing those artifacts would mix old evaluation artifacts
+        with new per-claim verdicts. Force the user to ``--restart`` rather
+        than silently producing wrong output.
+        """
+        v = self.state.get('schema_version')
+        if v is None or v < STATE_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Pipeline state file at {self.state_file} predates this version "
+                f"of veritas (schema_version={v!r}, expected >={STATE_SCHEMA_VERSION}). "
+                f"The output layout has changed since this state was recorded. "
+                f"Pass --restart to discard the state file and run the pipeline fresh."
+            )
 
     # -- Stage transitions ---------------------------------------------------
 
@@ -70,7 +91,7 @@ class PipelineState:
             'status': 'completed' if success else 'failed',
             'completed_at': datetime.now().isoformat(),
             'success': success,
-            # preserve outputs accumulated via update_stage_outputs (e.g. completed_categories) when caller passes outputs=None
+            # preserve outputs accumulated via update_stage_outputs (e.g. completed_claims) when caller passes outputs=None
             'outputs': outputs if outputs is not None
             else self.state['stages'][name].get('outputs', {}),
         })
@@ -80,8 +101,8 @@ class PipelineState:
     def update_stage_outputs(self, name: str, outputs: Dict[str, Any]) -> None:
         """Merge outputs into a stage that's still in_progress.
 
-        Used for per-category sub-completion in the ``evaluate`` stage —
-        each completed category is appended to the stage's outputs without
+        Used for per-claim sub-completion in the ``verify`` stage —
+        each completed claim is appended to the stage's outputs without
         marking the whole stage complete.
         """
         if name not in self.state['stages']:

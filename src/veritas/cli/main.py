@@ -32,13 +32,6 @@ def evaluate(
         exists=True,
         file_okay=False,
     ),
-    plan: Optional[Path] = typer.Option(
-        None,
-        "--plan",
-        help="Path to an existing plan file (optional, will extract from paper if not provided)",
-        exists=True,
-        dir_okay=False,
-    ),
     output: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
@@ -54,12 +47,6 @@ def evaluate(
         "--pdf/--no-pdf",
         help="Generate PDF version of the report",
     ),
-    evaluations: Optional[str] = typer.Option(
-        None,
-        "--evaluations", "-e",
-        help="Comma-separated list of evaluations to run (default: all). "
-             "Options: code,consistency,generalization,replication,instruction_following",
-    ),
     analyze_timeout: Optional[int] = typer.Option(
         None,
         "--analyze-timeout",
@@ -70,15 +57,15 @@ def evaluate(
         "--replicate-timeout",
         help="Timeout in seconds for the replicate phase (per LLM call). Default: no timeout.",
     ),
-    evaluate_timeout: Optional[int] = typer.Option(
+    verify_timeout: Optional[int] = typer.Option(
         None,
-        "--evaluate-timeout",
-        help="Timeout in seconds for the evaluate phase (per evaluation category). Default: no timeout.",
+        "--verify-timeout",
+        help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
     ),
     mode: str = typer.Option(
         "main",
         "--mode",
-        help="Replication scope: 'main' targets key claims, 'full' targets all results (not yet implemented)",
+        help="Claim-extraction scope. 'main' targets the paper's headline and supporting claims (default); 'full' (not yet implemented) extracts all tiers including setup-level metadata.",
     ),
     restart: bool = typer.Option(
         False,
@@ -87,11 +74,11 @@ def evaluate(
     ),
 ):
     """
-    Evaluate the replicability of a scientific project.
+    Evaluate the replicability of a scientific paper against its code repository.
 
-    Takes a paper (PDF) and repository as input, and produces a comprehensive
-    replication report assessing code quality, consistency, generalizability,
-    , reproducibility and instruction following.
+    Runs a four-phase pipeline (analyze, replicate, assess_fixes, verify) and
+    produces a Replication Score: a single tier-weighted number reflecting how
+    many of the paper's structured claims the replication actually reproduced.
     """
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
@@ -105,23 +92,16 @@ def evaluate(
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
 
-    # Parse evaluations
-    eval_list = None
-    if evaluations:
-        eval_list = [e.strip() for e in evaluations.split(",")]
-
     # Create config
     config = Config(
         paper_path=paper,
         repo_path=repo,
-        plan_path=plan,
         output_dir=output_dir,
         provider=provider,
         generate_pdf=generate_pdf,
-        evaluations=eval_list,
         analyze_timeout=analyze_timeout,
         replicate_timeout=replicate_timeout,
-        evaluate_timeout=evaluate_timeout,
+        verify_timeout=verify_timeout,
         mode=mode,
     )
 

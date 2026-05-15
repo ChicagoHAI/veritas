@@ -93,7 +93,7 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Project specific - evaluation output directory (not templates/evaluation/)
+# Project specific - default evaluation output directory
 /evaluation/
 *.pdf
 !templates/**/*.pdf

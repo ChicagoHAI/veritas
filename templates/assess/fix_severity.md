@@ -30,7 +30,7 @@ Also provide a one-paragraph summary of the overall fix burden.
 
 ## Output
 
-Save your assessment to `{{ output_dir }}/evaluate/fix_severity.json`:
+Save your assessment to `{{ output_dir }}/assess/fix_severity.json`:
 
 ```json
 {

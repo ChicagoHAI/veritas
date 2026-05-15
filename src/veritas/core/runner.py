@@ -4,22 +4,22 @@ import json
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
 from veritas.core.pipeline_state import PipelineState
-from veritas.core.checklist import parse_checklist_response
-from veritas.core.models.checklist import Checklist
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
+from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
+from veritas.core.paper_claims import parse_paper_claims_response
+from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     parse_replication_plan_response,
     gather_evidence,
     _extract_json,
 )
-from veritas.core.plan_extractor import PlanExtractor
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -51,35 +51,24 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Every output-affecting field currently
 # invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. an evaluation-only config knob).
+# rules can be added later (e.g. a knob that only affects the verify phase).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'mode':          ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
-    'plan_provided': ('analyze', 'replicate', 'assess_fixes', 'evaluate'),
+    'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
 }
-
-
-@dataclass
-class EvaluationResult:
-    """Result of a single evaluation."""
-    name: str
-    success: bool
-    items: Optional[List[Dict[str, str]]] = None
-    pass_rate: Optional[float] = None
-    error: Optional[str] = None
-    output_path: Optional[Path] = None
 
 
 @dataclass
 class RunResult:
     """Result of the full replication run."""
     success: bool
-    evaluations: Optional[List[EvaluationResult]] = None
+    verdicts: Optional[List[ClaimVerdict]] = None
+    score: Optional[ReplicationScore] = None
     report_path: Optional[Path] = None
     pdf_path: Optional[Path] = None
     error: Optional[str] = None
@@ -91,11 +80,10 @@ class ReplicationRunner:
     def __init__(self, config: Config):
         self.config = config
         self.prompt_generator = PromptGenerator()
-        self.plan_extractor = PlanExtractor()
         self.report_generator = ReportGenerator()
 
     def run(self) -> RunResult:
-        """Run the full pipeline: analyze -> replicate -> assess fixes -> evaluate -> report.
+        """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
 
         Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
         are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
@@ -110,16 +98,14 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            plan_path = self._extract_plan()
-
             # analyze
             if state.is_stage_completed('analyze'):
                 print("[OK] analyze: skipped (already completed)")
-                checklist, replication_plan = self._load_analyze_artifacts()
+                claims, replication_plan = self._load_analyze_artifacts()
             else:
                 state.start_stage('analyze')
                 try:
-                    checklist, replication_plan = self._analyze()
+                    claims, replication_plan = self._analyze()
                     state.complete_stage('analyze', success=True)
                 except Exception:
                     state.complete_stage('analyze', success=False)
@@ -151,37 +137,39 @@ class ReplicationRunner:
                     state.complete_stage('assess_fixes', success=False)
                     raise
 
-            # evaluate
-            already_done = state.get_stage_outputs('evaluate').get('completed_categories', [])
-            missing_categories = [name for name in self.config.evaluations if name not in already_done]
+            # verify
+            already_done = state.get_stage_outputs('verify').get('completed_claims', [])
+            missing_claims = [c.id for c in claims.claims if c.id not in already_done]
 
-            if state.is_stage_completed('evaluate') and not missing_categories:
-                print("[OK] evaluate: skipped (already completed)")
-                results = self._load_evaluate_artifacts()
+            if state.is_stage_completed('verify') and not missing_claims:
+                print("[OK] verify: skipped (already completed)")
+                verdicts = self._load_verify_artifacts(claims)
             else:
-                if state.get_stage_status('evaluate') != 'in_progress':
-                    state.start_stage('evaluate')
-                    # start_stage zeroes the outputs dict; restore the categories
-                    # completed in prior runs so _evaluate_with_resume can skip
-                    # them rather than re-running.
+                if state.get_stage_status('verify') != 'in_progress':
+                    state.start_stage('verify')
                     if already_done:
-                        state.update_stage_outputs('evaluate', {'completed_categories': already_done})
+                        state.update_stage_outputs('verify', {'completed_claims': already_done})
                 try:
-                    results = self._evaluate_with_resume(
-                        checklist, evidence, plan_path, fix_assessment,
+                    verdicts = self._verify_with_resume(
+                        claims, replication_plan,
                         state, already_done=already_done,
                     )
-                    state.complete_stage('evaluate', success=True)
+                    state.complete_stage('verify', success=True)
                 except Exception:
-                    state.complete_stage('evaluate', success=False)
+                    state.complete_stage('verify', success=False)
                     raise
 
-            report_path, pdf_path = self._report(results, evidence, fix_assessment)
+            score = self._score_after_verify(claims, verdicts)
+
+            report_path, pdf_path = self._report(
+                claims, verdicts, score, evidence, fix_assessment,
+            )
             state.mark_completed()
 
             return RunResult(
                 success=True,
-                evaluations=results,
+                verdicts=verdicts,
+                score=score,
                 report_path=report_path,
                 pdf_path=pdf_path,
             )
@@ -201,48 +189,38 @@ class ReplicationRunner:
         for subdir in OUTPUT_SUBDIRS:
             (self.config.output_dir / subdir).mkdir(exist_ok=True)
 
-    def _extract_plan(self) -> Optional[Path]:
-        """Get existing plan or extract from paper."""
-        repo_plan = self.config.repo_path / "plan.md"
-        if repo_plan.exists():
-            return repo_plan
-
-        if self.config.has_plan:
-            return self.config.plan_path
-
-        if self.config.has_paper:
-            plan_content = self.plan_extractor.extract(
-                self.config.paper_path, with_evidence=True
-            )
-            plan_path = self.config.extracted_plan_path
-            plan_path.write_text(plan_content, encoding='utf-8')
-            return plan_path
-
-        return None
-
     # -- Phase 1: Analyze --------------------------------------------------
 
-    def _analyze(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
-        """Phase 1: Generate checklist and replication plan."""
-        checklist = self._generate_checklist()
-        replication_plan = self._generate_replication_plan(checklist)
-        return checklist, replication_plan
+    def _analyze(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
+        """Phase 1: Extract paper claims, then generate a claim-aware replication plan."""
+        claims = self._generate_paper_claims()
+        replication_plan = self._generate_replication_plan(claims)
+        if replication_plan is not None:
+            self._validate_plan_claim_refs(replication_plan, claims)
+        return claims, replication_plan
 
-    def _generate_checklist(self) -> Checklist:
-        """Generate a personalized checklist."""
-        print("Generating personalized checklist...")
+    def _generate_paper_claims(self) -> PaperClaims:
+        """Extract structured claims from the paper."""
+        if not self.config.has_paper:
+            raise RuntimeError(
+                "Paper claims extraction requires a paper (--paper). "
+                "Paper-less mode is not supported in this version."
+            )
 
-        prompt = self.prompt_generator.generate_checklist_prompt(
+        print("Extracting paper claims...")
+
+        prompt = self.prompt_generator.generate_paper_claims_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_path=self.config.paper_path if self.config.has_paper else None,
+            paper_path=self.config.paper_path,
+            mode=self.config.mode,
         )
 
-        prompt_path = self.config.prompts_dir / "checklist_generation_prompt.txt"
+        prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
         prompt_path.write_text(prompt, encoding='utf-8')
 
-        output_json_path = self.config.checklist_path
-        log_path = self.config.checklist_transcript_path
+        output_json_path = self.config.paper_claims_path
+        log_path = self.config.paper_claims_transcript_path
 
         success = self._invoke_provider(
             prompt=prompt,
@@ -253,54 +231,60 @@ class ReplicationRunner:
 
         if not success:
             raise RuntimeError(
-                f"Checklist generation failed: provider invocation did not succeed (transcript: {log_path})"
+                f"Paper claims extraction failed: provider invocation did not succeed (transcript: {log_path})"
             )
 
         if not output_json_path.exists():
             raise RuntimeError(
-                f"Checklist generation failed: agent did not write {output_json_path}"
+                f"Paper claims extraction failed: agent did not write {output_json_path}"
             )
 
         response_text = output_json_path.read_text(encoding='utf-8').strip()
         if not response_text:
             raise RuntimeError(
-                f"Checklist generation failed: {output_json_path} is empty"
+                f"Paper claims extraction failed: {output_json_path} is empty"
             )
 
         try:
-            checklist = parse_checklist_response(response_text)
+            claims = parse_paper_claims_response(response_text)
         except ValueError as e:
-            print(f"  Warning: Could not parse checklist: {e}")
+            print(f"  Warning: Could not parse paper claims: {e}")
             print("  Retrying with repair prompt...")
-            checklist = self._repair_json_response(
+            claims = self._repair_json_response(
                 original_prompt=prompt,
                 broken_output=response_text,
                 output_path=output_json_path,
                 log_path=log_path,
-                parser=parse_checklist_response,
+                parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
             )
 
-        if checklist is None:
+        if claims is None:
             raise RuntimeError(
-                "Checklist generation failed: could not parse response even after repair"
+                "Paper claims extraction failed: could not parse response even after repair"
             )
 
         output_json_path.write_text(
-            json.dumps(checklist.to_dict(), indent=2), encoding='utf-8'
+            json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
 
-        print(f"  Generated {len(checklist.items)} checklist items across {len(checklist.categories)} categories")
-        return checklist
+        n_headline = len(claims.by_tier("headline"))
+        n_supporting = len(claims.by_tier("supporting"))
+        n_setup = len(claims.by_tier("setup"))
+        print(
+            f"  Extracted {len(claims.claims)} claims "
+            f"({n_headline} headline, {n_supporting} supporting, {n_setup} setup)"
+        )
+        return claims
 
-    def _generate_replication_plan(self, checklist: Checklist) -> Optional[ReplicationPlan]:
-        """Generate a replication plan based on the checklist."""
+    def _generate_replication_plan(self, claims: PaperClaims) -> Optional[ReplicationPlan]:
+        """Generate a replication plan whose steps reference claim IDs."""
         print("Generating replication plan...")
 
         prompt = self.prompt_generator.generate_replication_plan_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            checklist_items=checklist.items,
+            claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
         )
@@ -353,6 +337,31 @@ class ReplicationRunner:
         )
         print(f"  Generated replication plan with {len(plan.steps)} steps")
         return plan
+
+    def _validate_plan_claim_refs(
+        self,
+        plan: ReplicationPlan,
+        claims: PaperClaims,
+    ) -> None:
+        """Warn if plan steps reference claim IDs that don't exist in the claims set.
+
+        Non-fatal — a misreferenced ID just means the verifier won't get the
+        step-id hint for that claim. Surfaced so the user knows the analyze
+        phase's two outputs disagreed.
+        """
+        valid_ids = claims.claim_ids()
+        unknown_refs: Dict[int, List[str]] = {}
+        for step in plan.steps:
+            bad = [cid for cid in step.verifies if cid not in valid_ids]
+            if bad:
+                unknown_refs[step.id] = bad
+
+        if unknown_refs:
+            print(
+                "  Warning: replication plan references claim IDs that don't exist:"
+            )
+            for step_id, bad in unknown_refs.items():
+                print(f"    Step {step_id}: {', '.join(bad)}")
 
     def _repair_json_response(
         self,
@@ -490,7 +499,7 @@ class ReplicationRunner:
             prompt=prompt,
             working_dir=self.config.output_dir,
             log_path=log_path,
-            timeout=self.config.evaluate_timeout,
+            timeout=None,
         )
 
         if not success:
@@ -519,73 +528,184 @@ class ReplicationRunner:
             print(f"  Warning: Could not parse fix severity assessment: {e}")
             return FixSeverityAssessment.empty()
 
-    # -- Phase 3: Evaluate -------------------------------------------------
+    # -- Phase 4: Verify ---------------------------------------------------
 
-    def _run_single_evaluation(
+    def _run_single_verify(
         self,
-        eval_name: str,
-        checklist_items: List,
-        plan_path: Optional[Path],
-        evidence: Optional[ExecutionEvidence] = None,
-        fix_assessment: Optional[FixSeverityAssessment] = None,
-    ) -> EvaluationResult:
-        """Run scoring for one category's checklist items."""
+        claim: PaperClaim,
+        replication_plan: Optional[ReplicationPlan],
+    ) -> Optional[ClaimVerdict]:
+        """Verify one claim against replication evidence.
+
+        Returns the parsed verdict on success, ``None`` on failure (which
+        leaves ``verify/{claim_id}.json`` absent so the next run re-attempts).
+        """
+        plan_step_ids: List[int] = []
+        if replication_plan is not None:
+            plan_step_ids = [
+                s.id for s in replication_plan.steps if claim.id in s.verifies
+            ]
+
+        codebase_dir = self.config.replication_dir / "codebase"
+        codebase_diff = self.config.replication_dir / "codebase.diff"
+        replication_log = self.config.replication_dir / "replication_log.json"
+        fix_severity_file = self.config.fix_severity_path
+
+        prompt = self.prompt_generator.generate_verify_prompt(
+            claim=claim,
+            codebase_dir=codebase_dir,
+            codebase_diff_path=codebase_diff,
+            replication_log_path=replication_log,
+            fix_severity_path=fix_severity_file,
+            plan_step_ids=plan_step_ids,
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.prompts_dir / f"verify_{claim.id}_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        output_json_path = self.config.verify_path(claim.id)
+        log_path = self.config.verify_transcript_path(claim.id)
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.repo_path,
+            log_path=log_path,
+            timeout=self.config.verify_timeout,
+        )
+
+        if not success:
+            print(f"  Warning: verifier invocation failed for {claim.id} (transcript: {log_path})")
+            return None
+
+        if not output_json_path.exists():
+            print(f"  Warning: verifier did not write {output_json_path}")
+            return None
+
+        response_text = output_json_path.read_text(encoding='utf-8').strip()
+        if not response_text:
+            print(f"  Warning: {output_json_path} is empty")
+            return None
+
         try:
-            prompt = self.prompt_generator.generate_scoring_prompt(
-                category_name=eval_name,
-                checklist_items=checklist_items,
-                repo_path=self.config.repo_path,
-                plan_path=plan_path,
-                output_dir=self.config.output_dir,
-                evidence=evidence,
-                fix_assessment=fix_assessment,
-            )
+            raw = _extract_json(response_text)
+            data = json.loads(raw)
+            verdict = ClaimVerdict.from_dict(data)
+        except (ValueError, json.JSONDecodeError, KeyError) as e:
+            print(f"  Warning: could not parse verdict for {claim.id}: {e}")
+            return None
 
-            prompt_path = self.config.prompts_dir / f"{eval_name}_prompt.txt"
-            prompt_path.write_text(prompt, encoding='utf-8')
+        output_json_path.write_text(
+            json.dumps(verdict.to_dict(), indent=2), encoding='utf-8'
+        )
+        return verdict
 
-            output_json_path = self.config.evaluation_path(eval_name)
-            log_path = self.config.evaluation_transcript_path(eval_name)
-
-            success = self._invoke_provider(
-                prompt=prompt,
-                working_dir=self.config.repo_path,
-                log_path=log_path,
-                timeout=self.config.evaluate_timeout,
-            )
-
-            if not success:
-                return EvaluationResult(
-                    name=eval_name, success=False,
-                    error=f"Provider invocation failed (transcript: {log_path})",
-                )
-
-            if not output_json_path.exists():
-                return EvaluationResult(
-                    name=eval_name, success=False,
-                    error=f"Output file not produced: {output_json_path}",
-                )
-
-            with open(output_json_path, encoding='utf-8') as f:
+    def _load_verdict(self, claim_id: str) -> Optional[ClaimVerdict]:
+        """Read a single per-claim verdict JSON. Returns None if missing or unparseable."""
+        output_path = self.config.verify_path(claim_id)
+        if not output_path.exists():
+            return None
+        try:
+            with open(output_path, encoding='utf-8') as f:
                 data = json.load(f)
+            return ClaimVerdict.from_dict(data)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            return None
 
-            return EvaluationResult(
-                name=eval_name,
-                success=True,
-                items=data.get("items", []),
-                pass_rate=data.get("pass_rate"),
-                output_path=output_json_path,
-            )
+    def _load_verify_artifacts(self, claims: PaperClaims) -> List[ClaimVerdict]:
+        """Load all available per-claim verdicts from disk."""
+        verdicts: List[ClaimVerdict] = []
+        for c in claims.claims:
+            v = self._load_verdict(c.id)
+            if v is not None:
+                verdicts.append(v)
+        return verdicts
 
-        except Exception as e:
-            return EvaluationResult(name=eval_name, success=False, error=str(e))
+    def _verify_with_resume(
+        self,
+        claims: PaperClaims,
+        replication_plan: Optional[ReplicationPlan],
+        state: PipelineState,
+        already_done: List[str],
+    ) -> List[ClaimVerdict]:
+        """Run verification per-claim with per-claim resume.
+
+        Resume primitive: ``verify/<claim_id>.json`` exists => skip. The
+        ``state.outputs.completed_claims`` list is updated as each verdict
+        lands on disk so the resume banner can summarize progress accurately.
+        """
+        results: List[ClaimVerdict] = []
+        completed = list(already_done)
+
+        for claim in claims.claims:
+            output_path = self.config.verify_path(claim.id)
+            if output_path.exists():
+                v = self._load_verdict(claim.id)
+                if v is not None:
+                    print(f"  Skipping {claim.id} (already verified)")
+                    results.append(v)
+                    if claim.id not in completed:
+                        completed.append(claim.id)
+                        state.update_stage_outputs('verify', {'completed_claims': completed})
+                    continue
+                print(f"  {claim.id} verdict file unparseable; re-attempting")
+                output_path.unlink()
+
+            print(f"Verifying {claim.id} ({claim.tier}/{claim.type})...")
+            verdict = self._run_single_verify(claim, replication_plan)
+
+            if verdict is not None:
+                results.append(verdict)
+                completed.append(claim.id)
+                state.update_stage_outputs('verify', {'completed_claims': completed})
+                print(f"  {claim.id}: {verdict.status}")
+            else:
+                print(f"  {claim.id}: verifier failed (no verdict written; retry on next run)")
+
+        return results
+
+    def _score_after_verify(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+    ) -> ReplicationScore:
+        """Compute the Replication Score and persist the aggregate verdict files."""
+        score = compute_replication_score(claims, verdicts)
+
+        self.config.verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config.verdicts_path.write_text(
+            json.dumps([v.to_dict() for v in verdicts], indent=2),
+            encoding='utf-8',
+        )
+        self.config.replication_score_path.write_text(
+            json.dumps(score.to_dict(), indent=2),
+            encoding='utf-8',
+        )
+
+        if score.score is not None:
+            print(f"Replication Score: {score.score * 100:.1f}%")
+        else:
+            print("Replication Score: not computable")
+        for flag in score.flags:
+            print(f"  Flag: {flag}")
+
+        return score
 
     # -- Report ------------------------------------------------------------
 
-    def _report(self, results, evidence=None, fix_assessment=None):
+    def _report(
+        self,
+        claims: PaperClaims,
+        verdicts: List[ClaimVerdict],
+        score: ReplicationScore,
+        evidence=None,
+        fix_assessment=None,
+    ):
         """Generate the final report."""
         return self.report_generator.generate_from_results(
-            results=results,
+            claims=claims,
+            verdicts=verdicts,
+            score=score,
             config=self.config,
             output_dir=self.config.output_dir,
             generate_pdf=self.config.generate_pdf,
@@ -612,7 +732,6 @@ class ReplicationRunner:
         return {
             'provider': self.config.provider,
             'mode': self.config.mode,
-            'plan_provided': self.config.has_plan,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
@@ -637,8 +756,8 @@ class ReplicationRunner:
             # who actually changed flags since the prior run won't be caught
             # this one time — surface the limitation so they can --restart.
             print("NOTE: prior pipeline state predates config tracking. Recording")
-            print("   current config as baseline; pass --restart if any of provider,")
-            print("   mode, or --plan differ from the prior run.")
+            print("   current config as baseline; pass --restart if any of provider")
+            print("   or mode differ from the prior run.")
             state.record_config(current_config)
             config_changes: List[str] = []
         else:
@@ -662,16 +781,16 @@ class ReplicationRunner:
         if config_changes:
             state.record_config(current_config)
 
-    def _load_analyze_artifacts(self) -> Tuple[Checklist, Optional[ReplicationPlan]]:
-        """Load checklist and replication plan from disk for a skipped analyze phase."""
-        with open(self.config.checklist_path, encoding='utf-8') as f:
-            checklist = Checklist.from_dict(json.load(f))
+    def _load_analyze_artifacts(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
+        """Load paper claims and replication plan from disk for a skipped analyze phase."""
+        with open(self.config.paper_claims_path, encoding='utf-8') as f:
+            claims = PaperClaims.from_dict(json.load(f))
 
         replication_plan: Optional[ReplicationPlan] = None
         if self.config.replication_plan_path.exists():
             with open(self.config.replication_plan_path, encoding='utf-8') as f:
                 replication_plan = ReplicationPlan.from_dict(json.load(f))
-        return checklist, replication_plan
+        return claims, replication_plan
 
     def _load_fix_assessment(self) -> FixSeverityAssessment:
         """Load fix severity assessment from disk (or empty if no fixes were applied)."""
@@ -679,77 +798,6 @@ class ReplicationRunner:
             return FixSeverityAssessment.empty()
         with open(self.config.fix_severity_path, encoding='utf-8') as f:
             return FixSeverityAssessment.from_dict(json.load(f))
-
-    def _load_evaluation_result(self, eval_name: str) -> EvaluationResult:
-        """Read a single per-category evaluation JSON and build an EvaluationResult."""
-        output_path = self.config.evaluation_path(eval_name)
-        if not output_path.exists():
-            return EvaluationResult(
-                name=eval_name, success=False,
-                error=f"Output file missing on resume: {output_path.name}",
-            )
-        with open(output_path, encoding='utf-8') as f:
-            data = json.load(f)
-        return EvaluationResult(
-            name=eval_name,
-            success=True,
-            items=data.get("items", []),
-            pass_rate=data.get("pass_rate"),
-            output_path=output_path,
-        )
-
-    def _load_evaluate_artifacts(self) -> List[EvaluationResult]:
-        """Load per-category evaluation results from disk for a skipped evaluate phase."""
-        return [self._load_evaluation_result(name) for name in self.config.evaluations]
-
-    def _evaluate_with_resume(
-        self,
-        checklist: Checklist,
-        evidence: Optional[ExecutionEvidence],
-        plan_path: Optional[Path],
-        fix_assessment: Optional[FixSeverityAssessment],
-        state: PipelineState,
-        already_done: List[str],
-    ) -> List[EvaluationResult]:
-        """Score checklist items per category, skipping those already completed in a previous run.
-
-        Records each newly-completed category in the state's ``outputs.completed_categories``
-        list as it goes, so an interruption mid-loop can be resumed at the right point.
-        """
-        results: List[EvaluationResult] = []
-        completed = list(already_done)
-
-        for eval_name in self.config.evaluations:
-            if eval_name in already_done:
-                print(f"  Skipping {eval_name} (already complete from previous run)")
-                results.append(self._load_evaluation_result(eval_name))
-                continue
-
-            print(f"Running {eval_name} evaluation...")
-            items = checklist.get_items_by_category(eval_name)
-            if not items:
-                print(f"  Skipping {eval_name} - no checklist items generated for this category")
-                results.append(EvaluationResult(
-                    name=eval_name, success=True, items=[], pass_rate=None,
-                ))
-                completed.append(eval_name)
-                state.update_stage_outputs('evaluate', {'completed_categories': completed})
-                continue
-
-            result = self._run_single_evaluation(
-                eval_name, items, plan_path, evidence, fix_assessment,
-            )
-            results.append(result)
-
-            if result.success:
-                pct = f"{result.pass_rate * 100:.1f}%" if result.pass_rate is not None else "N/A"
-                print(f"  {eval_name} completed - {pct}")
-                completed.append(eval_name)
-                state.update_stage_outputs('evaluate', {'completed_categories': completed})
-            else:
-                print(f"  {eval_name} failed: {result.error}")
-
-        return results
 
     # -- Provider Invocation -----------------------------------------------
 
@@ -764,8 +812,8 @@ class ReplicationRunner:
         """Run the configured provider as a subprocess; stream its JSONL
         transcript to ``log_path``; return True on success.
 
-        The agent is expected to write its actual results (checklist JSON,
-        replication plan JSON, etc.) to known disk paths during the run.
+        The agent is expected to write its actual results (paper-claims JSON,
+        replication-plan JSON, per-claim verdict JSON, etc.) to known disk paths during the run.
         ``log_path`` only captures the conversation transcript — it is
         never the source of the agent's answer.
 
