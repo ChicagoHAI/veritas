@@ -102,7 +102,7 @@ def replicate(
     ),
 ):
     """
-    Evaluate the replicability of a scientific paper against its code repository.
+    Run the replication pipeline against a paper and/or its code repository.
 
     Runs a multi-phase pipeline (analyze, plan, codegen [paper-only], replicate,
     assess_fixes, verify) and produces a Replication Score: a single tier-weighted
@@ -112,7 +112,7 @@ def replicate(
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
 
-    # Determine output directory: explicit --output wins; else <repo>/eval; else <paper-parent>/eval.
+    # Determine output directory: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate.
     # Config.__post_init__ also enforces this chain, but resolving here gives us a
     # path to write the .veritas/ state directory before constructing the runner.
     if output is not None:
@@ -160,13 +160,13 @@ def replicate(
         result = runner.run()
         if result.success:
             console.print()
-            console.print("[bold green]Evaluation completed successfully![/bold green]")
+            console.print("[bold green]Replication completed successfully![/bold green]")
             console.print(f"Report saved to: {result.report_path}")
             if result.pdf_path:
                 console.print(f"PDF saved to: {result.pdf_path}")
         else:
             console.print()
-            console.print(f"[bold red]Evaluation failed:[/bold red] {result.error}")
+            console.print(f"[bold red]Replication failed:[/bold red] {result.error}")
             raise typer.Exit(1)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

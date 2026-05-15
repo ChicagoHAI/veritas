@@ -73,7 +73,7 @@ class Config:
     output_dir: Optional[Path] = None
     generate_pdf: bool = True
 
-    # Evaluation settings
+    # Run settings
     provider: str = "claude"
     claim_scope: str = "main"
     mode: str = "auto"
@@ -100,7 +100,7 @@ class Config:
         if self.claims_path is not None:
             self.claims_path = Path(self.claims_path)
 
-        # Output dir fallback chain: explicit --output wins; else <repo>/eval; else <paper-parent>/eval
+        # Output dir fallback chain: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
         elif self.repo_path:

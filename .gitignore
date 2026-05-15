@@ -95,6 +95,8 @@ Thumbs.db
 
 # Project specific - default replicate output directory
 /replicate/
+# Transitional: pre-rename default was /evaluation/; keep ignored for users with existing dirs
+/evaluation/
 *.pdf
 !templates/**/*.pdf
 
