@@ -148,6 +148,12 @@ get_cli_credential_mounts() {
     local mounts=""
     local found_any=false
 
+    # Redirect the Claude CLI's config-file lookup into the mounted .claude
+    # directory. Without this it looks for $HOME/.claude.json (sibling of the
+    # mounted .claude/ dir, not inside it), doesn't find it, and prints a
+    # "manually restore from backup" hint on every launch.
+    mounts="$mounts -e CLAUDE_CONFIG_DIR=/home/veritas/.claude"
+
     echo -e "${BLUE}Checking CLI credentials...${NC}" >&2
 
     # macOS Keychain extraction for Claude
@@ -703,10 +709,13 @@ cmd_login() {
     local gpu_flags=$(get_gpu_flags)
 
     # VERITAS_LOGIN_ONLY=1 keeps the RW path on ~/.codex so OAuth tokens persist.
+    # CLAUDE_CONFIG_DIR matches the value in get_cli_credential_mounts so the
+    # .claude.json the CLI writes during auth lands inside the mounted dir.
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
         -e VERITAS_LOGIN_ONLY=1 \
+        -e CLAUDE_CONFIG_DIR=/home/veritas/.claude \
         -v \"$HOME/.claude:/home/veritas/.claude\" \
         -v \"$HOME/.codex:/home/veritas/.codex\" \
         -v \"$HOME/.gemini:/home/veritas/.gemini\" \
