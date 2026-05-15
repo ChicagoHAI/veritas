@@ -2,14 +2,27 @@
 
 You are extracting the structured, verifiable claims from a scientific paper. Each claim is one fact that the replication pipeline should later check against produced evidence.
 
-## Paper
+{% if has_paper %}## Paper
 
 You MUST read the PDF directly from this local path:
 {{ paper_path }}
+{% else %}## Spec Source
 
-## Repository Path
+This evaluation is in repo-only mode (no paper provided). Treat the
+following README as the spec for what the code aims to do and what
+results / outputs / claims it makes:
+
+{{ readme_path }}
+
+Read the README contents and extract any verifiable claims (numerical,
+structural, or qualitative). If the README is too thin to support any
+verifiable claim, return an empty `claims` array.
+{% endif %}
+
+{% if has_repo %}## Repository Path
 
 {{ repo_path }}
+{% endif %}
 
 ## Your Task
 
@@ -35,7 +48,7 @@ Output a JSON object with this top-level shape:
         "year": <int if visible, else null>,
         "authors": ["<lastname>", ...]
     },
-    "extraction_mode": "{{ mode }}",
+    "extraction_mode": "{{ claim_scope }}",
     "claims": [ /* claim objects, see below */ ]
 }
 ```
@@ -78,10 +91,10 @@ Each claim object has these fields:
 
 When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result.
 
-## Mode
+## Scope
 
-{% if mode == "main" %}
-This run is in **main mode** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
+{% if claim_scope == "main" %}
+This run is in **main scope** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
 {% else %}
 Extract all tiers, including `setup`.
 {% endif %}

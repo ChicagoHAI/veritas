@@ -47,7 +47,8 @@ Rather than scoring papers on a fixed rubric, Veritas extracts each paper's spec
 - **Streaming JSONL transcripts**: Every provider invocation streams a structured event log to disk for post-hoc inspection and debugging
 - **Docker-based replication**: Code runs inside a CUDA-enabled container; the original repo stays read-only
 - **Multi-provider support**: Works with Claude Code, Codex CLI, and Gemini CLI
-- **Scoped extraction**: `--mode main` (default) extracts headline+supporting claims; `--mode full` coming soon
+- **Scoped extraction**: `--scope main` (default) extracts headline+supporting claims; `--scope full` coming soon
+- **Three input modes**: paper+repo, paper-only (code generated from the paper), or repo-only (claims extracted from the README)
 - **Cross-platform**: Windows, macOS, and Linux (GPU acceleration on Linux with NVIDIA)
 
 ## Installation
@@ -71,7 +72,7 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 
 ```bash
 ./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
-./veritas evaluate --repo ./myrepo --mode main      # headline+supporting claims (default)
+./veritas evaluate --repo ./myrepo --scope main     # headline+supporting claims (default)
 ./veritas evaluate --repo ./myrepo --provider codex  # use a different provider
 ./veritas evaluate --repo ./myrepo --restart        # discard prior state and start fresh
 ./veritas extract-plan paper.pdf                     # plan only
@@ -85,6 +86,18 @@ Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` b
 ```
 
 Run `./veritas evaluate --help` for the full option list.
+
+### Input modes
+
+Veritas supports three input modes (the `--mode` flag, which auto-detects from the supplied inputs by default):
+
+- `--mode full` — paper PDF + repo provided (default when both are supplied).
+- `--mode paper-only` — paper PDF only. Veritas writes code from the paper in a new codegen phase, then runs it.
+- `--mode repo-only` — repo only. Claims are extracted from the repo's README.
+
+Universal override: `--claims path/to/claims.json` accepts a hand-authored claims file in the same JSON schema as `<output>/analyze/paper_claims.json`; when supplied, automatic claim extraction is skipped.
+
+Note: `--mode` (input mode) is distinct from `--scope` (claim-extraction scope: `main` or `full`).
 
 ## Resuming Runs
 

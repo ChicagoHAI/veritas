@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
-from veritas.core.pipeline_state import PipelineState
+from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
@@ -23,6 +23,23 @@ from veritas.core.replication import (
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
+
+
+class _InsufficientSpec(Exception):
+    """Signal raised when claim extraction returns zero verifiable claims.
+
+    Caught by run() to trigger a clean bail with a dedicated report rather than
+    propagating as a runtime error. source_path identifies what was read (the
+    paper PDF or a README), mode reports which input mode was active.
+    """
+
+    def __init__(self, source_path: Path, mode: str):
+        super().__init__(
+            f"Analyze produced 0 claims (source: {source_path}, mode: {mode})"
+        )
+        self.source_path = source_path
+        self.mode = mode
+
 
 # Provider invocation tables. Each provider has a CLI command (cli name plus
 # any required positional subcommand or print flag), a transcript-output flag
@@ -54,12 +71,14 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
 # rules can be added later (e.g. a knob that only affects the verify phase).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'replicate', 'assess_fixes', 'verify'),
+    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -98,17 +117,53 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            # analyze
+            # analyze (claims extraction only)
             if state.is_stage_completed('analyze'):
                 print("[OK] analyze: skipped (already completed)")
-                claims, replication_plan = self._load_analyze_artifacts()
+                claims = self._load_paper_claims()
             else:
                 state.start_stage('analyze')
                 try:
-                    claims, replication_plan = self._analyze()
+                    claims = self._generate_paper_claims()
                     state.complete_stage('analyze', success=True)
+                except _InsufficientSpec as e:
+                    state.complete_stage(
+                        'analyze',
+                        success=False,
+                        status_override=STATUS_INSUFFICIENT_SPEC,
+                    )
+                    self._run_insufficient_spec_bail(e.source_path)
+                    return RunResult(success=True, score=None, report_path=self.config.report_md_path)
                 except Exception:
                     state.complete_stage('analyze', success=False)
+                    raise
+
+            # codegen (paper-only mode only)
+            if self.config.mode == "paper-only":
+                if state.is_stage_completed('codegen'):
+                    print("[OK] codegen: skipped (already completed)")
+                else:
+                    state.start_stage('codegen')
+                    try:
+                        self._generate_code()
+                        state.complete_stage('codegen', success=True)
+                    except Exception:
+                        state.complete_stage('codegen', success=False)
+                        raise
+
+            # plan (now its own phase)
+            if state.is_stage_completed('plan'):
+                print("[OK] plan: skipped (already completed)")
+                replication_plan = self._load_replication_plan()
+            else:
+                state.start_stage('plan')
+                try:
+                    replication_plan = self._generate_replication_plan(claims)
+                    if replication_plan is not None:
+                        self._validate_plan_claim_refs(replication_plan, claims)
+                    state.complete_stage('plan', success=True)
+                except Exception:
+                    state.complete_stage('plan', success=False)
                     raise
 
             # replicate
@@ -191,29 +246,108 @@ class ReplicationRunner:
 
     # -- Phase 1: Analyze --------------------------------------------------
 
-    def _analyze(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
-        """Phase 1: Extract paper claims, then generate a claim-aware replication plan."""
-        claims = self._generate_paper_claims()
-        replication_plan = self._generate_replication_plan(claims)
-        if replication_plan is not None:
-            self._validate_plan_claim_refs(replication_plan, claims)
-        return claims, replication_plan
+    def _run_insufficient_spec_bail(self, source_path: Path) -> None:
+        """Write the bail report when analyze produces zero claims; downstream phases are skipped."""
+        print(
+            f"\n[INSUFFICIENT_SPEC] Analyze produced 0 claims from {source_path}. "
+            f"Writing bail report and exiting."
+        )
+        report_md = self.prompt_generator.generate_insufficient_spec_report(
+            mode=self.config.mode,
+            source_path=source_path,
+            has_paper=self.config.has_paper,
+        )
+        self.config.report_md_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config.report_md_path.write_text(report_md, encoding='utf-8')
+        print(f"  Report written to {self.config.report_md_path}")
 
     def _generate_paper_claims(self) -> PaperClaims:
-        """Extract structured claims from the paper."""
-        if not self.config.has_paper:
-            raise RuntimeError(
-                "Paper claims extraction requires a paper (--paper). "
-                "Paper-less mode is not supported in this version."
-            )
+        """Generate or load paper claims.
 
+        Sources, in priority order:
+          1. ``--claims`` user file (validate + copy to ``analyze/paper_claims.json``)
+          2. ``--paper`` PDF (extract via LLM)
+          3. ``<repo>/README`` (mode 3 — extract via LLM, treat README as spec)
+
+        Raises ``_InsufficientSpec`` when extraction yields 0 claims.
+        """
+        if self.config.has_user_claims:
+            return self._load_user_claims(self.config.claims_path)
+
+        if self.config.has_paper:
+            return self._extract_claims_from_paper()
+
+        if self.config.has_repo:
+            return self._extract_claims_from_readme()
+
+        raise RuntimeError(
+            "No claim source available: provide --paper, --repo, or --claims"
+        )
+
+    def _load_user_claims(self, path: Path) -> PaperClaims:
+        """Validate a user-supplied claims JSON file and copy it into the output tree."""
+        print(f"Loading user-supplied claims from {path}...")
+        raw = path.read_text(encoding='utf-8')
+        claims = PaperClaims.from_dict(json.loads(raw))
+        if len(claims.claims) == 0:
+            raise _InsufficientSpec(path, self.config.mode)
+
+        self.config.paper_claims_path.write_text(
+            json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
+        )
+
+        n_h = len(claims.by_tier("headline"))
+        n_s = len(claims.by_tier("supporting"))
+        n_se = len(claims.by_tier("setup"))
+        print(
+            f"  Loaded {len(claims.claims)} claims "
+            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
+        )
+        return claims
+
+    def _extract_claims_from_paper(self) -> PaperClaims:
+        """Extract claims via LLM from the paper PDF."""
         print("Extracting paper claims...")
+        return self._run_claim_extraction(
+            readme_path=None,
+            source_for_bail=self.config.paper_path,
+        )
 
+    def _extract_claims_from_readme(self) -> PaperClaims:
+        """Extract claims via LLM from the repo's README (repo-only mode)."""
+        readme_path = self._find_readme()
+        if readme_path is None:
+            raise _InsufficientSpec(
+                self.config.repo_path / "README.md", self.config.mode
+            )
+        print(f"Extracting claims from README at {readme_path}...")
+        return self._run_claim_extraction(
+            readme_path=readme_path,
+            source_for_bail=readme_path,
+        )
+
+    def _find_readme(self) -> Optional[Path]:
+        """Locate a README in the repo root (case variants tried in order)."""
+        if self.config.repo_path is None:
+            return None
+        for name in ("README.md", "README.rst", "readme.md", "Readme.md"):
+            candidate = self.config.repo_path / name
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _run_claim_extraction(
+        self,
+        readme_path: Optional[Path],
+        source_for_bail: Path,
+    ) -> PaperClaims:
+        """Common LLM-driven extraction path. Raises ``_InsufficientSpec`` on 0 claims."""
         prompt = self.prompt_generator.generate_paper_claims_prompt(
             repo_path=self.config.repo_path,
             output_dir=self.config.output_dir,
-            paper_path=self.config.paper_path,
-            mode=self.config.mode,
+            paper_path=self.config.paper_path if self.config.has_paper else None,
+            readme_path=readme_path,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
@@ -222,16 +356,18 @@ class ReplicationRunner:
         output_json_path = self.config.paper_claims_path
         log_path = self.config.paper_claims_transcript_path
 
+        working_dir = self.config.repo_path or self.config.output_dir
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=working_dir,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
 
         if not success:
             raise RuntimeError(
-                f"Paper claims extraction failed: provider invocation did not succeed (transcript: {log_path})"
+                f"Paper claims extraction failed: provider invocation did not succeed "
+                f"(transcript: {log_path})"
             )
 
         if not output_json_path.exists():
@@ -257,6 +393,7 @@ class ReplicationRunner:
                 log_path=log_path,
                 parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
+                working_dir=working_dir,
             )
 
         if claims is None:
@@ -264,29 +401,102 @@ class ReplicationRunner:
                 "Paper claims extraction failed: could not parse response even after repair"
             )
 
+        if len(claims.claims) == 0:
+            raise _InsufficientSpec(source_for_bail, self.config.mode)
+
         output_json_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
 
-        n_headline = len(claims.by_tier("headline"))
-        n_supporting = len(claims.by_tier("supporting"))
-        n_setup = len(claims.by_tier("setup"))
+        n_h = len(claims.by_tier("headline"))
+        n_s = len(claims.by_tier("supporting"))
+        n_se = len(claims.by_tier("setup"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_headline} headline, {n_supporting} supporting, {n_setup} setup)"
+            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
         )
         return claims
+
+    # -- Phase 1.5: Codegen (paper-only mode) ------------------------------
+
+    def _generate_code(self) -> None:
+        """Paper-only mode: have the agent write the paper's methodology into
+        <replication>/codebase/. Resume primitive: sentinel file at
+        <output>/.veritas/codegen_complete. Partial codebases from killed sessions
+        are wiped before retry. Anti-leakage: paper_claims.json is intentionally
+        not in this method's scope."""
+
+        sentinel = self.config.codegen_complete_sentinel_path
+        if sentinel.exists():
+            print("[OK] codegen: skipped (sentinel exists from prior completed run)")
+            return
+
+        codebase_dir = self.config.replication_dir / "codebase"
+
+        # Wipe any partial codebase from a killed prior session
+        if codebase_dir.exists() and any(codebase_dir.iterdir()):
+            # Defensive: refuse to rmtree anything not strictly under the output tree
+            resolved = codebase_dir.resolve()
+            output_root = self.config.output_dir.resolve()
+            if output_root not in resolved.parents:
+                raise RuntimeError(
+                    f"Refusing to wipe codebase_dir {resolved}: "
+                    f"not under output tree {output_root}"
+                )
+            print(f"  Wiping partial codebase at {codebase_dir} before retry")
+            shutil.rmtree(codebase_dir)
+        codebase_dir.mkdir(parents=True, exist_ok=True)
+
+        print("Generating code from paper...")
+        prompt = self.prompt_generator.generate_codegen_prompt(
+            paper_path=self.config.paper_path,
+            output_dir=self.config.output_dir,
+        )
+
+        prompt_path = self.config.prompts_dir / "codegen_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        log_path = self.config.codegen_transcript_path
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=codebase_dir,
+            log_path=log_path,
+            timeout=self.config.codegen_timeout,
+        )
+
+        if not success:
+            raise RuntimeError(
+                f"Codegen failed: provider invocation did not succeed "
+                f"(transcript: {log_path})"
+            )
+
+        # Sanity check: the codebase should be non-empty
+        contents = list(codebase_dir.iterdir())
+        if not contents:
+            raise RuntimeError(
+                f"Codegen failed: agent did not write any files to {codebase_dir}"
+            )
+
+        n_files = sum(1 for _ in codebase_dir.rglob('*') if _.is_file())
+        print(f"  Codegen wrote {n_files} file(s) to {codebase_dir}")
+
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.touch()
 
     def _generate_replication_plan(self, claims: PaperClaims) -> Optional[ReplicationPlan]:
         """Generate a replication plan whose steps reference claim IDs."""
         print("Generating replication plan...")
 
+        effective_repo_path = self.config.effective_repo_path
+
         prompt = self.prompt_generator.generate_replication_plan_prompt(
-            repo_path=self.config.repo_path,
+            repo_path=effective_repo_path,
             output_dir=self.config.output_dir,
             claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
@@ -297,7 +507,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=effective_repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
         )
@@ -327,6 +537,7 @@ class ReplicationRunner:
                 log_path=log_path,
                 parser=parse_replication_plan_response,
                 timeout=self.config.analyze_timeout,
+                working_dir=effective_repo_path,
             )
 
         if plan is None:
@@ -371,6 +582,7 @@ class ReplicationRunner:
         log_path: Path,
         parser,
         timeout: Optional[int],
+        working_dir: Path,
     ):
         """Re-prompt the provider to fix invalid JSON output.
 
@@ -394,7 +606,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=repair_prompt,
-            working_dir=self.config.repo_path,
+            working_dir=working_dir,
             log_path=log_path,
             timeout=timeout,
             append=True,
@@ -439,6 +651,8 @@ class ReplicationRunner:
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
             paper_path=self.config.paper_path,
+            repo_path=self.config.repo_path,
+            mode=self.config.mode,
         )
 
         log_path = self.config.replication_transcript_path
@@ -449,7 +663,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=session_instructions,
-            working_dir=self.config.repo_path,
+            working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
         )
@@ -569,7 +783,7 @@ class ReplicationRunner:
 
         success = self._invoke_provider(
             prompt=prompt,
-            working_dir=self.config.repo_path,
+            working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.verify_timeout,
         )
@@ -731,7 +945,9 @@ class ReplicationRunner:
         """
         return {
             'provider': self.config.provider,
+            'claim_scope': self.config.claim_scope,
             'mode': self.config.mode,
+            'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
@@ -757,7 +973,7 @@ class ReplicationRunner:
             # this one time — surface the limitation so they can --restart.
             print("NOTE: prior pipeline state predates config tracking. Recording")
             print("   current config as baseline; pass --restart if any of provider")
-            print("   or mode differ from the prior run.")
+            print("   or claim_scope differ from the prior run.")
             state.record_config(current_config)
             config_changes: List[str] = []
         else:
@@ -781,16 +997,19 @@ class ReplicationRunner:
         if config_changes:
             state.record_config(current_config)
 
-    def _load_analyze_artifacts(self) -> Tuple[PaperClaims, Optional[ReplicationPlan]]:
-        """Load paper claims and replication plan from disk for a skipped analyze phase."""
-        with open(self.config.paper_claims_path, encoding='utf-8') as f:
-            claims = PaperClaims.from_dict(json.load(f))
+    def _load_paper_claims(self) -> PaperClaims:
+        """Load paper_claims.json from disk (used when analyze phase is skipped via resume)."""
+        path = self.config.paper_claims_path
+        if not path.exists():
+            raise RuntimeError(f"paper_claims.json missing at {path}")
+        return PaperClaims.from_dict(json.loads(path.read_text(encoding='utf-8')))
 
-        replication_plan: Optional[ReplicationPlan] = None
-        if self.config.replication_plan_path.exists():
-            with open(self.config.replication_plan_path, encoding='utf-8') as f:
-                replication_plan = ReplicationPlan.from_dict(json.load(f))
-        return claims, replication_plan
+    def _load_replication_plan(self) -> Optional[ReplicationPlan]:
+        """Load replication_plan.json from disk (used when plan phase is skipped via resume)."""
+        path = self.config.replication_plan_path
+        if not path.exists():
+            return None
+        return parse_replication_plan_response(path.read_text(encoding='utf-8'))
 
     def _load_fix_assessment(self) -> FixSeverityAssessment:
         """Load fix severity assessment from disk (or empty if no fixes were applied)."""
