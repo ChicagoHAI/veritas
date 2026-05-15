@@ -62,6 +62,17 @@ def replicate(
         exists=True,
         dir_okay=False,
     ),
+    data: Optional[Path] = typer.Option(
+        None,
+        "--data",
+        help=(
+            "Directory of pre-positioned data files. Mounted at /workspace/data/ "
+            "(read-only) inside the container. Use when the agent shouldn't have "
+            "to procure data from the network."
+        ),
+        exists=True,
+        file_okay=False,
+    ),
     scope: str = typer.Option(
         "main",
         "--scope",
@@ -147,6 +158,7 @@ def replicate(
             claim_scope=scope,
             mode=mode,
             claims_path=claims,
+            data_path=data,
         )
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
