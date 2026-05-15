@@ -1022,7 +1022,7 @@ cmd_shell() {
 #   MOUNTS  — string of -v flags
 #   ARGS    — the rewritten argv list
 #
-# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --output /h/out --provider claude
+# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --data /h/data --output /h/out --provider claude
 # -----------------------------------------------------------------------------
 rewrite_paths() {
     MOUNTS=""
@@ -1067,6 +1067,17 @@ rewrite_paths() {
                 repo_host="$host_path"
                 MOUNTS="$MOUNTS -v \"$host_path:/workspace/repo:ro\""
                 ARGS="$ARGS --repo /workspace/repo"
+                shift 2
+                ;;
+            --data)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -d "$host_path" ]; then
+                    echo -e "${RED}--data must be a directory:${NC} $2" >&2
+                    exit 1
+                fi
+                MOUNTS="$MOUNTS -v \"$host_path:/workspace/data:ro\""
+                ARGS="$ARGS --data /workspace/data"
                 shift 2
                 ;;
             --output|-o)
@@ -1241,6 +1252,7 @@ show_help() {
     echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
     echo "  replicate     Run the full replication pipeline"
     echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
+    echo "                  add --data ./my-data to pre-position datasets (read-only)"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
     echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
