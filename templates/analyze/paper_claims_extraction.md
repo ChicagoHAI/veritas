@@ -8,7 +8,7 @@ You MUST read the PDF directly from this local path:
 {{ paper_path }}
 {% else %}## Spec Source
 
-This evaluation is in repo-only mode (no paper provided). Treat the
+This run is in repo-only mode (no paper provided). Treat the
 following README as the spec for what the code aims to do and what
 results / outputs / claims it makes:
 

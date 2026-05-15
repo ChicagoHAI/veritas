@@ -1,4 +1,4 @@
-"""Main runner for replication evaluation."""
+"""Main runner for the veritas replication pipeline."""
 
 import json
 import os
@@ -95,7 +95,7 @@ class RunResult:
 
 
 class ReplicationRunner:
-    """Orchestrates the replication evaluation pipeline."""
+    """Orchestrates the replication pipeline."""
 
     def __init__(self, config: Config):
         self.config = config

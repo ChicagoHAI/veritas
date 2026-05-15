@@ -63,7 +63,7 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 
 @dataclass
 class Config:
-    """Configuration for a replication evaluation run."""
+    """Configuration for a replication run."""
 
     # Input paths
     repo_path: Optional[Path] = None
@@ -104,9 +104,9 @@ class Config:
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
         elif self.repo_path:
-            self.output_dir = self.repo_path / "evaluation"
+            self.output_dir = self.repo_path / "replicate"
         elif self.paper_path:
-            self.output_dir = self.paper_path.parent / "evaluation"
+            self.output_dir = self.paper_path.parent / "replicate"
         else:
             raise ValueError(
                 "Cannot determine output directory: provide --output, --repo, or --paper"

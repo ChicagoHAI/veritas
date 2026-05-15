@@ -4,11 +4,11 @@
 **Mode:** {{ mode }}
 
 {% if mode == "repo-only" %}
-This repository was evaluated in repo-only mode (no paper provided).
+This repository was processed in repo-only mode (no paper provided).
 The replication spec source was `{{ source_path }}` — but no verifiable
 claims could be extracted from it.
 {% elif mode == "paper-only" %}
-This paper was evaluated in paper-only mode (no repository provided).
+This paper was processed in paper-only mode (no repository provided).
 The replication spec source was `{{ source_path }}` — but no verifiable
 claims could be extracted from it.
 {% else %}

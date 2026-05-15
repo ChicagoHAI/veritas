@@ -398,7 +398,7 @@ prompt_choice() {
     done
 }
 
-# Print a non-fatal warning if .env is missing. Called from cmd_evaluate /
+# Print a non-fatal warning if .env is missing. Called from cmd_replicate /
 # cmd_shell so users running an LLM-based paper get an actionable hint
 # without breaking workflows for papers that don't need keys.
 check_env_file_warn() {
@@ -968,7 +968,7 @@ cmd_setup() {
     echo -e "  ${GREEN}Setup complete.${NC}"
     echo ""
     echo -e "  ${BOLD}Next steps:${NC}"
-    echo -e "    ${DIM}Run an evaluation:${NC}  ${BOLD}./veritas evaluate --paper paper.pdf --repo ./my-project${NC}"
+    echo -e "    ${DIM}Run a replication:${NC}  ${BOLD}./veritas replicate --paper paper.pdf --repo ./my-project${NC}"
     echo -e "    ${DIM}Status check:${NC}     ${BOLD}./veritas status${NC}"
     echo -e "    ${DIM}Edit keys:${NC}        ${BOLD}./veritas config${NC}"
     echo ""
@@ -1093,18 +1093,18 @@ rewrite_paths() {
 
     # If the user didn't specify --output, pick a default on the host side
     # that lands on a writable mount. The --repo bind is read-only, so
-    # letting the CLI compute /workspace/repo/evaluation internally would
+    # letting the CLI compute /workspace/repo/replicate internally would
     # crash with "Read-only file system" when it tries to mkdir the subdir.
     #
-    # Fallback chain: explicit --output (already handled above) > <repo>/evaluation
-    # > <paper-parent>/evaluation. The Config layer requires at least one of
+    # Fallback chain: explicit --output (already handled above) > <repo>/replicate
+    # > <paper-parent>/replicate. The Config layer requires at least one of
     # --paper or --repo, so one of these branches always fires.
     if [ "$saw_output" = false ]; then
         local default_output=""
         if [ -n "$repo_host" ]; then
-            default_output="$repo_host/evaluation"
+            default_output="$repo_host/replicate"
         elif [ -n "$paper_host" ]; then
-            default_output="$(dirname "$paper_host")/evaluation"
+            default_output="$(dirname "$paper_host")/replicate"
         fi
         if [ -n "$default_output" ]; then
             mkdir -p "$default_output"
@@ -1116,9 +1116,9 @@ rewrite_paths() {
 }
 
 # -----------------------------------------------------------------------------
-# Evaluate (the primary subcommand)
+# Replicate (the primary subcommand)
 # -----------------------------------------------------------------------------
-cmd_evaluate() {
+cmd_replicate() {
     ensure_image
     warn_if_outdated
 
@@ -1163,7 +1163,7 @@ cmd_evaluate() {
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas evaluate $ARGS"
+        veritas replicate $ARGS"
 }
 
 # -----------------------------------------------------------------------------
@@ -1206,7 +1206,7 @@ cmd_extract_plan() {
 }
 
 # -----------------------------------------------------------------------------
-# Regenerate report from existing evaluation dir
+# Regenerate report from existing replication output dir
 # -----------------------------------------------------------------------------
 cmd_report() {
     ensure_image
@@ -1215,7 +1215,7 @@ cmd_report() {
     local host_eval_dir
     host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
     if [ ! -d "$host_eval_dir" ]; then
-        echo -e "${RED}Evaluation dir not found:${NC} $eval_dir" >&2
+        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
         exit 1
     fi
 
@@ -1239,10 +1239,10 @@ show_help() {
     echo ""
     echo -e "${BOLD}Commands:${NC}"
     echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
-    echo "  evaluate      Run the full replication pipeline"
-    echo "                  e.g. ./veritas evaluate --paper p.pdf --repo ./myrepo"
+    echo "  replicate     Run the full replication pipeline"
+    echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
-    echo "  report        Regenerate a report from an existing evaluation dir"
+    echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
     echo "  config        Edit replication API keys (.env) interactively"
     echo "  login         Log in to an AI provider (claude|codex|gemini)"
@@ -1253,7 +1253,7 @@ show_help() {
     echo ""
     echo -e "${BOLD}First-time setup:${NC}"
     echo "  1. ./veritas setup"
-    echo "  2. ./veritas evaluate --paper <your-paper.pdf> --repo <your-repo>"
+    echo "  2. ./veritas replicate --paper <your-paper.pdf> --repo <your-repo>"
     echo ""
 }
 
@@ -1265,7 +1265,7 @@ main() {
     shift || true
 
     case "$cmd" in
-        evaluate)      cmd_evaluate "$@" ;;
+        replicate)     cmd_replicate "$@" ;;
         extract-plan)  cmd_extract_plan "$@" ;;
         report)        cmd_report "$@" ;;
         shell)         cmd_shell "$@" ;;

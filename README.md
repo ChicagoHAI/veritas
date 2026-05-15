@@ -67,7 +67,7 @@ You need Docker. Nothing else — no Python, no pandoc, no LaTeX, no provider CL
 git clone https://github.com/ChicagoHAI/veritas.git
 cd veritas
 ./veritas setup             # one-shot: prereqs, image, login, .env
-./veritas evaluate --paper your_paper.pdf --repo your_repo/
+./veritas replicate --paper your_paper.pdf --repo your_repo/
 ```
 
 On first run, `./veritas` pulls `ghcr.io/chicagohai/veritas:latest` (~3GB) from GitHub Container Registry. Subsequent runs are instant.
@@ -87,7 +87,7 @@ cp .env.example .env
 chmod 600 .env
 $EDITOR .env          # uncomment and set any keys your paper needs
 
-./veritas evaluate --paper paper.pdf --repo ./my-project
+./veritas replicate --paper paper.pdf --repo ./my-project
 ```
 
 Or use the interactive UX:
@@ -104,12 +104,12 @@ Or use the interactive UX:
 ## Commands
 
 ```bash
-./veritas evaluate --paper p.pdf --repo ./myrepo    # full pipeline
-./veritas evaluate --repo ./myrepo --scope main     # headline+supporting claims (default)
-./veritas evaluate --repo ./myrepo --provider codex  # use a different provider
-./veritas evaluate --repo ./myrepo --restart        # discard prior state and start fresh
+./veritas replicate --paper p.pdf --repo ./myrepo    # full pipeline
+./veritas replicate --repo ./myrepo --scope main     # headline+supporting claims (default)
+./veritas replicate --repo ./myrepo --provider codex  # use a different provider
+./veritas replicate --repo ./myrepo --restart        # discard prior state and start fresh
 ./veritas extract-plan paper.pdf                     # plan only
-./veritas report ./evaluation                        # regenerate report
+./veritas report ./replicate                          # regenerate report
 ./veritas shell                                      # interactive container
 ./veritas setup                                      # one-shot prereqs + image + login + .env
 ./veritas config                                     # edit .env via masked-input menu
@@ -120,7 +120,7 @@ Or use the interactive UX:
 ./veritas help
 ```
 
-Run `./veritas evaluate --help` for the full option list.
+Run `./veritas replicate --help` for the full option list.
 
 ### Input modes
 
@@ -136,7 +136,7 @@ Note: `--mode` (input mode) is distinct from `--scope` (claim-extraction scope: 
 
 ## Resuming Runs
 
-A full evaluation can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `evaluate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, codegen (paper-only mode), plan, replicate, assess_fixes, and verify are all tracked. The verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
+A full replication can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `replicate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, codegen (paper-only mode), plan, replicate, assess_fixes, and verify are all tracked. The verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
 
 Resume is automatic and prints a banner so the skip behavior isn't a surprise. Pass `--restart` to discard the state file and run everything from scratch.
 
@@ -160,10 +160,10 @@ Veritas extracts claims into five shape-typed categories. Each claim also carrie
 
 ## Output Structure
 
-After evaluation, the output directory is organized by pipeline phase:
+After a replication run, the output directory is organized by pipeline phase:
 
 ```
-evaluation/
+replicate/
 ├── analyze/
 │   ├── paper_claims.json                    # Structured paper claims
 │   ├── replication_plan.json                # Claim-aware replication plan
@@ -207,7 +207,7 @@ GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/
 
 ### Credentials
 
-Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.gemini`) into the container so the agent can authenticate. Run `./veritas login <provider>` to set up credentials before your first evaluation.
+Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.gemini`) into the container so the agent can authenticate. Run `./veritas login <provider>` to set up credentials before your first replication run.
 
 ### Environment Variables
 
@@ -218,9 +218,9 @@ API keys consumed by the paper's own code (e.g. `OPENAI_API_KEY`) are loaded fro
 ### Using with Different Providers
 
 ```bash
-./veritas evaluate --repo ./project --paper paper.pdf --provider claude   # default
-./veritas evaluate --repo ./project --paper paper.pdf --provider codex
-./veritas evaluate --repo ./project --paper paper.pdf --provider gemini
+./veritas replicate --repo ./project --paper paper.pdf --provider claude   # default
+./veritas replicate --repo ./project --paper paper.pdf --provider codex
+./veritas replicate --repo ./project --paper paper.pdf --provider gemini
 ```
 
 ## Acknowledgments
