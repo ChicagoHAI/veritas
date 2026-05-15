@@ -14,8 +14,11 @@ You MUST read the PDF directly from this local path:
 
 {{ repo_path }}
 
-{% endif %}
+{% endif %}{% if has_data %}## Pre-positioned Data
 
+`/workspace/data/` (read-only) — user-supplied inputs for this paper.
+
+{% endif %}
 ## Paper Claims Summary
 
 The following claims were extracted from the paper and will be verified against your run's output. Each plan step should produce evidence relevant to one or more claims; use the claim IDs (e.g. `C1`, `C2`) in the `verifies` field of each step.

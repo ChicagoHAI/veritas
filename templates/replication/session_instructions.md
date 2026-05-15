@@ -17,6 +17,7 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 - **Working directory:** `/workspace/output/replication/codebase/` — a writable copy of the original repo. Make all your changes here.
 {% if has_repo %}- **Original repo:** `/workspace/repo` — read-only reference. Do not attempt to write here.
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology details, parameters, and expected results.
+{% endif %}{% if has_data %}- **Pre-positioned data:** `/workspace/data/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `/workspace/output/replication/` — save logs and evidence here.
 
 ## Environment Setup

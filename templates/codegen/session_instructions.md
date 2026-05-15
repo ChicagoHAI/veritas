@@ -10,7 +10,10 @@ implementation of the paper's methodology.
 - Paper PDF at: `{{ paper_path }}`
 - Output directory: `{{ output_dir }}`
 - Your working directory: `/workspace/output/replication/codebase/` (starts empty)
-
+{% if has_data %}
+- Pre-positioned data at: `/workspace/data/` (read-only). These files
+  are the user-supplied inputs for this paper.
+{% endif %}
 You do not have access to the original repository, if one exists.
 Implement everything from the paper.
 
