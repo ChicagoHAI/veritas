@@ -988,7 +988,11 @@ class ReplicationRunner:
         state.invalidate_stages(affected_sorted)
 
         if input_changes:
-            state.record_inputs(self.config.repo_path, self.config.paper_path)
+            state.record_inputs(
+                self.config.repo_path,
+                self.config.paper_path,
+                data_path=self.config.data_path,
+            )
         if config_changes:
             state.record_config(current_config)
 
