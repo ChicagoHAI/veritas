@@ -1022,7 +1022,7 @@ cmd_shell() {
 #   MOUNTS  — string of -v flags
 #   ARGS    — the rewritten argv list
 #
-# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --data /h/data --output /h/out --provider claude
+# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --data /h/data --claims /h/c.json --output /h/out --provider claude
 # -----------------------------------------------------------------------------
 rewrite_paths() {
     MOUNTS=""
@@ -1078,6 +1078,21 @@ rewrite_paths() {
                 fi
                 MOUNTS="$MOUNTS -v \"$host_path:/workspace/data:ro\""
                 ARGS="$ARGS --data /workspace/data"
+                shift 2
+                ;;
+            --claims)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -f "$host_path" ]; then
+                    echo -e "${RED}--claims file not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_path")
+                counter=$((counter + 1))
+                local container_path="/workspace/inputs/claims_${counter}_${basename}"
+                MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
+                ARGS="$ARGS --claims \"$container_path\""
                 shift 2
                 ;;
             --output|-o)
