@@ -453,6 +453,7 @@ class ReplicationRunner:
         prompt = self.prompt_generator.generate_codegen_prompt(
             paper_path=self.config.paper_path,
             output_dir=self.config.output_dir,
+            data_path=self.config.data_path,
         )
 
         prompt_path = self.config.prompts_dir / "codegen_prompt.txt"
@@ -499,6 +500,7 @@ class ReplicationRunner:
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
             claim_scope=self.config.claim_scope,
+            data_path=self.config.data_path,
         )
 
         prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
@@ -655,6 +657,7 @@ class ReplicationRunner:
             paper_path=self.config.paper_path,
             repo_path=self.config.repo_path,
             mode=self.config.mode,
+            data_path=self.config.data_path,
         )
 
         log_path = self.config.replication_transcript_path
