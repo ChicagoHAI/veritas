@@ -78,7 +78,7 @@ class Config:
     claim_scope: str = "main"
     mode: str = "auto"
     claims_path: Optional[Path] = None
-    codegen_timeout: Optional[int] = 3600
+    codegen_timeout: Optional[int] = None
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which

@@ -80,10 +80,10 @@ def replicate(
         "--analyze-timeout",
         help="Timeout in seconds for the analyze phase. Default: no timeout.",
     ),
-    codegen_timeout: int = typer.Option(
-        3600,
+    codegen_timeout: Optional[int] = typer.Option(
+        None,
         "--codegen-timeout",
-        help="Timeout in seconds for the codegen phase (paper-only mode only).",
+        help="Timeout in seconds for the codegen phase (paper-only mode only). Default: no timeout.",
     ),
     replicate_timeout: Optional[int] = typer.Option(
         None,
