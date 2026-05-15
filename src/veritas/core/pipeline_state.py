@@ -165,6 +165,7 @@ class PipelineState:
         self,
         repo_path: Optional[Path],
         paper_path: Optional[Path],
+        data_path: Optional[Path] = None,
     ) -> None:
         """Stash inputs into ``state['inputs']``. Also called to refresh after invalidation.
 
@@ -175,6 +176,7 @@ class PipelineState:
             'repo_path': str(Path(repo_path).resolve()) if repo_path else None,
             'paper_path': str(Path(paper_path).resolve()) if paper_path else None,
             'paper_sha256': _sha256_of_file(paper_path) if paper_path else None,
+            'data_path': str(Path(data_path).resolve()) if data_path else None,
         }
         self._save()
 
@@ -182,13 +184,15 @@ class PipelineState:
         self,
         repo_path: Optional[Path],
         paper_path: Optional[Path],
+        data_path: Optional[Path] = None,
     ) -> List[str]:
         """Return names of input fields that differ from the recorded run.
 
         Returns an empty list when no inputs were recorded yet (first run) or
         when everything matches. Field names are ``repo_path``, ``paper_path``,
-        and ``paper_sha256``; the caller handles user-facing messaging and
-        stage invalidation. (``mode`` is in the config fingerprint, not here.)
+        ``paper_sha256``, and ``data_path``; the caller handles user-facing
+        messaging and stage invalidation. (``mode`` is in the config fingerprint,
+        not here.)
         """
         recorded = self.state.get('inputs')
         if recorded is None:
@@ -197,6 +201,7 @@ class PipelineState:
         current_repo = str(Path(repo_path).resolve()) if repo_path else None
         current_paper = str(Path(paper_path).resolve()) if paper_path else None
         current_sha = _sha256_of_file(paper_path) if paper_path else None
+        current_data = str(Path(data_path).resolve()) if data_path else None
 
         changed = []
         if recorded.get('repo_path') != current_repo:
@@ -205,6 +210,8 @@ class PipelineState:
             changed.append('paper_path')
         if recorded.get('paper_sha256') != current_sha:
             changed.append('paper_sha256')
+        if recorded.get('data_path') != current_data:
+            changed.append('data_path')
         return changed
 
     # -- Config fingerprinting ----------------------------------------------
