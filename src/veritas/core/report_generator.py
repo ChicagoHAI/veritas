@@ -46,7 +46,7 @@ class ReportGenerator:
 
     def generate(
         self,
-        evaluation_dir: Path,
+        replicate_dir: Path,
         output_path: Optional[Path] = None,
         generate_pdf: bool = True,
         generate_md: bool = True,
@@ -56,20 +56,20 @@ class ReportGenerator:
         Reads paper_claims.json, verdicts.json, replication_score.json from
         the output directory and regenerates the markdown + PDF.
         """
-        claims = self._load_claims(evaluation_dir)
-        verdicts = self._load_verdicts(evaluation_dir)
-        score = self._load_score(evaluation_dir)
-        mode = self._load_mode(evaluation_dir)
+        claims = self._load_claims(replicate_dir)
+        verdicts = self._load_verdicts(replicate_dir)
+        score = self._load_score(replicate_dir)
+        mode = self._load_mode(replicate_dir)
 
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=None, fix_assessment=None,
             mode=mode,
-            output_dir=evaluation_dir,
+            output_dir=replicate_dir,
         )
 
         if output_path is None:
-            output_path = evaluation_dir / REPORT_SUBDIR / REPORT_MD_FILE
+            output_path = replicate_dir / REPORT_SUBDIR / REPORT_MD_FILE
         else:
             output_path = Path(output_path)
 
@@ -121,34 +121,34 @@ class ReportGenerator:
 
     # -- Loading helpers (used by the standalone ``generate``) --------------
 
-    def _load_claims(self, evaluation_dir: Path) -> Optional[PaperClaims]:
-        path = evaluation_dir / ANALYZE_SUBDIR / PAPER_CLAIMS_FILE
+    def _load_claims(self, replicate_dir: Path) -> Optional[PaperClaims]:
+        path = replicate_dir / ANALYZE_SUBDIR / PAPER_CLAIMS_FILE
         if not path.exists():
             return None
         with open(path, encoding='utf-8') as f:
             return PaperClaims.from_dict(json.load(f))
 
-    def _load_verdicts(self, evaluation_dir: Path) -> List[ClaimVerdict]:
-        path = evaluation_dir / VERIFY_SUBDIR / VERDICTS_FILE
+    def _load_verdicts(self, replicate_dir: Path) -> List[ClaimVerdict]:
+        path = replicate_dir / VERIFY_SUBDIR / VERDICTS_FILE
         if not path.exists():
             return []
         with open(path, encoding='utf-8') as f:
             return [ClaimVerdict.from_dict(d) for d in json.load(f)]
 
-    def _load_score(self, evaluation_dir: Path) -> Optional[ReplicationScore]:
-        path = evaluation_dir / VERIFY_SUBDIR / REPLICATION_SCORE_FILE
+    def _load_score(self, replicate_dir: Path) -> Optional[ReplicationScore]:
+        path = replicate_dir / VERIFY_SUBDIR / REPLICATION_SCORE_FILE
         if not path.exists():
             return None
         with open(path, encoding='utf-8') as f:
             return ReplicationScore.from_dict(json.load(f))
 
-    def _load_mode(self, evaluation_dir: Path) -> Optional[str]:
+    def _load_mode(self, replicate_dir: Path) -> Optional[str]:
         """Recover the input mode from pipeline_state.json, if available.
 
         Reads from ``state['config']`` — the canonical location, since ``mode``
         is a runtime configuration knob, not an input artifact.
         """
-        state_path = evaluation_dir / ".veritas" / "pipeline_state.json"
+        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
         if not state_path.exists():
             return None
         try:

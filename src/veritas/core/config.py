@@ -63,7 +63,7 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 
 @dataclass
 class Config:
-    """Configuration for a replication evaluation run."""
+    """Configuration for a replication run."""
 
     # Input paths
     repo_path: Optional[Path] = None
@@ -73,12 +73,12 @@ class Config:
     output_dir: Optional[Path] = None
     generate_pdf: bool = True
 
-    # Evaluation settings
+    # Run settings
     provider: str = "claude"
     claim_scope: str = "main"
     mode: str = "auto"
     claims_path: Optional[Path] = None
-    codegen_timeout: Optional[int] = 3600
+    codegen_timeout: Optional[int] = None
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
@@ -100,13 +100,13 @@ class Config:
         if self.claims_path is not None:
             self.claims_path = Path(self.claims_path)
 
-        # Output dir fallback chain: explicit --output wins; else <repo>/eval; else <paper-parent>/eval
+        # Output dir fallback chain: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
         elif self.repo_path:
-            self.output_dir = self.repo_path / "evaluation"
+            self.output_dir = self.repo_path / "replicate"
         elif self.paper_path:
-            self.output_dir = self.paper_path.parent / "evaluation"
+            self.output_dir = self.paper_path.parent / "replicate"
         else:
             raise ValueError(
                 "Cannot determine output directory: provide --output, --repo, or --paper"

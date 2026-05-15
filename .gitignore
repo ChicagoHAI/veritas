@@ -93,7 +93,9 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Project specific - default evaluation output directory
+# Project specific - default replicate output directory
+/replicate/
+# Transitional: pre-rename default was /evaluation/; keep ignored for users with existing dirs
 /evaluation/
 *.pdf
 !templates/**/*.pdf

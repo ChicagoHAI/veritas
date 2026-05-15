@@ -1,6 +1,7 @@
-"""Main runner for replication evaluation."""
+"""Main runner for the veritas replication pipeline."""
 
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -94,7 +95,7 @@ class RunResult:
 
 
 class ReplicationRunner:
-    """Orchestrates the replication evaluation pipeline."""
+    """Orchestrates the replication pipeline."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -666,6 +667,7 @@ class ReplicationRunner:
             working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
+            expose_api_keys=True,
         )
 
         if not success:
@@ -966,18 +968,7 @@ class ReplicationRunner:
         )
 
         current_config = self._config_fingerprint()
-        if state.state.get('config') is None:
-            # State predates config tracking. Adopt the current config as the
-            # baseline rather than treating every field as "changed." Users
-            # who actually changed flags since the prior run won't be caught
-            # this one time — surface the limitation so they can --restart.
-            print("NOTE: prior pipeline state predates config tracking. Recording")
-            print("   current config as baseline; pass --restart if any of provider")
-            print("   or claim_scope differ from the prior run.")
-            state.record_config(current_config)
-            config_changes: List[str] = []
-        else:
-            config_changes = state.detect_config_changes(current_config)
+        config_changes = state.detect_config_changes(current_config)
 
         all_changes = input_changes + config_changes
         if not all_changes:
@@ -1020,6 +1011,28 @@ class ReplicationRunner:
 
     # -- Provider Invocation -----------------------------------------------
 
+    @staticmethod
+    def _env_file_keys() -> set[str]:
+        """Names of vars sourced from the host .env file via --env-file.
+
+        The wrapper publishes the comma-separated list as
+        VERITAS_ENV_FILE_KEYS so the Python layer can scope visibility:
+        the replicate phase inherits these keys; other phases get a
+        subprocess env with them stripped out.
+        """
+        raw = os.environ.get("VERITAS_ENV_FILE_KEYS", "")
+        if not raw:
+            return set()
+        return {k.strip() for k in raw.split(",") if k.strip()}
+
+    @staticmethod
+    def _stripped_env() -> Dict[str, str]:
+        """os.environ minus the keys defined in VERITAS_ENV_FILE_KEYS."""
+        keys_to_strip = ReplicationRunner._env_file_keys()
+        if not keys_to_strip:
+            return os.environ.copy()
+        return {k: v for k, v in os.environ.items() if k not in keys_to_strip}
+
     def _invoke_provider(
         self,
         prompt: str,
@@ -1027,6 +1040,7 @@ class ReplicationRunner:
         log_path: Path,
         timeout: Optional[int],
         append: bool = False,
+        expose_api_keys: bool = False,
     ) -> bool:
         """Run the configured provider as a subprocess; stream its JSONL
         transcript to ``log_path``; return True on success.
@@ -1045,6 +1059,13 @@ class ReplicationRunner:
         With ``append=True`` the transcript file is opened in append mode,
         which is used by the repair-re-invocation path so the original
         failed attempt and the repair attempt land in one transcript file.
+
+        ``expose_api_keys=True`` lets the subprocess inherit the
+        replication API keys (the vars listed in
+        ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
+        this — paper code it runs needs the keys. All other phases must
+        keep the default ``False`` so the keys are not exposed to
+        analyze/plan/codegen/assess/verify subprocesses.
         """
         provider = self.config.provider.lower()
         if provider not in CLI_COMMANDS:
@@ -1066,6 +1087,11 @@ class ReplicationRunner:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         open_mode = "a" if append else "w"
 
+        # Default: strip replication API keys (sourced from .env via --env-file)
+        # so non-replicate phases don't see them. _replicate opts in via
+        # expose_api_keys=True since the paper code it runs needs the keys.
+        env = None if expose_api_keys else self._stripped_env()
+
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1076,6 +1102,7 @@ class ReplicationRunner:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                env=env,
             )
         except FileNotFoundError as e:
             print(f"  {e}")
