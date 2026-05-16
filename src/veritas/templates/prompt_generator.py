@@ -83,6 +83,7 @@ class PromptGenerator:
         paper_path: Optional[Path] = None,
         mode: str = "full",
         claim_scope: str = "main",
+        data_path: Optional[Path] = None,
     ) -> str:
         """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
@@ -95,6 +96,7 @@ class PromptGenerator:
             "claims": claims,
             "mode": mode,
             "claim_scope": claim_scope,
+            "has_data": data_path is not None,
         }
         return template.render(**context)
 
@@ -104,6 +106,7 @@ class PromptGenerator:
         paper_path: Optional[Path] = None,
         repo_path: Optional[Path] = None,
         mode: str = "full",
+        data_path: Optional[Path] = None,
     ) -> str:
         """Generate session instructions for the replication agent."""
         template = self.env.get_template("replication/session_instructions.md")
@@ -113,6 +116,7 @@ class PromptGenerator:
             "paper_path": str(paper_path) if paper_path else "",
             "has_repo": repo_path is not None,
             "mode": mode,
+            "has_data": data_path is not None,
         }
         return template.render(**context)
 
@@ -120,18 +124,21 @@ class PromptGenerator:
         self,
         paper_path: Path,
         output_dir: Path,
+        data_path: Optional[Path] = None,
     ) -> str:
         """Generate session instructions for the codegen agent (paper-only mode).
 
-        Rendered with only ``paper_path`` and ``output_dir`` — never with
-        extracted claim content — so the codegen agent reads the paper
-        directly but is structurally prevented from seeing paper-reported
-        result values that would compromise downstream verification.
+        Rendered with only ``paper_path``, ``output_dir``, and the
+        presence/absence of ``data_path`` — never with extracted claim
+        content — so the codegen agent reads the paper directly but is
+        structurally prevented from seeing paper-reported result values
+        that would compromise downstream verification.
         """
         template = self.env.get_template("codegen/session_instructions.md")
         context = {
             "paper_path": str(paper_path),
             "output_dir": str(output_dir),
+            "has_data": data_path is not None,
         }
         return template.render(**context)
 

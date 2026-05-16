@@ -78,13 +78,14 @@ class Config:
     claim_scope: str = "main"
     mode: str = "auto"
     claims_path: Optional[Path] = None
-    codegen_timeout: Optional[int] = None
+    data_path: Optional[Path] = None
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
     # is worse than letting it finish. Re-enable once there's a checkpoint /
     # resume mechanism to recover the work.
     analyze_timeout: Optional[int] = None
+    codegen_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
 
@@ -99,6 +100,8 @@ class Config:
             self.paper_path = Path(self.paper_path)
         if self.claims_path is not None:
             self.claims_path = Path(self.claims_path)
+        if self.data_path is not None:
+            self.data_path = Path(self.data_path)
 
         # Output dir fallback chain: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate
         if self.output_dir:
@@ -130,6 +133,22 @@ class Config:
 
         # Resolve input mode (auto-detect from inputs, or validate explicit mode)
         self.mode = self._resolve_mode(self.mode)
+
+        # Validate --data: must be a directory if provided. Empty directories
+        # warn rather than fail so smoke-test runs aren't punished. The
+        # "at least one of paper/repo" requirement is enforced by mode
+        # resolution above, so we don't recheck it here.
+        if self.data_path is not None:
+            if not self.data_path.exists():
+                raise FileNotFoundError(
+                    f"--data path does not exist: {self.data_path}"
+                )
+            if not self.data_path.is_dir():
+                raise ValueError(
+                    f"--data must be a directory; got file: {self.data_path}"
+                )
+            if not any(self.data_path.iterdir()):
+                print(f"WARNING: --data directory is empty: {self.data_path}")
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
@@ -196,6 +215,10 @@ class Config:
     @property
     def has_user_claims(self) -> bool:
         return self.claims_path is not None and self.claims_path.exists()
+
+    @property
+    def has_data(self) -> bool:
+        return self.data_path is not None and self.data_path.exists()
 
     @property
     def effective_repo_path(self) -> Optional[Path]:

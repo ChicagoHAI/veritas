@@ -108,6 +108,7 @@ Or use the interactive UX:
 ./veritas replicate --repo ./myrepo --scope main     # headline+supporting claims (default)
 ./veritas replicate --repo ./myrepo --provider codex  # use a different provider
 ./veritas replicate --repo ./myrepo --restart        # discard prior state and start fresh
+./veritas replicate --paper p.pdf --data ./prepositioned-data  # mount data at /workspace/data/ (read-only)
 ./veritas extract-plan paper.pdf                     # plan only
 ./veritas report ./replicate                          # regenerate report
 ./veritas shell                                      # interactive container
@@ -131,6 +132,8 @@ Veritas supports three input modes (the `--mode` flag, which auto-detects from t
 - `--mode repo-only` — repo only. Claims are extracted from the repo's README.
 
 Universal override: `--claims path/to/claims.json` accepts a hand-authored claims file in the same JSON schema as `<output>/analyze/paper_claims.json`; when supplied, automatic claim extraction is skipped.
+
+Pre-positioned data: `--data path/to/data-dir` mounts the directory read-only at `/workspace/data/` inside the container. Codegen, plan, and replicate prompts announce the path so the agent uses these files instead of fetching from the network. Useful when the agent shouldn't have to procure data over the network (bandwidth, mirrored archives, benchmark comparisons).
 
 Note: `--mode` (input mode) is distinct from `--scope` (claim-extraction scope: `main` or `full`).
 

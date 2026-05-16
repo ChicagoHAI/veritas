@@ -75,6 +75,7 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     # Config
     'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
@@ -113,7 +114,7 @@ class ReplicationRunner:
             state = PipelineState(self.config.output_dir)
 
             if state.state.get('inputs') is None:
-                state.record_inputs(self.config.repo_path, self.config.paper_path)
+                state.record_inputs(self.config.repo_path, self.config.paper_path, data_path=self.config.data_path)
                 state.record_config(self._config_fingerprint())
             else:
                 self._reconcile_with_prior_run(state)
@@ -452,6 +453,7 @@ class ReplicationRunner:
         prompt = self.prompt_generator.generate_codegen_prompt(
             paper_path=self.config.paper_path,
             output_dir=self.config.output_dir,
+            data_path=self.config.data_path,
         )
 
         prompt_path = self.config.prompts_dir / "codegen_prompt.txt"
@@ -498,6 +500,7 @@ class ReplicationRunner:
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
             claim_scope=self.config.claim_scope,
+            data_path=self.config.data_path,
         )
 
         prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
@@ -654,6 +657,7 @@ class ReplicationRunner:
             paper_path=self.config.paper_path,
             repo_path=self.config.repo_path,
             mode=self.config.mode,
+            data_path=self.config.data_path,
         )
 
         log_path = self.config.replication_transcript_path
@@ -964,7 +968,7 @@ class ReplicationRunner:
         self._announce_resume(state)
 
         input_changes = state.detect_input_changes(
-            self.config.repo_path, self.config.paper_path,
+            self.config.repo_path, self.config.paper_path, data_path=self.config.data_path,
         )
 
         current_config = self._config_fingerprint()
@@ -984,7 +988,11 @@ class ReplicationRunner:
         state.invalidate_stages(affected_sorted)
 
         if input_changes:
-            state.record_inputs(self.config.repo_path, self.config.paper_path)
+            state.record_inputs(
+                self.config.repo_path,
+                self.config.paper_path,
+                data_path=self.config.data_path,
+            )
         if config_changes:
             state.record_config(current_config)
 

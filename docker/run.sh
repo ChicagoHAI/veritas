@@ -148,6 +148,12 @@ get_cli_credential_mounts() {
     local mounts=""
     local found_any=false
 
+    # Redirect the Claude CLI's config-file lookup into the mounted .claude
+    # directory. Without this it looks for $HOME/.claude.json (sibling of the
+    # mounted .claude/ dir, not inside it), doesn't find it, and prints a
+    # "manually restore from backup" hint on every launch.
+    mounts="$mounts -e CLAUDE_CONFIG_DIR=/home/veritas/.claude"
+
     echo -e "${BLUE}Checking CLI credentials...${NC}" >&2
 
     # macOS Keychain extraction for Claude
@@ -703,10 +709,13 @@ cmd_login() {
     local gpu_flags=$(get_gpu_flags)
 
     # VERITAS_LOGIN_ONLY=1 keeps the RW path on ~/.codex so OAuth tokens persist.
+    # CLAUDE_CONFIG_DIR matches the value in get_cli_credential_mounts so the
+    # .claude.json the CLI writes during auth lands inside the mounted dir.
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
         -e VERITAS_LOGIN_ONLY=1 \
+        -e CLAUDE_CONFIG_DIR=/home/veritas/.claude \
         -v \"$HOME/.claude:/home/veritas/.claude\" \
         -v \"$HOME/.codex:/home/veritas/.codex\" \
         -v \"$HOME/.gemini:/home/veritas/.gemini\" \
@@ -1022,7 +1031,7 @@ cmd_shell() {
 #   MOUNTS  — string of -v flags
 #   ARGS    — the rewritten argv list
 #
-# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --output /h/out --provider claude
+# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --data /h/data --claims /h/c.json --output /h/out --provider claude
 # -----------------------------------------------------------------------------
 rewrite_paths() {
     MOUNTS=""
@@ -1067,6 +1076,32 @@ rewrite_paths() {
                 repo_host="$host_path"
                 MOUNTS="$MOUNTS -v \"$host_path:/workspace/repo:ro\""
                 ARGS="$ARGS --repo /workspace/repo"
+                shift 2
+                ;;
+            --data)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -d "$host_path" ]; then
+                    echo -e "${RED}--data must be a directory:${NC} $2" >&2
+                    exit 1
+                fi
+                MOUNTS="$MOUNTS -v \"$host_path:/workspace/data:ro\""
+                ARGS="$ARGS --data /workspace/data"
+                shift 2
+                ;;
+            --claims)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -f "$host_path" ]; then
+                    echo -e "${RED}--claims file not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_path")
+                counter=$((counter + 1))
+                local container_path="/workspace/inputs/claims_${counter}_${basename}"
+                MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
+                ARGS="$ARGS --claims \"$container_path\""
                 shift 2
                 ;;
             --output|-o)
@@ -1241,6 +1276,7 @@ show_help() {
     echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
     echo "  replicate     Run the full replication pipeline"
     echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
+    echo "                  add --data ./my-data to pre-position datasets (read-only)"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
     echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
