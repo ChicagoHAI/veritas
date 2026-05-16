@@ -2,14 +2,19 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 
 # All valid AI providers
 VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
-# Valid replication scope modes
-VALID_MODES = ["main", "full"]
+# Valid claim-extraction scopes
+VALID_CLAIM_SCOPES = ["main", "full"]
+
+# Input mode literal — distinct from claim_scope
+InputMode = Literal["full", "paper-only", "repo-only"]
+
+VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
 
 
 # Output directory structure — each phase writes into its own subdir.
@@ -58,25 +63,29 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 
 @dataclass
 class Config:
-    """Configuration for a replication evaluation run."""
+    """Configuration for a replication run."""
 
     # Input paths
-    repo_path: Path
+    repo_path: Optional[Path] = None
     paper_path: Optional[Path] = None
 
     # Output settings
     output_dir: Optional[Path] = None
     generate_pdf: bool = True
 
-    # Evaluation settings
+    # Run settings
     provider: str = "claude"
-    mode: str = "main"
+    claim_scope: str = "main"
+    mode: str = "auto"
+    claims_path: Optional[Path] = None
+    data_path: Optional[Path] = None
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
     # is worse than letting it finish. Re-enable once there's a checkpoint /
     # resume mechanism to recover the work.
     analyze_timeout: Optional[int] = None
+    codegen_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
 
@@ -84,28 +93,143 @@ class Config:
     verbose: bool = False
 
     def __post_init__(self):
-        # Convert paths to Path objects
-        self.repo_path = Path(self.repo_path)
-        if self.paper_path:
+        # Convert input paths to Path objects (if provided)
+        if self.repo_path is not None:
+            self.repo_path = Path(self.repo_path)
+        if self.paper_path is not None:
             self.paper_path = Path(self.paper_path)
+        if self.claims_path is not None:
+            self.claims_path = Path(self.claims_path)
+        if self.data_path is not None:
+            self.data_path = Path(self.data_path)
+
+        # Output dir fallback chain: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
+        elif self.repo_path:
+            self.output_dir = self.repo_path / "replicate"
+        elif self.paper_path:
+            self.output_dir = self.paper_path.parent / "replicate"
         else:
-            self.output_dir = self.repo_path / "evaluation"
+            raise ValueError(
+                "Cannot determine output directory: provide --output, --repo, or --paper"
+            )
 
         # Validate provider
         if self.provider.lower() not in VALID_PROVIDERS:
-            raise ValueError(f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}")
+            raise ValueError(
+                f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}"
+            )
 
-        # Validate mode
-        if self.mode not in VALID_MODES:
-            raise ValueError(f"Unknown mode: {self.mode}. Valid options: {VALID_MODES}")
-        if self.mode == "full":
-            raise NotImplementedError("--mode full is not yet implemented. Use --mode main (default).")
+        # Validate claim_scope (existing logic, kept as-is)
+        if self.claim_scope not in VALID_CLAIM_SCOPES:
+            raise ValueError(
+                f"Unknown claim scope: {self.claim_scope}. Valid options: {VALID_CLAIM_SCOPES}"
+            )
+        if self.claim_scope == "full":
+            raise NotImplementedError(
+                "--scope full is not yet implemented. Use --scope main (default)."
+            )
+
+        # Resolve input mode (auto-detect from inputs, or validate explicit mode)
+        self.mode = self._resolve_mode(self.mode)
+
+        # Validate --data: must be a directory if provided. Empty directories
+        # warn rather than fail so smoke-test runs aren't punished. The
+        # "at least one of paper/repo" requirement is enforced by mode
+        # resolution above, so we don't recheck it here.
+        if self.data_path is not None:
+            if not self.data_path.exists():
+                raise FileNotFoundError(
+                    f"--data path does not exist: {self.data_path}"
+                )
+            if not self.data_path.is_dir():
+                raise ValueError(
+                    f"--data must be a directory; got file: {self.data_path}"
+                )
+            if not any(self.data_path.iterdir()):
+                print(f"WARNING: --data directory is empty: {self.data_path}")
+
+    def _resolve_mode(self, requested: str) -> str:
+        """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
+        if requested not in VALID_INPUT_MODES:
+            raise ValueError(
+                f"Unknown mode: {requested}. Valid options: {VALID_INPUT_MODES}"
+            )
+
+        # Check --claims pairing first: more specific error than the generic "needs paper or repo"
+        if self.has_user_claims and not (self.has_paper or self.has_repo):
+            raise ValueError(
+                "--claims requires at least --paper or --repo as evidence source"
+            )
+
+        if requested == "auto":
+            return self._infer_mode()
+
+        # Explicit mode — validate against the provided inputs
+        if requested == "full":
+            if not self.has_paper or not self.has_repo:
+                raise ValueError(
+                    "--mode full requires both --paper and --repo"
+                )
+        elif requested == "paper-only":
+            if not self.has_paper:
+                raise ValueError("--mode paper-only requires --paper")
+            if self.has_repo:
+                print(
+                    f"WARNING: --repo provided but --mode paper-only is set; "
+                    f"ignoring repo at {self.repo_path}"
+                )
+        elif requested == "repo-only":
+            if not self.has_repo:
+                raise ValueError("--mode repo-only requires --repo")
+            if self.has_paper:
+                print(
+                    f"WARNING: --paper provided but --mode repo-only is set; "
+                    f"ignoring paper at {self.paper_path}"
+                )
+
+        return requested
+
+    def _infer_mode(self) -> str:
+        """Infer mode from which of paper/repo are present."""
+        if self.has_paper and self.has_repo:
+            return "full"
+        if self.has_paper and not self.has_repo:
+            return "paper-only"
+        if self.has_repo and not self.has_paper:
+            return "repo-only"
+        raise ValueError(
+            "At least one of --paper or --repo is required "
+            "(or --claims paired with one of them)"
+        )
 
     @property
     def has_paper(self) -> bool:
         return self.paper_path is not None and self.paper_path.exists()
+
+    @property
+    def has_repo(self) -> bool:
+        return self.repo_path is not None and self.repo_path.exists()
+
+    @property
+    def has_user_claims(self) -> bool:
+        return self.claims_path is not None and self.claims_path.exists()
+
+    @property
+    def has_data(self) -> bool:
+        return self.data_path is not None and self.data_path.exists()
+
+    @property
+    def effective_repo_path(self) -> Optional[Path]:
+        """Path to the codebase the pipeline operates on. In paper-only mode this
+        is the codegen output (replication_dir/codebase). In other modes it is the
+        user-supplied repo. Returns None when neither is available (rare; should
+        only occur if called before codegen runs in paper-only mode)."""
+        if self.mode == "paper-only":
+            codebase = self.replication_dir / "codebase"
+            return codebase if codebase.exists() else None
+        return self.repo_path
 
     # -- Output subdirectories ----------------------------------------------
 
@@ -174,6 +298,14 @@ class Config:
     @property
     def paper_claims_transcript_path(self) -> Path:
         return self.analyze_dir / PAPER_CLAIMS_TRANSCRIPT_FILE
+
+    @property
+    def codegen_complete_sentinel_path(self) -> Path:
+        return self.output_dir / ".veritas" / "codegen_complete"
+
+    @property
+    def codegen_transcript_path(self) -> Path:
+        return self.replication_dir / "codegen_transcript.jsonl"
 
     # -- Transcript files (JSONL streamed from provider invocations) --------
 

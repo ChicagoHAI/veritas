@@ -17,7 +17,7 @@ console = Console()
 
 
 @app.command()
-def evaluate(
+def replicate(
     paper: Optional[Path] = typer.Option(
         None,
         "--paper", "-p",
@@ -25,22 +25,61 @@ def evaluate(
         exists=True,
         dir_okay=False,
     ),
-    repo: Path = typer.Option(
-        ...,
+    repo: Optional[Path] = typer.Option(
+        None,
         "--repo", "-r",
-        help="Path to the repository to evaluate",
+        help="Path to the repository to replicate",
         exists=True,
         file_okay=False,
     ),
     output: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Output directory for the replication report (default: repo/evaluation)",
+        help="Output directory (default: <repo>/replicate or <paper-parent>/replicate)",
     ),
     provider: str = typer.Option(
         "claude",
         "--provider",
         help="AI provider to use (claude, codex, gemini)",
+    ),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help=(
+            "Input mode. 'auto' (default) infers from --paper/--repo presence. "
+            "'full' = paper+repo. 'paper-only' = paper alone (agent writes the code). "
+            "'repo-only' = repo alone (claims extracted from README)."
+        ),
+    ),
+    claims: Optional[Path] = typer.Option(
+        None,
+        "--claims",
+        help=(
+            "Path to a user-authored claims JSON file (same schema as "
+            "<output>/analyze/paper_claims.json). When provided, skips automatic "
+            "claim extraction."
+        ),
+        exists=True,
+        dir_okay=False,
+    ),
+    data: Optional[Path] = typer.Option(
+        None,
+        "--data",
+        help=(
+            "Directory of pre-positioned data files. Mounted at /workspace/data/ "
+            "(read-only) inside the container. Use when the agent shouldn't have "
+            "to procure data from the network."
+        ),
+        exists=True,
+        file_okay=False,
+    ),
+    scope: str = typer.Option(
+        "main",
+        "--scope",
+        help=(
+            "Claim-extraction scope. 'main' targets headline+supporting (default); "
+            "'full' (not yet implemented) includes setup tier."
+        ),
     ),
     generate_pdf: bool = typer.Option(
         True,
@@ -50,22 +89,22 @@ def evaluate(
     analyze_timeout: Optional[int] = typer.Option(
         None,
         "--analyze-timeout",
-        help="Timeout in seconds for the analyze phase (per LLM call). Default: no timeout.",
+        help="Timeout in seconds for the analyze phase. Default: no timeout.",
+    ),
+    codegen_timeout: Optional[int] = typer.Option(
+        None,
+        "--codegen-timeout",
+        help="Timeout in seconds for the codegen phase (paper-only mode only). Default: no timeout.",
     ),
     replicate_timeout: Optional[int] = typer.Option(
         None,
         "--replicate-timeout",
-        help="Timeout in seconds for the replicate phase (per LLM call). Default: no timeout.",
+        help="Timeout in seconds for the replicate phase. Default: no timeout.",
     ),
     verify_timeout: Optional[int] = typer.Option(
         None,
         "--verify-timeout",
         help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
-    ),
-    mode: str = typer.Option(
-        "main",
-        "--mode",
-        help="Claim-extraction scope. 'main' targets the paper's headline and supporting claims (default); 'full' (not yet implemented) extracts all tiers including setup-level metadata.",
     ),
     restart: bool = typer.Option(
         False,
@@ -74,17 +113,30 @@ def evaluate(
     ),
 ):
     """
-    Evaluate the replicability of a scientific paper against its code repository.
+    Run the replication pipeline against a paper and/or its code repository.
 
-    Runs a four-phase pipeline (analyze, replicate, assess_fixes, verify) and
-    produces a Replication Score: a single tier-weighted number reflecting how
-    many of the paper's structured claims the replication actually reproduced.
+    Runs a multi-phase pipeline (analyze, plan, codegen [paper-only], replicate,
+    assess_fixes, verify) and produces a Replication Score: a single tier-weighted
+    number reflecting how many of the paper's structured claims the replication
+    actually reproduced.
     """
     console.print("[bold blue]Veritas Replication Agent[/bold blue]")
     console.print()
 
-    # Determine output directory
-    output_dir = output or (repo / "evaluation")
+    # Determine output directory: explicit --output wins; else <repo>/replicate; else <paper-parent>/replicate.
+    # Config.__post_init__ also enforces this chain, but resolving here gives us a
+    # path to write the .veritas/ state directory before constructing the runner.
+    if output is not None:
+        output_dir = output
+    elif repo is not None:
+        output_dir = repo / "replicate"
+    elif paper is not None:
+        output_dir = paper.parent / "replicate"
+    else:
+        console.print(
+            "[bold red]Error:[/bold red] at least one of --paper or --repo is required"
+        )
+        raise typer.Exit(1)
 
     if restart:
         state_file = output_dir / ".veritas" / "pipeline_state.json"
@@ -92,36 +144,42 @@ def evaluate(
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
 
-    # Create config
-    config = Config(
-        paper_path=paper,
-        repo_path=repo,
-        output_dir=output_dir,
-        provider=provider,
-        generate_pdf=generate_pdf,
-        analyze_timeout=analyze_timeout,
-        replicate_timeout=replicate_timeout,
-        verify_timeout=verify_timeout,
-        mode=mode,
-    )
+    try:
+        config = Config(
+            paper_path=paper,
+            repo_path=repo,
+            output_dir=output_dir,
+            provider=provider,
+            generate_pdf=generate_pdf,
+            analyze_timeout=analyze_timeout,
+            codegen_timeout=codegen_timeout,
+            replicate_timeout=replicate_timeout,
+            verify_timeout=verify_timeout,
+            claim_scope=scope,
+            mode=mode,
+            claims_path=claims,
+            data_path=data,
+        )
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
 
-    # Run evaluation
+    console.print(f"[blue]Mode:[/blue] {config.mode}")
+
     runner = ReplicationRunner(config)
 
     try:
         result = runner.run()
-
         if result.success:
             console.print()
-            console.print("[bold green]Evaluation completed successfully![/bold green]")
+            console.print("[bold green]Replication completed successfully![/bold green]")
             console.print(f"Report saved to: {result.report_path}")
             if result.pdf_path:
                 console.print(f"PDF saved to: {result.pdf_path}")
         else:
             console.print()
-            console.print(f"[bold red]Evaluation failed:[/bold red] {result.error}")
+            console.print(f"[bold red]Replication failed:[/bold red] {result.error}")
             raise typer.Exit(1)
-
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
@@ -149,7 +207,7 @@ def extract_plan(
     """
     Extract a structured plan from a paper PDF.
 
-    This generates a plan.md file that can be used as input for evaluation.
+    This generates a plan.md file that can be used as input for a replication run.
     """
     from veritas.core.plan_extractor import PlanExtractor
 
@@ -174,9 +232,9 @@ def extract_plan(
 
 @app.command()
 def report(
-    evaluation_dir: Path = typer.Argument(
+    replicate_dir: Path = typer.Argument(
         ...,
-        help="Path to the evaluation directory containing JSON results",
+        help="Path to the replication output directory containing JSON results",
         exists=True,
         file_okay=False,
     ),
@@ -192,19 +250,19 @@ def report(
     ),
 ):
     """
-    Generate a replication report from evaluation results.
+    Generate a replication report from a prior run's output.
 
-    This aggregates the evaluation JSON files and generates a comprehensive report.
+    This aggregates the JSON files produced by a replication run and generates a comprehensive report.
     """
     from veritas.core.report_generator import ReportGenerator
 
-    console.print(f"[blue]Generating report from:[/blue] {evaluation_dir}")
+    console.print(f"[blue]Generating report from:[/blue] {replicate_dir}")
 
     generator = ReportGenerator()
 
     try:
         report_path, pdf_path = generator.generate(
-            evaluation_dir=evaluation_dir,
+            replicate_dir=replicate_dir,
             output_path=output,
             generate_pdf=(output_format in ["pdf", "all"]),
             generate_md=(output_format in ["md", "all"]),

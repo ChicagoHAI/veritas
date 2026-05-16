@@ -1,6 +1,6 @@
 # Veritas
 
-Veritas is a replication agent that evaluates whether scientific papers can be reproduced. It runs a 4-phase pipeline: analyze the paper to extract structured claims, replicate the methodology inside Docker (actively fixing issues), assess fix severity, then verify each claim against the produced evidence and emit a tier-weighted Replication Score.
+Veritas is a replication agent that evaluates whether scientific papers can be reproduced. It runs a 6-phase pipeline: analyze the inputs to extract structured claims, optionally generate code from the paper (paper-only mode), plan the replication, replicate the methodology inside Docker (actively fixing issues), assess fix severity, then verify each claim against the produced evidence and emit a tier-weighted Replication Score.
 
 ## Project Status
 
@@ -23,22 +23,32 @@ The basic claim-verification pipeline is in place: paper claims extraction in an
 git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 # Full pipeline (paper + repo)
-./veritas evaluate --paper paper.pdf --repo ./my-project
+./veritas replicate --paper paper.pdf --repo ./my-project
 
 # Select provider
-./veritas evaluate --repo ./my-project --provider codex
+./veritas replicate --repo ./my-project --provider codex
 
 # Select claim-extraction scope
-./veritas evaluate --repo ./my-project --mode main  # headline+supporting (default)
+./veritas replicate --repo ./my-project --scope main  # headline+supporting (default)
+
+# Select input mode explicitly (default: auto-detected from inputs)
+./veritas replicate --paper paper.pdf --mode paper-only  # generate code from paper, then run
+./veritas replicate --repo ./my-project --mode repo-only # extract claims from README
+
+# Supply a hand-authored claims JSON (skips automatic extraction)
+./veritas replicate --repo ./my-project --claims claims.json
+
+# Pre-position a data directory (mounted read-only at /workspace/data/)
+./veritas replicate --paper paper.pdf --data ./prepositioned-data
 
 # Per-phase timeouts (default: no timeout)
-./veritas evaluate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
+./veritas replicate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
 
 # Extract a plan-only sketch from a paper
 ./veritas extract-plan paper.pdf
 
 # Regenerate the report from existing outputs
-./veritas report ./evaluation-dir
+./veritas report ./replicate-dir
 
 # Interactive shell inside the replication container
 ./veritas shell
@@ -52,14 +62,26 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 ## Architecture
 
-4-phase pipeline orchestrated by `ReplicationRunner` in `src/veritas/core/runner.py`:
+6-phase pipeline orchestrated by `ReplicationRunner` in `src/veritas/core/runner.py`:
 
-1. **Analyze** (`_analyze`) — extracts `paper_claims.json` (one LLM call), then a claim-aware `replication_plan.json` (second LLM call, sees the claims). Plan steps carry a `verifies: List[str]` field referencing claim IDs. A post-analyze cross-check (`_validate_plan_claim_refs`) warns if the plan references unknown claim IDs.
-2. **Replicate** (`_replicate`) — runs the plan inside a writable copy of the repo via an AI agent that actively fixes issues; collects execution evidence and fix records. The agent never sees `paper_claims.json`.
-3. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical) via a separate LLM pass. Output: `assess/fix_severity.json`.
-4. **Verify** (`_verify_with_resume`) — one provider invocation per claim. Each verifier reads the relevant evidence files and produces a structured verdict at `verify/<claim_id>.json` (status `match | partial | no_match | not_attempted | not_applicable`, type-specific `structured` field, free-text `rationale`, `evidence_refs`). Per-claim resume primitive: file-exists check. Final aggregation writes `verify/verdicts.json` and `verify/replication_score.json`.
+1. **Analyze** (`_generate_paper_claims`) — extracts `paper_claims.json`. Source depends on input mode: paper PDF (`full` / `paper-only`), repo README (`repo-only`), or a user-supplied `--claims` JSON (universal override, validated and copied through). Yielding 0 claims raises `_InsufficientSpec` and triggers a dedicated bail report instead of propagating as an error.
+2. **Codegen** (`_generate_code`, paper-only mode only) — has the agent write the paper's methodology from scratch into `replication/codebase/`. Sentinel-based resume at `<output>/.veritas/codegen_complete`. Anti-leakage: `paper_claims.json` is intentionally out of this phase's scope.
+3. **Plan** (`_generate_replication_plan`) — generates the claim-aware `replication_plan.json` from the effective codebase (the user's repo, or the generated one in paper-only mode). Uses `Config.effective_repo_path`. Plan steps carry a `verifies: List[str]` field referencing claim IDs; a post-plan cross-check (`_validate_plan_claim_refs`) warns on unknown IDs.
+4. **Replicate** (`_replicate`) — runs the plan inside a writable copy of the codebase via an AI agent that actively fixes issues; collects execution evidence and fix records. The agent never sees `paper_claims.json`.
+5. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical) via a separate LLM pass. Output: `assess/fix_severity.json`.
+6. **Verify** (`_verify_with_resume`) — one provider invocation per claim. Each verifier reads the relevant evidence files and produces a structured verdict at `verify/<claim_id>.json` (status `match | partial | no_match | not_attempted | not_applicable`, type-specific `structured` field, free-text `rationale`, `evidence_refs`). Per-claim resume primitive: file-exists check. Final aggregation writes `verify/verdicts.json` and `verify/replication_score.json`.
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
+
+### Input modes
+
+Veritas resolves the input mode at startup (auto-detected by default from which of `--paper` / `--repo` were supplied):
+
+- **`full`** — paper PDF + repo. Claims come from the paper; replication runs against the repo.
+- **`paper-only`** — paper PDF only. The codegen phase writes the methodology from the paper into a fresh codebase, then the rest of the pipeline runs against that generated codebase.
+- **`repo-only`** — repo only. Claims are extracted from the repo's README; codegen is skipped.
+
+`--mode` is the input-mode selector. `--scope` (separate flag, values `main` / `full`) controls claim-extraction scope (which claim tiers to extract); the two flags are independent. `--claims path/to/claims.json` is a universal override that skips automatic extraction. `--data path/to/data-dir` mounts a host directory read-only at `/workspace/data/`; the path is surfaced to codegen / plan / replicate prompts via `has_data` so the agent uses these files instead of procuring from the network.
 
 ### Key modules (`src/veritas/core/`)
 
@@ -68,7 +90,7 @@ Output is organized into per-phase subdirectories: `analyze/`, `replication/` (w
 - `paper_claims.py` — `parse_paper_claims_response()` reading the analyze-phase LLM output.
 - `verify.py` — `compute_replication_score()`: pure-function tier-weighted aggregation over a list of `ClaimVerdict`s, returning a `ReplicationScore` with per-tier breakdown, missing-verdict list, and edge-case flags.
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` JSON-repair logic.
-- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 2` raises a clear error directing the user to `--restart`.
+- `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 3` raises a clear error directing the user to `--restart`.
 - `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep` with `verifies: List[str]`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `paper_claims.py` (`PaperClaim`, `PaperClaims`, `ClaimVerdict`, `ReplicationScore`, `Provenance`, `TIER_WEIGHTS`, `VERDICT_VALUES`).
 - `plan_extractor.py` — PDF → plan extraction (used by the standalone `extract-plan` subcommand; separate from the pipeline's analyze phase).
 - `report_generator.py` — markdown + PDF report generation (Replication Score headline, tier breakdown, per-claim verdict table, flags, replication evidence, fixes-applied section, environment summary).
@@ -90,15 +112,16 @@ All templates are Jinja2, rendered by `src/veritas/templates/prompt_generator.py
 
 ### Docker
 
-Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
+Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--data`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
 
 ## Gotchas
 
 - **The replication agent actively fixes issues.** The agent works on a writable copy of the repo at `/workspace/output/replication/codebase/`. It may patch deprecated APIs, install missing tools, and fix configuration issues. Every fix is tracked in `StepOutcome.fixes_applied` and rated for severity by a separate post-replicate LLM pass. The original repo at `/workspace/repo` remains read-only.
 - **The user's repo is bind-mounted read-only** at `/workspace/repo` by the wrapper. The entrypoint copies it to `/workspace/output/replication/codebase/` for the agent to modify. An EXIT trap generates a unified diff at `/workspace/output/replication/codebase.diff`.
+- **`--data` is mounted read-only at `/workspace/data/`.** Surfaced to codegen / plan / replicate prompts via `has_data`. Agent writes (downloaded auxiliary files) land in `codebase/data/` instead — the two directories don't collide. `data_path` participates in the input fingerprint as a resolved-path string; changing `--data` between runs invalidates downstream phases.
 - **The replication agent never sees `paper_claims.json`.** The session prompt is rendered with `replication_plan` only; `expected_outcome` is shape-prescriptive (file paths, field names) rather than value-prescriptive. This is the structural defense against leaking paper-reported result values to the replicator.
 - **Verify phase is per-claim with file-exists resume.** A failed verifier call leaves `verify/<claim_id>.json` absent; the next run re-attempts that claim only. State tracks `completed_claims` (not `completed_categories`).
-- **Pipeline state `schema_version` is 2.** Old state files (pre-refactor or `< 2`) raise a clear error directing the user to `--restart`. Output filenames and subdirectory layout changed across the refactor; silent reuse would mix incompatible artifacts.
+- **Pipeline state `schema_version` is 3.** Old state files (pre-refactor or `< 3`) raise a clear error directing the user to `--restart`. The bump tracks the analyze/plan split, the new codegen phase for paper-only mode, the `insufficient_spec` terminal status, and the top-level `mode` field; silent reuse would mix incompatible artifacts.
 - **Provider CLI resolution is cross-platform** — `_resolve_cli()` in `runner.py` handles Windows `.cmd` shims via `shutil.which()`. Don't hardcode paths.
 - **Windows Git Bash requires `winpty` for interactive subcommands** — mintty uses Windows pipes instead of Unix ptys, so `docker run -it` fails with "the input device is not a TTY". The top-level `./veritas` wrapper auto-re-execs under `winpty` when detected; if `winpty` is missing, `get_tty_flag` falls back to `-i`-only (scripted use works; interactive sessions like `./veritas shell` and `./veritas login` are degraded). Modern Git for Windows ships with `winpty` by default. Linux and macOS are unaffected.
 - **JSON responses from LLMs are unreliable.** `core/replication.py` has multi-strategy extraction (raw → markdown blocks → brace matching) plus escape repair in `_extract_json` / `_fix_json_escapes`. Both `paper_claims.py` and the verifier consumer in `runner.py` route through `_extract_json()`.
@@ -106,6 +129,7 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **Docker is mandatory.** There is no host-side fallback. The `./veritas` wrapper manages the image lifecycle (pull from GHCR on first run, build locally if pull fails).
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
 - **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped.
+- **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_replicate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys, but the paper code run during replicate does. `./veritas setup` and `./veritas config` subcommands manage the file.
 
 ## Testing
 

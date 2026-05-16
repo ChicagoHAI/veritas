@@ -2,18 +2,31 @@
 
 You are extracting the structured, verifiable claims from a scientific paper. Each claim is one fact that the replication pipeline should later check against produced evidence.
 
-## Paper
+{% if has_paper %}## Paper
 
 You MUST read the PDF directly from this local path:
 {{ paper_path }}
+{% else %}## Spec Source
 
-## Repository Path
+This run is in repo-only mode (no paper provided). Treat the
+following README as the spec for what the code aims to do and what
+results / outputs / claims it makes:
+
+{{ readme_path }}
+
+Read the README contents and extract any verifiable claims (numerical,
+structural, or qualitative). If the README is too thin to support any
+verifiable claim, return an empty `claims` array.
+{% endif %}
+
+{% if has_repo %}## Repository Path
 
 {{ repo_path }}
+{% endif %}
 
 ## Your Task
 
-Read the paper. Identify every claim that:
+{% if has_paper %}Read the paper.{% else %}Read the README.{% endif %} Identify every claim that:
 1. Reports a result, observation, measurement, or behavior of the system under study, AND
 2. Could plausibly be checked by inspecting outputs that the paper's code is expected to produce (numbers, ranges, tables, figures, or qualitative behaviors).
 
@@ -35,7 +48,7 @@ Output a JSON object with this top-level shape:
         "year": <int if visible, else null>,
         "authors": ["<lastname>", ...]
     },
-    "extraction_mode": "{{ mode }}",
+    "extraction_mode": "{{ claim_scope }}",
     "claims": [ /* claim objects, see below */ ]
 }
 ```
@@ -51,7 +64,7 @@ Each claim object has these fields:
 | `paper_value` | optional | The value(s) the paper reports. Shape varies by type (see below). Omit for `qualitative` and `figure` claims where no numeric value is stated. |
 | `units` | optional | Physical / statistical units of `paper_value`, where meaningful. |
 | `expected_output_file` | optional | For `figure` and `table` claims when the paper's code is expected to produce a specific file. Path relative to the repo root. |
-| `provenance` | yes | `{"section": "...", "page": <int>, "quote": "..."}` — where in the paper the claim appears. `quote` is the verbatim snippet (≤200 chars). |
+| `provenance` | yes | `{"section": "...", "page": <int>, "quote": "..."}` — where in the paper the claim appears. `quote` is the verbatim snippet (≤200 chars). For repo-only sources where "page" doesn't apply, set `page` to 0. |
 | `verification` | yes | One paragraph of instructions for the *verifier*: what to read, where, and how to decide if the produced evidence supports the claim. |
 | `notes` | optional | Anything else the verifier should know. |
 
@@ -78,10 +91,10 @@ Each claim object has these fields:
 
 When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result.
 
-## Mode
+## Scope
 
-{% if mode == "main" %}
-This run is in **main mode** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
+{% if claim_scope == "main" %}
+This run is in **main scope** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
 {% else %}
 Extract all tiers, including `setup`.
 {% endif %}

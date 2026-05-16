@@ -58,7 +58,7 @@ sed_inplace() {
 get_remote_digest() {
     local image="$1"
     local digest
-    digest=$(docker buildx imagetools inspect "$image" 2>/dev/null \
+    digest=$(timeout 5 docker buildx imagetools inspect "$image" 2>/dev/null \
         | awk '/^Digest:/{print $2; exit}')
     echo "$digest"
 }
@@ -148,6 +148,12 @@ get_cli_credential_mounts() {
     local mounts=""
     local found_any=false
 
+    # Redirect the Claude CLI's config-file lookup into the mounted .claude
+    # directory. Without this it looks for $HOME/.claude.json (sibling of the
+    # mounted .claude/ dir, not inside it), doesn't find it, and prints a
+    # "manually restore from backup" hint on every launch.
+    mounts="$mounts -e CLAUDE_CONFIG_DIR=/home/veritas/.claude"
+
     echo -e "${BLUE}Checking CLI credentials...${NC}" >&2
 
     # macOS Keychain extraction for Claude
@@ -214,6 +220,225 @@ extract_provider() {
 }
 
 # -----------------------------------------------------------------------------
+# .env helpers (shared input/edit primitives)
+# -----------------------------------------------------------------------------
+
+# Read the current value of an env var from .env (uncommented lines only).
+get_env_value() {
+    local var_name="$1"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//"
+    fi
+}
+
+# Mask a secret for display (first 4 + last 4 chars; values <=8 chars show ****).
+mask_value() {
+    local val="$1"
+    local len=${#val}
+    if [ "$len" -le 8 ]; then
+        echo "****"
+    else
+        echo "${val:0:4}...${val:len-4:4}"
+    fi
+}
+
+# Read input with masked display (shows * for each character typed).
+# Uses stty rather than `read -s` so it works when stdin is a pipe.
+read_masked() {
+    local __resultvar="$1"
+    local _input="" _char=""
+
+    local old_stty
+    old_stty=$(stty -g < /dev/tty 2>/dev/null)
+    stty -echo < /dev/tty 2>/dev/null
+    trap 'stty '"$old_stty"' < /dev/tty 2>/dev/null; trap - INT TERM' INT TERM
+
+    while true; do
+        IFS= read -r -n 1 _char < /dev/tty
+
+        if [[ -z "$_char" ]]; then
+            break
+        fi
+
+        if [[ "$_char" == $'\x7f' ]] || [[ "$_char" == $'\x08' ]]; then
+            if [ ${#_input} -gt 0 ]; then
+                _input="${_input%?}"
+                echo -ne '\b \b' >&2
+            fi
+        else
+            _input+="$_char"
+            echo -ne '*' >&2
+        fi
+    done
+
+    echo "" >&2
+
+    stty "$old_stty" < /dev/tty 2>/dev/null
+    trap - INT TERM
+
+    printf -v "$__resultvar" '%s' "$_input"
+}
+
+# Return formatted status string for a config variable.
+# Usage: format_status "VAR_NAME" [is_secret]
+format_status() {
+    local var_name="$1"
+    local is_secret="${2:-true}"
+    local val
+    val=$(get_env_value "$var_name")
+    if [ -n "$val" ]; then
+        if [ "$is_secret" = "true" ]; then
+            echo -e "${GREEN}[SET: $(mask_value "$val")]${NC}"
+        else
+            echo -e "${GREEN}[SET: $val]${NC}"
+        fi
+    else
+        echo -e "${DIM}[NOT SET]${NC}"
+    fi
+}
+
+# Write a value to .env: replace existing line, uncomment commented line, or append.
+config_set_env() {
+    local var_name="$1"
+    local value="$2"
+    if grep -q "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+        sed_inplace "s|^${var_name}=.*|${var_name}=${value}|" "$PROJECT_ROOT/.env"
+    elif grep -q "^# *${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+        sed_inplace "s|^# *${var_name}=.*|${var_name}=${value}|" "$PROJECT_ROOT/.env"
+    else
+        echo "${var_name}=${value}" >> "$PROJECT_ROOT/.env"
+    fi
+}
+
+# Prompt for a secret value (masked input). Writes to .env on success.
+# Usage: prompt_secret "Label" "ENV_VAR" "required|optional" "validation_prefix" ["hint"]
+prompt_secret() {
+    local label="$1"
+    local env_var="$2"
+    local required="$3"
+    local prefix="$4"
+
+    if [ "$required" = "required" ]; then
+        echo -e "    ${BOLD}$label${NC} (recommended)"
+    else
+        echo -e "    ${BOLD}$label${NC} (optional)"
+    fi
+
+    if [ -n "$5" ]; then
+        echo -e "    ${DIM}$5${NC}"
+    fi
+
+    local value=""
+    if [ "$required" = "optional" ]; then
+        echo -ne "    > ${DIM}[Enter to skip]${NC} "
+    else
+        echo -ne "    > "
+    fi
+    read_masked value
+
+    if [ -z "$value" ]; then
+        echo -e "    ${DIM}[SKIP]${NC} $label skipped"
+        return 1
+    fi
+
+    echo -e "    ${DIM}Entered: $(mask_value "$value") (${#value} chars)${NC}"
+
+    if [ -n "$prefix" ] && [[ ! "$value" == $prefix* ]]; then
+        echo -e "    ${YELLOW}[WARN]${NC} Expected value starting with '$prefix' — saving anyway"
+    fi
+
+    config_set_env "$env_var" "$value"
+
+    echo -e "    ${GREEN}[OK]${NC} $env_var saved"
+    return 0
+}
+
+# Prompt for a non-secret value with optional default. Sets REPLY.
+prompt_text() {
+    local label="$1"
+    local hint="$2"
+    local default_val="$3"
+
+    echo -e "    ${BOLD}$label${NC} (optional)"
+    if [ -n "$hint" ]; then
+        echo -e "    ${DIM}$hint${NC}"
+    fi
+
+    if [ -n "$default_val" ]; then
+        echo -ne "    > ${DIM}[Enter for '$default_val']${NC} "
+    else
+        echo -ne "    > ${DIM}[Enter to skip]${NC} "
+    fi
+    local value=""
+    read value < /dev/tty
+
+    if [ -z "$value" ]; then
+        REPLY="$default_val"
+    else
+        REPLY="$value"
+    fi
+}
+
+# Numbered menu prompt. Sets REPLY to the selected number (1-based).
+prompt_choice() {
+    local header="$1"
+    shift
+    local options=("$@")
+
+    echo -e "    ${BOLD}$header${NC}"
+    local i=1
+    for opt in "${options[@]}"; do
+        echo "      [$i] $opt"
+        ((i++))
+    done
+
+    local selection=""
+    while true; do
+        echo -ne "    > "
+        read selection < /dev/tty
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#options[@]}" ]; then
+            REPLY="$selection"
+            return
+        fi
+        echo -e "    ${YELLOW}Please enter a number between 1 and ${#options[@]}${NC}"
+    done
+}
+
+# Print a non-fatal warning if .env is missing. Called from cmd_replicate /
+# cmd_shell so users running an LLM-based paper get an actionable hint
+# without breaking workflows for papers that don't need keys.
+check_env_file_warn() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "${YELLOW}Note:${NC} no .env found at $PROJECT_ROOT/.env" >&2
+        echo -e "      Papers that call LLM APIs (e.g. hypogenic, PaperBench) will fail without keys." >&2
+        echo -e "      Run ${BOLD}./veritas setup${NC} to configure, or ${BOLD}cp .env.example .env${NC} to start manually." >&2
+        echo "" >&2
+    fi
+}
+
+# Restrict .env to owner-only since it holds raw API keys. Idempotent and
+# silent on missing file — safe to call from any subcommand.
+ensure_env_perms() {
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        chmod 600 "$PROJECT_ROOT/.env" 2>/dev/null || true
+    fi
+}
+
+# Compute a comma-separated list of variable names defined in .env (uncommented
+# `VAR=value` lines only). Echoed to stdout. Empty string if .env is absent or
+# defines no keys. Used to build `VERITAS_ENV_FILE_KEYS` for the container.
+compute_env_file_keys() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo ""
+        return
+    fi
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$PROJECT_ROOT/.env" 2>/dev/null \
+        | sed 's/=.*//' \
+        | tr '\n' ',' \
+        | sed 's/,$//'
+}
+
+# -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
 # don't watch an LLM-call hang for several minutes before realising they
@@ -226,11 +451,7 @@ check_provider_credentials() {
     local provider="$1"
     case "$provider" in
         claude)
-            if [[ "$(uname)" == "Darwin" ]] \
-                && security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
-                return 0
-            fi
-            if [ -s "$HOME/.claude/.credentials.json" ]; then
+            if is_claude_configured; then
                 return 0
             fi
             echo -e "${RED}Claude credentials not found.${NC}" >&2
@@ -260,14 +481,31 @@ check_provider_credentials() {
     esac
 }
 
+# Return 0 if Claude OAuth credentials are present on this host, 1 otherwise.
+# On macOS, Claude Code stores credentials in the Keychain; on Linux/Windows
+# they live in ~/.claude/.credentials.json. Check both.
+is_claude_configured() {
+    if [[ "$(uname)" == "Darwin" ]] \
+        && security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
+        return 0
+    fi
+    if [ -s "$HOME/.claude/.credentials.json" ]; then
+        return 0
+    fi
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # Non-blocking notice: if a newer image is on GHCR, print it. Don't pull.
 # -----------------------------------------------------------------------------
 warn_if_outdated() {
     local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
+    # Skip registry probe entirely for locally-built images (no RepoDigests).
+    if [ -z "$local_digest" ]; then
+        return
+    fi
     local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
-
-    if [ -n "$local_digest" ] && [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
+    if [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
         echo -e "${YELLOW}Update available:${NC} newer image on registry. Run './veritas update' to pull."
         echo ""
     fi
@@ -316,49 +554,24 @@ show_banner() {
 show_status() {
     echo -e "  ${BOLD}Status:${NC}"
 
+    # Fast, local checks first so the dashboard is responsive even when the
+    # network or GPU container probe is slow.
+
     if command -v docker &> /dev/null; then
         echo -e "    Docker .............. ${GREEN}[OK]${NC}"
     else
         echo -e "    Docker .............. ${RED}[MISSING]${NC}"
     fi
 
-    if docker image inspect "$IMAGE_NAME" &> /dev/null; then
-        local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
-        local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
-        if [ -n "$local_digest" ] && [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
-            echo -e "    Docker image ........ ${YELLOW}[UPDATE AVAILABLE]${NC}"
-        else
-            echo -e "    Docker image ........ ${GREEN}[OK]${NC}"
-        fi
+    # .env (replication API keys)
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "    .env ................ ${GREEN}[OK]${NC}"
     else
-        echo -e "    Docker image ........ ${YELLOW}[MISSING]${NC} run: ./veritas build (or let first run pull)"
-    fi
-
-    # Two-step GPU probe: toolkit + actual accessibility
-    if docker info 2>/dev/null | grep -qi nvidia; then
-        if docker image inspect "$IMAGE_NAME" &> /dev/null && \
-           docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
-               --query-gpu=name --format=csv,noheader &> /dev/null; then
-            echo -e "    GPU ................. ${GREEN}[OK]${NC} accessible"
-        elif ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
-            echo -e "    GPU ................. ${DIM}[?]${NC} toolkit present; rebuild image to probe"
-        else
-            echo -e "    GPU ................. ${YELLOW}[WARN]${NC} toolkit present but no GPU reachable (WSL/emulated?)"
-        fi
-    else
-        echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
+        echo -e "    .env ................ ${DIM}[--]${NC} run: ./veritas setup (or cp .env.example .env)"
     fi
 
     # Credentials
-    local claude_ok=false
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if security find-generic-password -s "Claude Code-credentials" -w &>/dev/null; then
-            claude_ok=true
-        fi
-    elif [ -s "$HOME/.claude/.credentials.json" ]; then
-        claude_ok=true
-    fi
-    if [ "$claude_ok" = true ]; then
+    if is_claude_configured; then
         echo -e "    Claude credentials .. ${GREEN}[OK]${NC}"
     else
         echo -e "    Claude credentials .. ${DIM}[--]${NC} run: ./veritas login claude"
@@ -374,6 +587,49 @@ show_status() {
         echo -e "    Gemini credentials .. ${GREEN}[OK]${NC}"
     else
         echo -e "    Gemini credentials .. ${DIM}[--]${NC}"
+    fi
+
+    # GPU toolkit detection (fast `docker info` check). The slow GPU
+    # container probe is deferred to the end of this function.
+    local gpu_toolkit_present=false
+    if docker info 2>/dev/null | grep -qi nvidia; then
+        gpu_toolkit_present=true
+    fi
+
+    # Docker image — local inspect is fast; the registry digest comparison
+    # is a network call (now bounded by `timeout 5` in get_remote_digest)
+    # and is skipped entirely for locally-built images.
+    if docker image inspect "$IMAGE_NAME" &> /dev/null; then
+        local local_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_NAME" 2>/dev/null | sed 's/.*@//')
+        if [ -z "$local_digest" ]; then
+            # Locally-built image (no RepoDigests). Skip the registry comparison.
+            echo -e "    Docker image ........ ${GREEN}[OK]${NC} (locally built)"
+        else
+            local remote_digest=$(get_remote_digest "$REGISTRY_IMAGE")
+            if [ -n "$remote_digest" ] && [ "$local_digest" != "$remote_digest" ]; then
+                echo -e "    Docker image ........ ${YELLOW}[UPDATE AVAILABLE]${NC}"
+            else
+                echo -e "    Docker image ........ ${GREEN}[OK]${NC}"
+            fi
+        fi
+    else
+        echo -e "    Docker image ........ ${YELLOW}[MISSING]${NC} run: ./veritas build (or let first run pull)"
+    fi
+
+    # Two-step GPU probe: toolkit + actual accessibility. The container spawn
+    # is the slowest check in show_status, so it runs last.
+    if [ "$gpu_toolkit_present" = true ]; then
+        if docker image inspect "$IMAGE_NAME" &> /dev/null && \
+           docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+               --query-gpu=name --format=csv,noheader &> /dev/null; then
+            echo -e "    GPU ................. ${GREEN}[OK]${NC} accessible"
+        elif ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+            echo -e "    GPU ................. ${DIM}[?]${NC} toolkit present; rebuild image to probe"
+        else
+            echo -e "    GPU ................. ${YELLOW}[WARN]${NC} toolkit present but no GPU reachable (WSL/emulated?)"
+        fi
+    else
+        echo -e "    GPU ................. ${DIM}[--]${NC} no toolkit (optional)"
     fi
 
     echo ""
@@ -453,15 +709,278 @@ cmd_login() {
     local gpu_flags=$(get_gpu_flags)
 
     # VERITAS_LOGIN_ONLY=1 keeps the RW path on ~/.codex so OAuth tokens persist.
+    # CLAUDE_CONFIG_DIR matches the value in get_cli_credential_mounts so the
+    # .claude.json the CLI writes during auth lands inside the mounted dir.
     eval "docker run -it --rm \
         $platform_flag \
         $gpu_flags \
         -e VERITAS_LOGIN_ONLY=1 \
+        -e CLAUDE_CONFIG_DIR=/home/veritas/.claude \
         -v \"$HOME/.claude:/home/veritas/.claude\" \
         -v \"$HOME/.codex:/home/veritas/.codex\" \
         -v \"$HOME/.gemini:/home/veritas/.gemini\" \
         \"$IMAGE_NAME\" \
         $provider"
+}
+
+# Print a one-page prereqs check. Exits with code 1 if any required tool is
+# missing. Used by cmd_setup as Step 1.
+check_prerequisites() {
+    local all_ok=true
+
+    if command -v docker &> /dev/null; then
+        echo -e "    ${GREEN}[OK]${NC} docker found"
+    else
+        echo -e "    ${RED}[MISSING]${NC} docker not found — install Docker first"
+        all_ok=false
+    fi
+
+    if command -v git &> /dev/null; then
+        echo -e "    ${GREEN}[OK]${NC} git found"
+    else
+        echo -e "    ${YELLOW}[WARN]${NC} git not found (recommended for cloning paper repos)"
+    fi
+
+    if docker info 2>/dev/null | grep -qi nvidia; then
+        echo -e "    ${GREEN}[OK]${NC} nvidia-container-toolkit (GPU support)"
+    else
+        echo -e "    ${DIM}[--]${NC} nvidia-container-toolkit not detected (GPU optional)"
+    fi
+
+    if [ "$all_ok" = false ]; then
+        echo ""
+        echo -e "    ${RED}Missing required tools.${NC} Install them and re-run ./veritas setup."
+        exit 1
+    fi
+}
+
+# Walk the user through editing each of the 6 keys non-interactively (no menu).
+# Used as the .env step inside cmd_setup. Idempotent: skips a key if the user
+# hits Enter without typing.
+setup_env_interactive() {
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        if [ -f "$PROJECT_ROOT/.env.example" ]; then
+            cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+        else
+            touch "$PROJECT_ROOT/.env"
+        fi
+    fi
+
+    echo -e "    ${DIM}Press Enter to skip any key. Run ./veritas config later to revisit.${NC}"
+    echo ""
+
+    prompt_secret "OpenAI API Key" "OPENAI_API_KEY" "optional" "sk-" \
+        "GPT family — required by hypogenic, PaperBench, many ML papers" || true
+    echo ""
+    prompt_secret "Anthropic API Key" "ANTHROPIC_API_KEY" "optional" "sk-ant-" \
+        "Claude API — independent of veritas's Claude Code OAuth" || true
+    echo ""
+    prompt_secret "Google API Key" "GOOGLE_API_KEY" "optional" "" \
+        "Gemini API access" || true
+    echo ""
+    prompt_secret "OpenRouter API Key" "OPENROUTER_API_KEY" "optional" "sk-or-" \
+        "Multi-model routing (https://openrouter.ai)" || true
+    echo ""
+    prompt_secret "Hugging Face Token" "HF_TOKEN" "optional" "hf_" \
+        "Gated models / datasets (Llama-2, ImageNet)" || true
+    echo ""
+    prompt_secret "Weights & Biases API Key" "WANDB_API_KEY" "optional" "" \
+        "Experiment tracking (https://wandb.ai)" || true
+
+    ensure_env_perms
+}
+
+# -----------------------------------------------------------------------------
+# Interactive .env edit menu
+# -----------------------------------------------------------------------------
+cmd_config() {
+    # Create .env from template on first invocation
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        if [ -f "$PROJECT_ROOT/.env.example" ]; then
+            cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+            echo -e "  ${GREEN}[OK]${NC} Created .env from template"
+        else
+            touch "$PROJECT_ROOT/.env"
+            echo -e "  ${GREEN}[OK]${NC} Created empty .env"
+        fi
+        ensure_env_perms
+        echo ""
+    fi
+
+    while true; do
+        echo ""
+        echo -e "  ${BOLD}Replication API Keys${NC}"
+        echo -e "  ${DIM}Select a key to edit, or 'q' to save and exit.${NC}"
+        echo ""
+        echo -e "  ${BOLD}LLM providers${NC}"
+        echo -e "    ${BOLD}[1]${NC}  OpenAI API Key ......... $(format_status OPENAI_API_KEY true)"
+        echo -e "    ${BOLD}[2]${NC}  Anthropic API Key ...... $(format_status ANTHROPIC_API_KEY true)"
+        echo -e "    ${BOLD}[3]${NC}  Google API Key ......... $(format_status GOOGLE_API_KEY true)"
+        echo -e "    ${BOLD}[4]${NC}  OpenRouter API Key ..... $(format_status OPENROUTER_API_KEY true)"
+        echo ""
+        echo -e "  ${BOLD}Data / experiment infrastructure${NC}"
+        echo -e "    ${BOLD}[5]${NC}  Hugging Face Token ..... $(format_status HF_TOKEN true)"
+        echo -e "    ${BOLD}[6]${NC}  Weights & Biases Key ... $(format_status WANDB_API_KEY true)"
+        echo ""
+        echo -e "    ${BOLD}[q]${NC}  Save & exit"
+        echo ""
+        echo -ne "  > "
+        local choice=""
+        read choice < /dev/tty
+
+        case "$choice" in
+            1)
+                echo ""
+                prompt_secret "OpenAI API Key" "OPENAI_API_KEY" "optional" "sk-" \
+                    "GPT family — required by hypogenic, PaperBench, many ML papers" || true
+                ensure_env_perms
+                ;;
+            2)
+                echo ""
+                prompt_secret "Anthropic API Key" "ANTHROPIC_API_KEY" "optional" "sk-ant-" \
+                    "Claude API — independent of veritas's Claude Code OAuth" || true
+                ensure_env_perms
+                ;;
+            3)
+                echo ""
+                prompt_secret "Google API Key" "GOOGLE_API_KEY" "optional" "" \
+                    "Gemini API access" || true
+                ensure_env_perms
+                ;;
+            4)
+                echo ""
+                prompt_secret "OpenRouter API Key" "OPENROUTER_API_KEY" "optional" "sk-or-" \
+                    "Multi-model routing (https://openrouter.ai)" || true
+                ensure_env_perms
+                ;;
+            5)
+                echo ""
+                prompt_secret "Hugging Face Token" "HF_TOKEN" "optional" "hf_" \
+                    "Gated models / datasets (Llama-2, ImageNet)" || true
+                ensure_env_perms
+                ;;
+            6)
+                echo ""
+                prompt_secret "Weights & Biases API Key" "WANDB_API_KEY" "optional" "" \
+                    "Experiment tracking (https://wandb.ai)" || true
+                ensure_env_perms
+                ;;
+            q|Q|"")
+                echo ""
+                echo -e "  ${GREEN}Saved to .env${NC}"
+                echo ""
+                return
+                ;;
+            *)
+                echo -e "  ${YELLOW}Invalid choice. Enter 1-6 or q to exit.${NC}"
+                ;;
+        esac
+
+        echo ""
+        echo -ne "  ${DIM}Press Enter to continue...${NC}"
+        read < /dev/tty
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Interactive setup wizard. Single unified flow — each step is skippable.
+# Sequence: prerequisites -> image -> provider login -> .env (optional) -> done.
+# -----------------------------------------------------------------------------
+cmd_setup() {
+    show_banner
+
+    echo -e "${BOLD}  Welcome to Veritas${NC}"
+    echo -e "  ${DIM}This wizard will get you set up. Hit Ctrl+C any time to bail.${NC}"
+    echo ""
+
+    # Step 1: prerequisites
+    echo -e "  ${BOLD}Step 1/4: Checking prerequisites${NC}"
+    check_prerequisites
+    echo ""
+
+    # Step 2: docker image
+    echo -e "  ${BOLD}Step 2/4: Docker image${NC}"
+    ensure_image
+    echo ""
+
+    # Step 3: provider login (offer all three; default Claude)
+    echo -e "  ${BOLD}Step 3/4: Log in to an AI provider${NC}"
+    echo -e "    ${DIM}Each provider uses OAuth. Pick one or more — you can add more later.${NC}"
+    echo ""
+
+    local claude_status="" codex_status="" gemini_status=""
+    if is_claude_configured; then
+        claude_status=" ${GREEN}[already configured]${NC}"
+    fi
+    if [ -d "$HOME/.codex" ] && [ "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
+        codex_status=" ${GREEN}[already configured]${NC}"
+    fi
+    if [ -d "$HOME/.gemini" ] && [ "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+        gemini_status=" ${GREEN}[already configured]${NC}"
+    fi
+
+    echo -e "    ${BOLD}Which providers do you want to log in to?${NC}"
+    echo -e "      [1] Claude (recommended)${claude_status}"
+    echo -e "      [2] Codex${codex_status}"
+    echo -e "      [3] Gemini${gemini_status}"
+    echo "      [4] Skip"
+    echo -e "    ${DIM}Enter one or more numbers, e.g. 1 2 or 1,2,3${NC}"
+    echo -ne "    > "
+    local login_input=""
+    read login_input < /dev/tty
+    login_input="${login_input//,/ }"
+
+    if [ -z "$login_input" ]; then
+        echo -e "    ${DIM}[SKIP]${NC} No selection — run ./veritas login <provider> later"
+    else
+        for choice in $login_input; do
+            case "$choice" in
+                1) cmd_login claude ;;
+                2) cmd_login codex ;;
+                3) cmd_login gemini ;;
+                4) echo -e "    ${DIM}[SKIP]${NC} Login deferred — run ./veritas login <provider> later" ;;
+                *) echo -e "    ${YELLOW}[WARN]${NC} Ignoring unknown choice '$choice'" ;;
+            esac
+        done
+    fi
+    echo ""
+
+    # Step 4: .env (optional)
+    echo -e "  ${BOLD}Step 4/4: Replication API keys (.env)${NC}"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        echo -e "    ${GREEN}[OK]${NC} .env already exists at $PROJECT_ROOT/.env"
+        echo -ne "    Reconfigure? [y/N] "
+        local reconfigure=""
+        read reconfigure < /dev/tty
+        if [[ "$reconfigure" =~ ^[Yy] ]]; then
+            echo ""
+            setup_env_interactive
+        else
+            echo -e "    ${DIM}Keeping existing .env${NC}"
+        fi
+    else
+        echo -e "    ${DIM}If you're replicating a paper that calls LLM APIs (e.g. hypogenic),${NC}"
+        echo -e "    ${DIM}configure keys now. Otherwise hit Enter to skip every prompt.${NC}"
+        echo -ne "    Configure now? [Y/n] "
+        local configure_now=""
+        read configure_now < /dev/tty
+        if [[ ! "$configure_now" =~ ^[Nn] ]]; then
+            echo ""
+            setup_env_interactive
+        else
+            echo -e "    ${DIM}[SKIP]${NC} Run ./veritas config later to add keys"
+        fi
+    fi
+    echo ""
+
+    # Done
+    echo -e "  ${GREEN}Setup complete.${NC}"
+    echo ""
+    echo -e "  ${BOLD}Next steps:${NC}"
+    echo -e "    ${DIM}Run a replication:${NC}  ${BOLD}./veritas replicate --paper paper.pdf --repo ./my-project${NC}"
+    echo -e "    ${DIM}Status check:${NC}     ${BOLD}./veritas status${NC}"
+    echo -e "    ${DIM}Edit keys:${NC}        ${BOLD}./veritas config${NC}"
+    echo ""
 }
 
 # -----------------------------------------------------------------------------
@@ -471,16 +990,32 @@ cmd_shell() {
     ensure_image
     warn_if_outdated
 
+    check_env_file_warn
+    ensure_env_perms
+
     local tty_flag=$(get_tty_flag)
     local platform_flag=$(get_platform_flags)
     local gpu_flags=$(get_gpu_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    local env_file_flag=""
+    local env_keys_flag=""
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        env_file_flag="--env-file \"$PROJECT_ROOT/.env\""
+        local keys
+        keys=$(compute_env_file_keys)
+        if [ -n "$keys" ]; then
+            env_keys_flag="-e VERITAS_ENV_FILE_KEYS=$keys"
+        fi
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
+        $env_file_flag \
+        $env_keys_flag \
         -v \"$PWD:/workspace\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -496,7 +1031,7 @@ cmd_shell() {
 #   MOUNTS  — string of -v flags
 #   ARGS    — the rewritten argv list
 #
-# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --output /h/out --provider claude
+# Usage: rewrite_paths --paper /h/foo.pdf --repo /h/bar --data /h/data --claims /h/c.json --output /h/out --provider claude
 # -----------------------------------------------------------------------------
 rewrite_paths() {
     MOUNTS=""
@@ -504,10 +1039,11 @@ rewrite_paths() {
     local counter=0
     local saw_output=false
     local repo_host=""
+    local paper_host=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --paper|-p|--plan)
+            --paper|-p)
                 local flag="$1"
                 local host_path
                 host_path=$(realpath "$2" 2>/dev/null || echo "$2")
@@ -521,6 +1057,13 @@ rewrite_paths() {
                 local container_path="/workspace/inputs/file${counter}_${basename}"
                 MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
                 ARGS="$ARGS $flag \"$container_path\""
+                # Remember the first --paper host path for the output fallback
+                # when --repo is absent (mode 2).
+                if [ "$1" = "--paper" ] || [ "$1" = "-p" ]; then
+                    if [ -z "$paper_host" ]; then
+                        paper_host="$host_path"
+                    fi
+                fi
                 shift 2
                 ;;
             --repo|-r)
@@ -533,6 +1076,32 @@ rewrite_paths() {
                 repo_host="$host_path"
                 MOUNTS="$MOUNTS -v \"$host_path:/workspace/repo:ro\""
                 ARGS="$ARGS --repo /workspace/repo"
+                shift 2
+                ;;
+            --data)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -d "$host_path" ]; then
+                    echo -e "${RED}--data must be a directory:${NC} $2" >&2
+                    exit 1
+                fi
+                MOUNTS="$MOUNTS -v \"$host_path:/workspace/data:ro\""
+                ARGS="$ARGS --data /workspace/data"
+                shift 2
+                ;;
+            --claims)
+                local host_path
+                host_path=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -f "$host_path" ]; then
+                    echo -e "${RED}--claims file not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_path")
+                counter=$((counter + 1))
+                local container_path="/workspace/inputs/claims_${counter}_${basename}"
+                MOUNTS="$MOUNTS -v \"$host_path:$container_path:ro\""
+                ARGS="$ARGS --claims \"$container_path\""
                 shift 2
                 ;;
             --output|-o)
@@ -557,24 +1126,34 @@ rewrite_paths() {
         esac
     done
 
-    # If the user didn't specify --output, default to <repo>/evaluation on
-    # the host side. Matches the Python CLI's default intent but lands on
-    # a writable mount — the --repo bind is read-only, so letting the CLI
-    # compute /workspace/repo/evaluation internally would crash with
-    # "Read-only file system" when it tries to mkdir the subdir.
-    if [ "$saw_output" = false ] && [ -n "$repo_host" ]; then
-        local default_output="$repo_host/evaluation"
-        mkdir -p "$default_output"
-        chmod -R a+rwX "$default_output" 2>/dev/null || true
-        MOUNTS="$MOUNTS -v \"$default_output:/workspace/output\""
-        ARGS="$ARGS --output /workspace/output"
+    # If the user didn't specify --output, pick a default on the host side
+    # that lands on a writable mount. The --repo bind is read-only, so
+    # letting the CLI compute /workspace/repo/replicate internally would
+    # crash with "Read-only file system" when it tries to mkdir the subdir.
+    #
+    # Fallback chain: explicit --output (already handled above) > <repo>/replicate
+    # > <paper-parent>/replicate. The Config layer requires at least one of
+    # --paper or --repo, so one of these branches always fires.
+    if [ "$saw_output" = false ]; then
+        local default_output=""
+        if [ -n "$repo_host" ]; then
+            default_output="$repo_host/replicate"
+        elif [ -n "$paper_host" ]; then
+            default_output="$(dirname "$paper_host")/replicate"
+        fi
+        if [ -n "$default_output" ]; then
+            mkdir -p "$default_output"
+            chmod -R a+rwX "$default_output" 2>/dev/null || true
+            MOUNTS="$MOUNTS -v \"$default_output:/workspace/output\""
+            ARGS="$ARGS --output /workspace/output"
+        fi
     fi
 }
 
 # -----------------------------------------------------------------------------
-# Evaluate (the primary subcommand)
+# Replicate (the primary subcommand)
 # -----------------------------------------------------------------------------
-cmd_evaluate() {
+cmd_replicate() {
     ensure_image
     warn_if_outdated
 
@@ -582,6 +1161,11 @@ cmd_evaluate() {
     # Beats waiting for an inside-container LLM call to hang or error out.
     local provider=$(extract_provider "$@")
     check_provider_credentials "$provider"
+
+    # Surface a non-fatal hint if .env is missing — papers that need API keys
+    # for their own LLM calls will fail without it.
+    check_env_file_warn
+    ensure_env_perms
 
     rewrite_paths "$@"
 
@@ -591,14 +1175,30 @@ cmd_evaluate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Replication API keys: pass .env into the container only on subcommands
+    # that run paper code. The key-name list lets the Python layer scope
+    # visibility to the replicate phase (see runner.py::_invoke_provider).
+    local env_file_flag=""
+    local env_keys_flag=""
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        env_file_flag="--env-file \"$PROJECT_ROOT/.env\""
+        local keys
+        keys=$(compute_env_file_keys)
+        if [ -n "$keys" ]; then
+            env_keys_flag="-e VERITAS_ENV_FILE_KEYS=$keys"
+        fi
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
+        $env_file_flag \
+        $env_keys_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas evaluate $ARGS"
+        veritas replicate $ARGS"
 }
 
 # -----------------------------------------------------------------------------
@@ -641,7 +1241,7 @@ cmd_extract_plan() {
 }
 
 # -----------------------------------------------------------------------------
-# Regenerate report from existing evaluation dir
+# Regenerate report from existing replication output dir
 # -----------------------------------------------------------------------------
 cmd_report() {
     ensure_image
@@ -650,7 +1250,7 @@ cmd_report() {
     local host_eval_dir
     host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
     if [ ! -d "$host_eval_dir" ]; then
-        echo -e "${RED}Evaluation dir not found:${NC} $eval_dir" >&2
+        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
         exit 1
     fi
 
@@ -673,20 +1273,23 @@ show_help() {
     echo -e "${BOLD}Usage:${NC} ./veritas <command> [args...]"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
-    echo "  evaluate      Run the full replication pipeline"
-    echo "                  e.g. ./veritas evaluate --paper p.pdf --repo ./myrepo"
+    echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
+    echo "  replicate     Run the full replication pipeline"
+    echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
+    echo "                  add --data ./my-data to pre-position datasets (read-only)"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
-    echo "  report        Regenerate a report from an existing evaluation dir"
+    echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
+    echo "  config        Edit replication API keys (.env) interactively"
     echo "  login         Log in to an AI provider (claude|codex|gemini)"
     echo "  build         Build the image locally"
     echo "  update        Pull the latest image from GHCR"
-    echo "  status        Show status dashboard (Docker, image, GPU, credentials)"
+    echo "  status        Show status dashboard (Docker, image, GPU, credentials, .env)"
     echo "  help          Show this help"
     echo ""
     echo -e "${BOLD}First-time setup:${NC}"
-    echo "  1. ./veritas login claude"
-    echo "  2. ./veritas evaluate --paper <your-paper.pdf> --repo <your-repo>"
+    echo "  1. ./veritas setup"
+    echo "  2. ./veritas replicate --paper <your-paper.pdf> --repo <your-repo>"
     echo ""
 }
 
@@ -698,10 +1301,12 @@ main() {
     shift || true
 
     case "$cmd" in
-        evaluate)      cmd_evaluate "$@" ;;
+        replicate)     cmd_replicate "$@" ;;
         extract-plan)  cmd_extract_plan "$@" ;;
         report)        cmd_report "$@" ;;
         shell)         cmd_shell "$@" ;;
+        setup)         cmd_setup "$@" ;;
+        config)        cmd_config "$@" ;;
         login)         cmd_login "$@" ;;
         build)         cmd_build ;;
         update)        cmd_update ;;
