@@ -104,20 +104,12 @@ if [ -d /workspace/output ]; then
     # how the main process terminates. With a source repo, diff against
     # it; without one (mode 2), diff against /dev/null so the file still
     # lists everything the agent produced.
-    #
-    # The .claude/, .codex/, and .gemini/ subdirectories are excluded
-    # because the runner stages the scientific-skills catalog under those
-    # paths at session start for provider skill discovery; they are
-    # infrastructure, not agent edits, and would otherwise dominate the
-    # diff with hundreds of unchanged skill files.
     trap '
         if [ -d /workspace/repo ]; then
-            diff -ruN -x .claude -x .codex -x .gemini \
-                /workspace/repo /workspace/output/replication/codebase \
+            diff -ruN /workspace/repo /workspace/output/replication/codebase \
                 > /workspace/output/replication/codebase.diff 2>/dev/null || true
         else
-            diff -ruN -x .claude -x .codex -x .gemini \
-                /dev/null /workspace/output/replication/codebase \
+            diff -ruN /dev/null /workspace/output/replication/codebase \
                 > /workspace/output/replication/codebase.diff 2>/dev/null || true
         fi
     ' EXIT

@@ -107,15 +107,8 @@ class PromptGenerator:
         repo_path: Optional[Path] = None,
         mode: str = "full",
         data_path: Optional[Path] = None,
-        provider: str = "claude",
     ) -> str:
-        """Generate session instructions for the replication agent.
-
-        ``provider`` is the CLI being launched (claude / codex / gemini).
-        It is rendered into the prompt so references to the per-provider
-        skills directory match where the runner stages skills at session
-        start.
-        """
+        """Generate session instructions for the replication agent."""
         template = self.env.get_template("replication/session_instructions.md")
         context = {
             "replication_plan": replication_plan,
@@ -124,7 +117,6 @@ class PromptGenerator:
             "has_repo": repo_path is not None,
             "mode": mode,
             "has_data": data_path is not None,
-            "provider": provider,
         }
         return template.render(**context)
 
@@ -133,13 +125,11 @@ class PromptGenerator:
         paper_path: Path,
         output_dir: Path,
         data_path: Optional[Path] = None,
-        provider: str = "claude",
     ) -> str:
         """Generate session instructions for the codegen agent (paper-only mode).
 
-        Rendered with only ``paper_path``, ``output_dir``, the
-        presence/absence of ``data_path``, and the active ``provider``
-        (for the skills-directory reference) — never with extracted claim
+        Rendered with only ``paper_path``, ``output_dir``, and the
+        presence/absence of ``data_path`` — never with extracted claim
         content — so the codegen agent reads the paper directly but is
         structurally prevented from seeing paper-reported result values
         that would compromise downstream verification.
@@ -149,7 +139,6 @@ class PromptGenerator:
             "paper_path": str(paper_path),
             "output_dir": str(output_dir),
             "has_data": data_path is not None,
-            "provider": provider,
         }
         return template.render(**context)
 
