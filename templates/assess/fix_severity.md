@@ -2,6 +2,15 @@
 
 You are evaluating the fixes that a replication agent applied while reproducing a scientific paper's results. Your job is to rate each fix's severity and assess what it implies about the paper and repository's reproducibility quality.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog if a skill helps you understand a fix's
+context; most severity assessments will not need any skill, and that
+is fine.
+
 ## Fixes Applied
 
 {% for fix in fixes %}

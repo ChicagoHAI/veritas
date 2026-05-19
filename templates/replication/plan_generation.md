@@ -4,6 +4,15 @@ You are generating a step-by-step replication plan for testing whether a paper's
 
 **Run mode:** {{ mode }} — {% if mode == "full" %}paper and repository both provided.{% elif mode == "paper-only" %}paper-only mode; the codebase at the repository path was just written from the paper by an earlier phase and may be rough.{% elif mode == "repo-only" %}repo-only mode; no paper available — claims came from the README.{% endif %}
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and reference relevant skills in plan steps if
+a skill genuinely matches; many plans will not need any skill, and that
+is fine.
+
 {% if has_paper %}
 ## Paper
 

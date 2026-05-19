@@ -4,6 +4,16 @@ You are an independent adjudicator. Your task is to read a single paper claim an
 
 You will produce one JSON object with a `status` field, a type-specific `structured` field, a free-text `rationale`, and `evidence_refs` (paths to files you read).
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your verification work (for example, when reading evidence files
+in a particular format); many verifications will not need any skill, and
+that is fine.
+
 ## The Claim
 
 | Field | Value |

@@ -23,11 +23,16 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`.{{ provider }}/skills/` (relative to your working directory) at
-session start. Browse the `description:` line of each `SKILL.md` to see
-what's available. Use a skill if and only if it genuinely matches the
-work you're doing; many replications will not need any skill, and that
-is fine. Do not force-fit a skill that isn't relevant.
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your work; many replications will not need any skill, and that
+is fine.
+
+After your initial environment check, run `ls /workspace/veritas-skills/`
+and review the descriptions. Note any skills you may call on while
+running and debugging the codebase. Use a skill when its description
+matches the work in front of you.
 
 ## Environment Setup
 

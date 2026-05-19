@@ -20,11 +20,15 @@ Implement everything from the paper.
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`.{{ provider }}/skills/` in your working directory. Browse the catalog
-(read the `description:` line of each `SKILL.md`) to see what's available.
-Use a skill if and only if it genuinely matches the work in front of you;
-many papers will not need any skill at all, and that is fine. Do not
-force-fit a skill that isn't relevant.
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your work; many papers will not need any skill, and that is fine.
+
+Before writing `codegen_plan.json` (Step 2.5), run
+`ls /workspace/veritas-skills/` and read each `SKILL.md`'s description.
+If any skill matches your paper's domain or methodology, note it — you
+can invoke its scripts and reference docs while implementing in Step 3.
 
 ## Workflow
 
