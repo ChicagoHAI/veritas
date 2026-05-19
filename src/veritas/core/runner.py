@@ -454,6 +454,7 @@ class ReplicationRunner:
             paper_path=self.config.paper_path,
             output_dir=self.config.output_dir,
             data_path=self.config.data_path,
+            provider=self.config.provider,
         )
 
         prompt_path = self.config.prompts_dir / "codegen_prompt.txt"
@@ -658,6 +659,7 @@ class ReplicationRunner:
             repo_path=self.config.repo_path,
             mode=self.config.mode,
             data_path=self.config.data_path,
+            provider=self.config.provider,
         )
 
         log_path = self.config.replication_transcript_path
@@ -1085,6 +1087,13 @@ class ReplicationRunner:
             print(f"  {e}")
             return False
 
+        # Stage skills under the *actual* per-phase working_dir, in the
+        # subdir that matches the provider being launched. The agent's cwd
+        # is working_dir, so this is where Claude Code / Codex / Gemini look
+        # for project-scoped skills. Skipped silently if working_dir isn't
+        # writable (e.g. the /workspace/repo read-only bind mount in full mode).
+        self._setup_workspace_skills(working_dir, provider)
+
         cmd: List[str] = [
             cli,
             *CLI_COMMANDS[provider][1:],
@@ -1167,3 +1176,54 @@ class ReplicationRunner:
         if resolved is None:
             raise FileNotFoundError(f"{name} CLI not found on PATH")
         return resolved
+
+    @staticmethod
+    def _templates_skills_dir() -> Path:
+        """Return the in-image path to the bundled scientific skills catalog.
+
+        Templates are baked into the image at /app/templates/ (see Dockerfile),
+        so skills live at /app/templates/skills/. Resolved relative to this
+        source file so both in-container and editable-install layouts work.
+        """
+        return Path(__file__).resolve().parent.parent.parent.parent / "templates" / "skills"
+
+    @staticmethod
+    def _setup_workspace_skills(working_dir: Path, provider: str) -> None:
+        """Copy the bundled skills catalog into ``working_dir`` so the agent's
+        CLI (Claude Code / Codex / Gemini) discovers them at session start.
+
+        Skill discovery is provider-specific: Claude Code reads ``.claude/skills/``,
+        Codex reads ``.codex/skills/``, Gemini reads ``.gemini/skills/``. We
+        always copy to the directory that matches the provider being launched,
+        so a single subprocess invocation gets exactly the skills its CLI knows
+        how to find.
+
+        ``working_dir`` is the *runtime* cwd of the subprocess — never the
+        veritas dev directory. For phases whose cwd is the read-only repo
+        bind-mount (``/workspace/repo`` in full mode), the copy fails with
+        PermissionError and is silently skipped; those phases run without
+        skills, which is acceptable because the replicate prompt immediately
+        ``cd``s into the writable codebase copy.
+
+        Idempotent across runs in the same workspace: any existing
+        ``.{provider}/skills/`` is wiped and rewritten so stale skills from a
+        prior catalog version never leak in.
+        """
+        src = ReplicationRunner._templates_skills_dir()
+        if not src.exists():
+            return
+
+        dst = working_dir / f".{provider}" / "skills"
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            return
+        if dst.exists():
+            try:
+                shutil.rmtree(dst)
+            except (PermissionError, OSError):
+                return
+        try:
+            shutil.copytree(src, dst)
+        except (PermissionError, OSError):
+            return
