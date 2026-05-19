@@ -17,6 +17,15 @@ implementation of the paper's methodology.
 {% endif %}You do not have access to the original repository, if one exists.
 Implement everything from the paper.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`.{{ provider }}/skills/` in your working directory. Browse the catalog
+(read the `description:` line of each `SKILL.md`) to see what's available.
+Use a skill if and only if it genuinely matches the work in front of you;
+many papers will not need any skill at all, and that is fine. Do not
+force-fit a skill that isn't relevant.
+
 ## Workflow
 
 Follow this four-step structure. Take time on each step; do not rush.

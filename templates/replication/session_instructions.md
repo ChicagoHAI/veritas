@@ -20,6 +20,15 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 {% endif %}{% if has_data %}- **Pre-positioned data:** `/workspace/data/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `/workspace/output/replication/` — save logs and evidence here.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`.{{ provider }}/skills/` (relative to your working directory) at
+session start. Browse the `description:` line of each `SKILL.md` to see
+what's available. Use a skill if and only if it genuinely matches the
+work you're doing; many replications will not need any skill, and that
+is fine. Do not force-fit a skill that isn't relevant.
+
 ## Environment Setup
 
 ```bash
