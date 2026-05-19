@@ -45,15 +45,50 @@ Outline the file structure of your codebase before writing any code:
 Track dependencies in `pyproject.toml` or `requirements.txt` (your
 choice; pick one and be consistent).
 
+### 2.5. Capture the plan to disk
+
+Before writing code, write `codegen_plan.json` at the codebase root with
+your decisions so they are inspectable and machine-readable. Schema:
+
+```json
+{
+  "files": [
+    {"path": "src/model.py", "responsibility": "..."},
+    {"path": "src/dataset.py", "responsibility": "..."}
+  ],
+  "dependency_order": ["src/dataset.py", "src/model.py", "..."],
+  "entry_points": ["main.py"],
+  "shared_state": "What modules pass between them, e.g. 'Dataset returns (X, y) tuples consumed by trainer'.",
+  "ambiguities": [
+    {
+      "question": "Paper says 'we use a small batch size' without naming a value.",
+      "assumption": "Defaulted to batch_size=32, configurable via config.yaml."
+    }
+  ]
+}
+```
+
+The `ambiguities` field is the place to flag every point where the paper
+underspecifies methodology and you had to make a judgment call. List the
+question and the assumption you took. Downstream phases use this to
+distinguish "paper-underspecified" from "agent-misimplemented" outcomes.
+
 ### 3. Implement
 
 Write the code, module-by-module. Guidelines:
 
 - Prefer small, focused files. One clear responsibility per file.
 - Use the paper's own variable names where natural.
-- Set up inputs (hyperparameters, dataset paths) as configuration
-  the methodology calls for; don't hardcode anything that needs
-  to be computed.
+- **Extract every paper-stated hyperparameter into `config.yaml` at the
+  codebase root.** Use one section per logical group: `training:` (learning
+  rate, batch size, epochs, optimizer settings, seeds), `model:` (layer
+  sizes, activation choice, dropout), `data:` (dataset name, split sizes,
+  preprocessing knobs), and any methodology-specific group (`sampling:`,
+  `mcmc:`, etc.). Reference values from `config.yaml`; do not hardcode
+  hyperparameters in `.py` files. A code reader should be able to audit
+  every paper-stated input by reading one file.
+- Set up dataset paths and other inputs as configuration the methodology
+  calls for; don't hardcode anything that needs to be computed.
 - You may install packages, create directories, and structure the
   repo as you see fit.
 - Do not run the methodology end-to-end. That is a later phase.
@@ -119,10 +154,32 @@ codebase must be importable end-to-end before you exit.
 Re-open `pyproject.toml` / `requirements.txt`. Are all imports listed?
 Do versions pin to what the paper used (when stated)?
 
+#### e. Config audit
+
+Open `config.yaml`. For each paper-stated hyperparameter, confirm:
+
+- It lives in `config.yaml`, not as a literal in a `.py` file.
+- Its value matches the paper. (If the paper specifies a range or "we
+  tried X, Y, Z", pick the value used for the paper's headline result
+  and record the alternatives in `codegen_plan.json["ambiguities"]`.)
+- Code that needs the value reads it from `config.yaml`, not from a
+  default function argument or a module-level constant.
+
+If you find a paper-stated hyperparameter not in `config.yaml`, move it.
+
+#### f. Ambiguity audit
+
+Open `codegen_plan.json`. For each entry in `ambiguities`, confirm the
+chosen assumption is reflected in the code (typically a `config.yaml`
+value) and that the assumption was a reasonable best-guess given the
+paper. If, during implementation, you encountered an underspecification
+you didn't record, add it now. Future phases rely on this list.
+
 ## Hard constraints
 
 - Write into `/workspace/output/replication/codebase/`, nowhere else.
 - Dependencies tracked in `pyproject.toml` or `requirements.txt`.
+- `codegen_plan.json` and `config.yaml` both live at the codebase root.
 - Do not commit (no `git commit`) — the host-side EXIT trap captures
   the diff against an empty initial state.
 - Do not run the methodology end-to-end; that is the next phase.
