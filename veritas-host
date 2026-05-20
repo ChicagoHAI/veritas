@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# =============================================================================
+# veritas-host — run veritas directly on the host, no docker.
+#
+# For use on environments where docker is not available (HPC clusters,
+# managed compute) but you still want the veritas pipeline. Assumes the
+# host already has the runtime deps (claude/codex/gemini CLI, python, uv,
+# pandoc/latex if you want PDF reports) on PATH.
+#
+# Mirrors the layout the docker `entrypoint.sh` would set up:
+#   <--output>/veritas-skills/         (copy of templates/skills, runtime read-only)
+#   <--output>/replication/codebase/   (writable copy of --repo, for the agent)
+#   <--output>/replication/codebase.diff (generated on exit)
+#   <--output>/.venv/                  (agent creates this; we just point at it)
+#
+# Usage: ./veritas-host replicate --paper x.pdf --repo ./code --output ./run-1
+#        ./veritas-host replicate --paper x.pdf --output ./run-1 --mode paper-only
+#        ./veritas-host extract-plan x.pdf
+#        ./veritas-host report ./run-1
+# =============================================================================
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERITAS_REPO="$SCRIPT_DIR"
+
+# Tools we expect on PATH. We check up-front so the run doesn't fail
+# mid-pipeline with a confusing error.
+require_tools() {
+    local missing=()
+    for tool in "$@"; do
+        if ! command -v "$tool" &> /dev/null; then
+            missing+=("$tool")
+        fi
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "ERROR: missing required tools on PATH: ${missing[*]}" >&2
+        echo "Install them and re-run. (claude/codex/gemini via curl|bash, python+uv via your package manager.)" >&2
+        exit 1
+    fi
+}
+
+# Pull a flag value out of "$@" without consuming it. Used so we can
+# pre-stage --output and --repo before handing the full argv to python.
+# Args: <flag-name> <args...>
+extract_flag() {
+    local target="$1"; shift
+    local prev=""
+    for arg in "$@"; do
+        if [ "$prev" = "$target" ]; then
+            echo "$arg"
+            return 0
+        fi
+        prev="$arg"
+    done
+}
+
+# Resolve --output to the same value veritas's config.py would compute.
+# Mirrors the fallback chain at src/veritas/core/config.py:106-115.
+resolve_output_dir() {
+    local explicit_output paper_arg repo_arg
+    explicit_output="$(extract_flag --output "$@")"
+    if [ -n "$explicit_output" ]; then
+        echo "$explicit_output"
+        return 0
+    fi
+    repo_arg="$(extract_flag --repo "$@")"
+    if [ -n "$repo_arg" ]; then
+        echo "${repo_arg}/replicate"
+        return 0
+    fi
+    paper_arg="$(extract_flag --paper "$@")"
+    if [ -n "$paper_arg" ]; then
+        echo "$(dirname "$paper_arg")/replicate"
+        return 0
+    fi
+    echo "ERROR: cannot determine output dir: provide --output, --repo, or --paper" >&2
+    return 1
+}
+
+cmd_replicate() {
+    require_tools python uv claude
+
+    local output_dir
+    output_dir="$(resolve_output_dir "$@")"
+    output_dir="$(realpath -m "$output_dir")"
+    mkdir -p "$output_dir"
+
+    # Stage skills catalog at <output>/veritas-skills. This mirrors the
+    # Dockerfile's `cp -a /app/templates/skills /workspace/veritas-skills`
+    # — runtime sees a copy, never the veritas source, so the agent has
+    # nothing to gain by wandering into the veritas checkout.
+    local skills_src="$VERITAS_REPO/templates/skills"
+    local skills_dst="$output_dir/veritas-skills"
+    if [ -d "$skills_src" ]; then
+        if [ ! -d "$skills_dst" ]; then
+            cp -a "$skills_src" "$skills_dst"
+        fi
+    else
+        echo "WARNING: skills catalog not found at $skills_src — agent will see an empty path" >&2
+    fi
+
+    # Stage writable codebase copy at <output>/replication/codebase. This
+    # mirrors the entrypoint.sh `cp -a /workspace/repo /workspace/output/replication/codebase`.
+    # Skipped in paper-only mode (codegen writes the codebase from scratch)
+    # and skipped if --repo wasn't provided.
+    local repo_arg mode_arg
+    repo_arg="$(extract_flag --repo "$@")"
+    mode_arg="$(extract_flag --mode "$@")"
+    local codebase_dst="$output_dir/replication/codebase"
+    if [ -n "$repo_arg" ] && [ "$mode_arg" != "paper-only" ]; then
+        if [ ! -d "$codebase_dst" ] || [ -z "$(ls -A "$codebase_dst" 2>/dev/null)" ]; then
+            mkdir -p "$codebase_dst"
+            cp -a "$repo_arg"/. "$codebase_dst"/
+        fi
+    fi
+
+    # Diff trap: on exit, write codebase.diff against the original. Matches
+    # the docker entrypoint's EXIT trap (entrypoint.sh:107-115). Runs in
+    # subshell so cleanup doesn't disturb the caller's shell state.
+    if [ -n "$repo_arg" ] && [ "$mode_arg" != "paper-only" ]; then
+        trap "
+            if [ -d '$codebase_dst' ]; then
+                diff -ruN '$repo_arg' '$codebase_dst' \\
+                    > '$output_dir/replication/codebase.diff' 2>/dev/null || true
+            fi
+        " EXIT
+    elif [ "$mode_arg" = "paper-only" ]; then
+        # Paper-only: codegen writes to codebase_dst from scratch. Diff
+        # against an empty directory so the file lists everything created.
+        # (`diff /dev/null <dir>` fails; an empty-dir anchor is portable.)
+        local empty_anchor="$output_dir/.veritas/empty-anchor"
+        mkdir -p "$empty_anchor"
+        trap "
+            if [ -d '$codebase_dst' ]; then
+                diff -ruN '$empty_anchor' '$codebase_dst' \\
+                    > '$output_dir/replication/codebase.diff' 2>/dev/null || true
+            fi
+            rmdir '$empty_anchor' 2>/dev/null || true
+        " EXIT
+    fi
+
+    # Export the path env vars that prompt_generator.py reads (defaults
+    # are docker paths; we override for host-side layout).
+    export VERITAS_SKILLS_DIR="$skills_dst"
+    export VERITAS_VENV_DIR="$output_dir/.venv"
+
+    # Invoke veritas. Prefer the installed `veritas` command if available
+    # (cleaner argv in logs); fall back to `python -m` if not.
+    if command -v veritas &> /dev/null; then
+        veritas replicate "$@"
+    else
+        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+            python -m veritas.cli.main replicate "$@"
+    fi
+}
+
+cmd_passthrough() {
+    # extract-plan / report / etc. — no pre/post staging needed; just
+    # forward to the python CLI.
+    local subcmd="$1"; shift
+    if command -v veritas &> /dev/null; then
+        veritas "$subcmd" "$@"
+    else
+        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+            python -m veritas.cli.main "$subcmd" "$@"
+    fi
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <subcommand> [args...]
+
+Subcommands:
+  replicate     Run the full pipeline (analyze + codegen? + plan + replicate + assess + verify)
+  extract-plan  Standalone plan extraction from a paper PDF
+  report        Regenerate report from an existing replicate output dir
+
+Same flags as the docker \`./veritas\` wrapper. The host wrapper:
+  - copies templates/skills to <--output>/veritas-skills
+  - copies --repo to <--output>/replication/codebase (full mode)
+  - exports VERITAS_SKILLS_DIR and VERITAS_VENV_DIR for prompt rendering
+  - writes <--output>/replication/codebase.diff on exit
+EOF
+}
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 1
+fi
+
+case "$1" in
+    replicate)
+        shift
+        cmd_replicate "$@"
+        ;;
+    extract-plan|report)
+        cmd_passthrough "$@"
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        echo "ERROR: unknown subcommand: $1" >&2
+        usage
+        exit 1
+        ;;
+esac
