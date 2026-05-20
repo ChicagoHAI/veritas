@@ -55,6 +55,40 @@ extract_flag() {
     done
 }
 
+# Extract --provider value from a subcommand's argv. Default: claude.
+# Handles both `--provider X` and `--provider=X` forms. Mirrors
+# extract_provider() in docker/run.sh so the host and docker paths agree
+# on the default.
+extract_provider() {
+    local provider="claude"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --provider) provider="$2"; shift 2 ;;
+            --provider=*) provider="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    echo "$provider"
+}
+
+# Compute a comma-separated list of var names defined in $VERITAS_REPO/.env
+# (uncommented `VAR=value` lines only). Empty string if .env is absent or
+# defines no keys. Used to build VERITAS_ENV_FILE_KEYS — runner.py's
+# _invoke_provider() reads this to know which env vars are user-supplied
+# API keys, and only exposes them during the replicate phase (everything
+# else strips them so analyze/plan/verify can't accidentally leak keys
+# into transcripts). Mirrors compute_env_file_keys() in docker/run.sh.
+compute_env_file_keys() {
+    if [ ! -f "$VERITAS_REPO/.env" ]; then
+        echo ""
+        return
+    fi
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$VERITAS_REPO/.env" 2>/dev/null \
+        | sed 's/=.*//' \
+        | tr '\n' ',' \
+        | sed 's/,$//'
+}
+
 # Resolve --output to the same value veritas's config.py would compute.
 # Mirrors the fallback chain at src/veritas/core/config.py:106-115.
 resolve_output_dir() {
@@ -79,12 +113,50 @@ resolve_output_dir() {
 }
 
 cmd_replicate() {
-    require_tools python uv claude
+    # Tool check is provider-aware: python+uv are always needed, but the
+    # agent CLI is only required for the provider the user actually picked.
+    # Hardcoding `claude` here broke `--provider codex` runs (Filbert
+    # caught this in review of the initial PR).
+    local provider
+    provider="$(extract_provider "$@")"
+    case "$provider" in
+        claude|codex|gemini) require_tools python uv "$provider" ;;
+        *)
+            echo "ERROR: unknown --provider: $provider (expected claude|codex|gemini)" >&2
+            exit 1
+            ;;
+    esac
 
     local output_dir
     output_dir="$(resolve_output_dir "$@")"
     output_dir="$(realpath -m "$output_dir")"
     mkdir -p "$output_dir"
+
+    # Load $VERITAS_REPO/.env if present and set VERITAS_ENV_FILE_KEYS so
+    # the Python runner exposes those vars only during the replicate
+    # phase. Mirrors the docker wrapper's `--env-file` + `-e
+    # VERITAS_ENV_FILE_KEYS=...` plumbing — without this, papers that
+    # call OpenAI/Anthropic from inside their own code would lose their
+    # keys silently on a cluster while working fine in docker (Filbert
+    # caught this in review).
+    if [ -f "$VERITAS_REPO/.env" ]; then
+        # `set -a` exports every var assigned by the sourced file, so the
+        # subsequent python subprocess inherits them. Restrict perms first
+        # since .env holds raw keys.
+        chmod 600 "$VERITAS_REPO/.env" 2>/dev/null || true
+        set -a
+        . "$VERITAS_REPO/.env"
+        set +a
+        local keys
+        keys="$(compute_env_file_keys)"
+        if [ -n "$keys" ]; then
+            export VERITAS_ENV_FILE_KEYS="$keys"
+        fi
+    else
+        echo "Note: no .env found at $VERITAS_REPO/.env" >&2
+        echo "      Papers that call LLM APIs (e.g. hypogenic, PaperBench) will fail without keys." >&2
+        echo "      Run \`./veritas setup\` to configure (or copy .env.example to .env)." >&2
+    fi
 
     # Stage skills catalog at <output>/veritas-skills. This mirrors the
     # Dockerfile's `cp -a /app/templates/skills /workspace/veritas-skills`
