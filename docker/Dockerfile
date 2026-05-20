@@ -123,6 +123,19 @@ RUN mkdir -p /workspace/repo /workspace/output \
 # Copy veritas source and venv from builder, owned by the new user
 COPY --from=builder --chown=veritas:veritas /app /app
 
+# Stage the scientific-skills catalog at /workspace/veritas-skills/.
+# This is a peer of /workspace/{repo,data,output} — a read-only resource
+# directory veritas owns, separate from any provider-CLI credentials at
+# /home/veritas/.{claude,codex,gemini}/. The agent's session prompts
+# reference this path explicitly across all phases; we deliberately do
+# not rely on any provider CLI's auto-discovery, so the same path works
+# uniformly for claude, codex, and gemini. Baselines (which don't use
+# veritas's prompts) never receive the "review skills" instruction and
+# therefore have no incentive to look in this directory, preserving the
+# baseline-vs-veritas isolation even when both run in this image.
+RUN cp -a /app/templates/skills /workspace/veritas-skills \
+    && chown -R veritas:veritas /workspace/veritas-skills
+
 USER veritas
 WORKDIR /workspace
 

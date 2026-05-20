@@ -20,6 +20,20 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 {% endif %}{% if has_data %}- **Pre-positioned data:** `/workspace/data/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `/workspace/output/replication/` — save logs and evidence here.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your work; many replications will not need any skill, and that
+is fine.
+
+After your initial environment check, run `ls /workspace/veritas-skills/`
+and review the descriptions. Note any skills you may call on while
+running and debugging the codebase. Use a skill when its description
+matches the work in front of you.
+
 ## Environment Setup
 
 ```bash

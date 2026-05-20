@@ -17,6 +17,19 @@ implementation of the paper's methodology.
 {% endif %}You do not have access to the original repository, if one exists.
 Implement everything from the paper.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your work; many papers will not need any skill, and that is fine.
+
+Before writing `codegen_plan.json` (Step 2.5), run
+`ls /workspace/veritas-skills/` and read each `SKILL.md`'s description.
+If any skill matches your paper's domain or methodology, note it — you
+can invoke its scripts and reference docs while implementing in Step 3.
+
 ## Workflow
 
 Follow this four-step structure. Take time on each step; do not rush.

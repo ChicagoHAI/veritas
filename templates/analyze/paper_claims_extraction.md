@@ -2,6 +2,15 @@
 
 You are extracting the structured, verifiable claims from a scientific paper. Each claim is one fact that the replication pipeline should later check against produced evidence.
 
+## Available skills
+
+A catalog of scientific-computing skills is staged at
+`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+YAML frontmatter `description:` field summarizes when the skill applies.
+You may browse the catalog and use a skill if its description genuinely
+matches your work; many extractions will not need any skill, and that
+is fine.
+
 {% if has_paper %}## Paper
 
 You MUST read the PDF directly from this local path:
