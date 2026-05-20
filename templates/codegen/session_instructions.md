@@ -2,16 +2,16 @@
 
 You are implementing a scientific paper's methodology from scratch in
 an empty codebase. By the end of this session, the directory at
-`/workspace/output/replication/codebase/` must contain a runnable
+`{{ codebase_dir }}/` must contain a runnable
 implementation of the paper's methodology.
 
 ## Inputs
 
 - Paper PDF at: `{{ paper_path }}`
 - Output directory: `{{ output_dir }}`
-- Your working directory: `/workspace/output/replication/codebase/` (starts empty)
+- Your working directory: `{{ codebase_dir }}/` (starts empty)
 
-{% if has_data %}- Pre-positioned data at: `/workspace/data/` (read-only). These files
+{% if has_data %}- Pre-positioned data at: `{{ data_path }}/` (read-only). These files
   are the user-supplied inputs for this paper.
 
 {% endif %}You do not have access to the original repository, if one exists.
@@ -20,13 +20,13 @@ Implement everything from the paper.
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+`{{ skills_dir }}/`. Each subdirectory has a `SKILL.md` whose
 YAML frontmatter `description:` field summarizes when the skill applies.
 You may browse the catalog and use a skill if its description genuinely
 matches your work; many papers will not need any skill, and that is fine.
 
 Before writing `codegen_plan.json` (Step 2.5), run
-`ls /workspace/veritas-skills/` and read each `SKILL.md`'s description.
+`ls {{ skills_dir }}/` and read each `SKILL.md`'s description.
 If any skill matches your paper's domain or methodology, note it — you
 can invoke its scripts and reference docs while implementing in Step 3.
 
@@ -190,7 +190,7 @@ you didn't record, add it now. Future phases rely on this list.
 
 ## Hard constraints
 
-- Write into `/workspace/output/replication/codebase/`, nowhere else.
+- Write into `{{ codebase_dir }}/`, nowhere else.
 - Dependencies tracked in `pyproject.toml` or `requirements.txt`.
 - `codegen_plan.json` and `config.yaml` both live at the codebase root.
 - Do not commit (no `git commit`) — the host-side EXIT trap captures

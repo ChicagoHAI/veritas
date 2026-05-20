@@ -7,7 +7,7 @@ You are generating a step-by-step replication plan for testing whether a paper's
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+`{{ skills_dir }}/`. Each subdirectory has a `SKILL.md` whose
 YAML frontmatter `description:` field summarizes when the skill applies.
 You may browse the catalog and reference relevant skills in plan steps if
 a skill genuinely matches; many plans will not need any skill, and that
@@ -25,7 +25,7 @@ You MUST read the PDF directly from this local path:
 
 {% endif %}{% if has_data %}## Pre-positioned Data
 
-`/workspace/data/` (read-only) — user-supplied inputs for this paper.
+`{{ data_path }}/` (read-only) — user-supplied inputs for this paper.
 
 {% endif %}
 ## Paper Claims Summary
@@ -83,7 +83,7 @@ Focus on the paper's **headline and supporting claims**. Do not attempt to repro
 
 - Order steps logically: setup first, then execution, then verification
 - Include 3-10 steps (enough to cover the headline claims, not exhaustive)
-- The agent executing this plan will work on a writable copy of the repo at `/workspace/output/replication/codebase/`
+- The agent executing this plan will work on a writable copy of the repo at `{{ codebase_dir }}/`
 - The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
 - If you find multiple entry points or experiments, prioritize the one that targets the headline claim
 - Every result-producing step MUST have at least one claim ID in `verifies`. Setup-only steps may have an empty `verifies` list.

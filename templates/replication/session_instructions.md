@@ -14,22 +14,22 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 
 ## Workspace Layout
 
-- **Working directory:** `/workspace/output/replication/codebase/` — a writable copy of the original repo. Make all your changes here.
-{% if has_repo %}- **Original repo:** `/workspace/repo` — read-only reference. Do not attempt to write here.
+- **Working directory:** `{{ codebase_dir }}/` — a writable copy of the original repo. Make all your changes here.
+{% if has_repo %}- **Original repo:** `{{ repo_path }}` — read-only reference. Do not attempt to write here.
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology details, parameters, and expected results.
-{% endif %}{% if has_data %}- **Pre-positioned data:** `/workspace/data/` (read-only). User-supplied inputs for this paper.
-{% endif %}- **Output directory:** `/workspace/output/replication/` — save logs and evidence here.
+{% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
+{% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
 
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+`{{ skills_dir }}/`. Each subdirectory has a `SKILL.md` whose
 YAML frontmatter `description:` field summarizes when the skill applies.
 You may browse the catalog and use a skill if its description genuinely
 matches your work; many replications will not need any skill, and that
 is fine.
 
-After your initial environment check, run `ls /workspace/veritas-skills/`
+After your initial environment check, run `ls {{ skills_dir }}/`
 and review the descriptions. Note any skills you may call on while
 running and debugging the codebase. Use a skill when its description
 matches the work in front of you.
@@ -37,7 +37,7 @@ matches the work in front of you.
 ## Environment Setup
 
 ```bash
-cd /workspace/output/replication/codebase
+cd {{ codebase_dir }}
 
 # Verify tools
 python --version
@@ -47,8 +47,8 @@ uv --version
 nvidia-smi 2>/dev/null && echo "GPU: available" || echo "GPU: not available"
 
 # Create a virtual environment
-uv venv /workspace/.venv
-source /workspace/.venv/bin/activate
+uv venv {{ venv_dir }}
+source {{ venv_dir }}/bin/activate
 
 # Install dependencies (try multiple strategies)
 if [ -f requirements.txt ]; then
@@ -62,7 +62,7 @@ if [ -f environment.yml ]; then
 fi
 
 # Record what was installed
-uv pip list > /workspace/output/replication/installed_packages.txt 2>&1
+uv pip list > {{ replication_dir }}/installed_packages.txt 2>&1
 ```
 
 ## How to Fix Issues
@@ -71,7 +71,7 @@ When something fails, actively resolve it:
 
 - **Missing packages** → install them (`uv pip install <package>`)
 - **Deprecated APIs** → patch the code (e.g., rename `cumtrapz` to `cumulative_trapezoid`)
-- **Missing compilers or system tools** → install them (`apt-get install -y g++`, etc.)
+- **Missing compilers or system tools** → install them. Prefer the package manager your environment already uses: `apt-get install -y g++` on a Debian/Ubuntu host or container, `conda install -y gxx_linux-64` in a conda environment, or `module load gcc` on a managed HPC cluster. If you don't have sudo and `apt-get` isn't available, fall back to conda or pip (`pip install <pkg>`) for Python-side fixes.
 - **Missing data files** → check for download scripts, look for URLs in the README, check for filename typos
 - **Configuration issues** → adjust paths, environment variables, config files
 - **Version incompatibilities** → pin compatible versions, patch import paths
@@ -101,7 +101,7 @@ This plan includes GPU-dependent steps. If GPU is not available:
 
 ## Replication Plan
 
-Execute the following steps in order. For each step, run the code from `/workspace/output/replication/codebase/`. If a step fails, try to fix the issue before moving on.
+Execute the following steps in order. For each step, run the code from `{{ codebase_dir }}/`. If a step fails, try to fix the issue before moving on.
 
 {% for step in replication_plan.steps %}
 ### Step {{ step.id }}: {{ step.description }}
@@ -115,7 +115,7 @@ Execute the following steps in order. For each step, run the code from `/workspa
 
 After executing all steps, save two files:
 
-### 1. `/workspace/output/replication/replication_log.json`
+### 1. `{{ replication_dir }}/replication_log.json`
 
 ```json
 {
@@ -152,7 +152,7 @@ After executing all steps, save two files:
 
 Routine setup (installing declared dependencies, activating a venv) does not need to be logged as a fix.
 
-### 2. `/workspace/output/replication/evidence_summary.json`
+### 2. `{{ replication_dir }}/evidence_summary.json`
 
 ```json
 {
