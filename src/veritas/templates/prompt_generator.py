@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -9,6 +10,14 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 if TYPE_CHECKING:
     from veritas.core.models.replication import ReplicationPlan
     from veritas.core.models.paper_claims import PaperClaims, PaperClaim
+
+
+# Docker-mode defaults for paths that vary between docker and host runs.
+# In docker, these reflect the layout the image bakes in / the wrapper
+# bind-mounts. In host mode, the `veritas-host` wrapper exports the
+# corresponding env vars so they resolve to host-side paths instead.
+_DEFAULT_SKILLS_DIR = "/workspace/veritas-skills"
+_DEFAULT_VENV_DIR = "/workspace/.venv"
 
 
 class PromptGenerator:
@@ -26,6 +35,34 @@ class PromptGenerator:
             lstrip_blocks=True,
         )
 
+    def _runtime_paths_context(
+        self,
+        output_dir: Optional[Path] = None,
+        repo_path: Optional[Path] = None,
+        data_path: Optional[Path] = None,
+    ) -> dict:
+        """Build the runtime-dependent path vars used across templates.
+
+        `skills_dir` and `venv_dir` come from env vars with docker-mode
+        defaults; the host wrapper exports them pointing at host paths.
+        `codebase_dir` / `replication_dir` are derived from `output_dir`
+        and mirror the layout the runner writes to disk.
+        """
+        ctx = {
+            "skills_dir": os.environ.get("VERITAS_SKILLS_DIR", _DEFAULT_SKILLS_DIR),
+            "venv_dir": os.environ.get("VERITAS_VENV_DIR", _DEFAULT_VENV_DIR),
+        }
+        if output_dir is not None:
+            output_abs = Path(output_dir).absolute()
+            ctx["output_dir"] = str(output_abs)
+            ctx["replication_dir"] = str(output_abs / "replication")
+            ctx["codebase_dir"] = str(output_abs / "replication" / "codebase")
+        if repo_path is not None:
+            ctx["repo_path"] = str(Path(repo_path).absolute())
+        if data_path is not None:
+            ctx["data_path"] = str(Path(data_path).absolute())
+        return ctx
+
     def generate_paper_claims_prompt(
         self,
         repo_path: Optional[Path],
@@ -42,8 +79,7 @@ class PromptGenerator:
         """
         template = self.env.get_template("analyze/paper_claims_extraction.md")
         context = {
-            "repo_path": str(Path(repo_path).absolute()) if repo_path else "",
-            "output_dir": str(output_dir.absolute()),
+            **self._runtime_paths_context(output_dir=output_dir, repo_path=repo_path),
             "paper_path": str(paper_path) if paper_path else "",
             "readme_path": str(readme_path) if readme_path else "",
             "has_paper": paper_path is not None,
@@ -65,13 +101,13 @@ class PromptGenerator:
         """Generate per-claim verifier prompt."""
         template = self.env.get_template("verify/single_claim.md")
         context = {
+            **self._runtime_paths_context(output_dir=output_dir),
             "claim": claim,
-            "codebase_dir": str(codebase_dir.absolute()),
+            "codebase_dir": str(codebase_dir.absolute()),  # explicit override (preserves caller's value)
             "codebase_diff_path": str(codebase_diff_path.absolute()),
             "replication_log_path": str(replication_log_path.absolute()),
             "fix_severity_path": str(fix_severity_path.absolute()),
             "plan_step_ids": plan_step_ids,
-            "output_dir": str(output_dir.absolute()),
         }
         return template.render(**context)
 
@@ -88,8 +124,9 @@ class PromptGenerator:
         """Generate prompt for creating a replication plan that targets claim IDs."""
         template = self.env.get_template("replication/plan_generation.md")
         context = {
-            "repo_path": str(Path(repo_path).absolute()) if repo_path else "",
-            "output_dir": str(output_dir.absolute()),
+            **self._runtime_paths_context(
+                output_dir=output_dir, repo_path=repo_path, data_path=data_path
+            ),
             "has_paper": paper_path is not None,
             "has_repo": repo_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
@@ -103,6 +140,7 @@ class PromptGenerator:
     def generate_replication_session_prompt(
         self,
         replication_plan: ReplicationPlan,
+        output_dir: Path,
         paper_path: Optional[Path] = None,
         repo_path: Optional[Path] = None,
         mode: str = "full",
@@ -111,6 +149,9 @@ class PromptGenerator:
         """Generate session instructions for the replication agent."""
         template = self.env.get_template("replication/session_instructions.md")
         context = {
+            **self._runtime_paths_context(
+                output_dir=output_dir, repo_path=repo_path, data_path=data_path
+            ),
             "replication_plan": replication_plan,
             "has_paper": paper_path is not None,
             "paper_path": str(paper_path) if paper_path else "",
@@ -136,8 +177,8 @@ class PromptGenerator:
         """
         template = self.env.get_template("codegen/session_instructions.md")
         context = {
+            **self._runtime_paths_context(output_dir=output_dir, data_path=data_path),
             "paper_path": str(paper_path),
-            "output_dir": str(output_dir),
             "has_data": data_path is not None,
         }
         return template.render(**context)
@@ -150,8 +191,8 @@ class PromptGenerator:
         """Generate prompt for assessing fix severity."""
         template = self.env.get_template("assess/fix_severity.md")
         context = {
+            **self._runtime_paths_context(output_dir=output_dir),
             "fixes": fixes,
-            "output_dir": str(output_dir.absolute()),
         }
         return template.render(**context)
 

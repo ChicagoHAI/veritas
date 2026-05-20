@@ -61,6 +61,11 @@ Rather than scoring papers on a fixed rubric, Veritas extracts each paper's spec
 
 ## Installation
 
+Two ways to run veritas. **Docker is the default**; **host mode** is for
+environments without docker (HPC clusters, managed compute).
+
+### Docker (default)
+
 You need Docker. Nothing else — no Python, no pandoc, no LaTeX, no provider CLI on the host.
 
 ```bash
@@ -75,6 +80,25 @@ On first run, `./veritas` pulls `ghcr.io/chicagohai/veritas:latest` (~3GB) from 
 Linux/macOS users: after cloning, the shell scripts are already marked executable in the git index. If you somehow ended up with non-executable scripts, run `chmod +x veritas docker/run.sh scripts/test_docker.sh`.
 
 Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` because `nvidia/cuda` base images have no arm64 build. Rosetta emulation handles it.
+
+### Host mode (no docker)
+
+For environments where docker is unavailable (HPC clusters etc.), the
+`veritas-host` wrapper runs the same pipeline directly on the host. You
+provide the runtime: claude/codex/gemini CLI, python 3.10+, uv, and any
+package managers the agent might call (apt/conda/module). Same flags as
+the docker wrapper:
+
+```bash
+pip install -e .                                                # one-time
+./veritas-host replicate --paper paper.pdf --repo ./code --output ./run-1
+```
+
+The wrapper copies `templates/skills/` to `<--output>/veritas-skills/` so
+the agent never sees the veritas source tree, copies `--repo` to
+`<--output>/replication/codebase/` so the agent edits a copy rather than
+your original, and writes `codebase.diff` on exit (same outputs as the
+docker version). See `veritas-host --help`.
 
 ## Replication API keys (`.env`)
 

@@ -5,7 +5,7 @@ You are evaluating the fixes that a replication agent applied while reproducing 
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+`{{ skills_dir }}/`. Each subdirectory has a `SKILL.md` whose
 YAML frontmatter `description:` field summarizes when the skill applies.
 You may browse the catalog if a skill helps you understand a fix's
 context; most severity assessments will not need any skill, and that

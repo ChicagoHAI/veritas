@@ -7,7 +7,7 @@ You will produce one JSON object with a `status` field, a type-specific `structu
 ## Available skills
 
 A catalog of scientific-computing skills is staged at
-`/workspace/veritas-skills/`. Each subdirectory has a `SKILL.md` whose
+`{{ skills_dir }}/`. Each subdirectory has a `SKILL.md` whose
 YAML frontmatter `description:` field summarizes when the skill applies.
 You may browse the catalog and use a skill if its description genuinely
 matches your verification work (for example, when reading evidence files
