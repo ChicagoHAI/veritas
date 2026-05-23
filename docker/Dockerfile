@@ -79,6 +79,58 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     latexmk \
     && rm -rf /var/lib/apt/lists/*
 
+# R toolchain for CORE-Bench (R-language capsules: ~23 of 45 in CB-Hard).
+# Without this, each R cell spends ~10 min bootstrapping R via micromamba.
+# The base R + tidyverse + common stats / rmarkdown stack lets the agent
+# start running .Rmd / .R immediately.
+#
+# Why not stock Ubuntu's r-base? Jammy ships R 4.1.2 (2021-11), which is
+# too old for several CB capsules' deps (e.g. papaja's S3 dispatch fixes
+# require R >= 4.2). We register the official CRAN apt repo so r-base
+# tracks the current stable R (4.x), and we install **all** R packages
+# via Rscript afterwards (NOT via r-cran-* apt packages) so the entire
+# package set is built against the same R headers and same xfun ABI.
+# Mixing apt-old + CRAN-new R packages produces "object 'attr' is not
+# exported by 'namespace:xfun'"-style errors.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common dirmngr wget gnupg ca-certificates \
+    && mkdir -p /etc/apt/keyrings \
+    && wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/cran.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/cran.gpg] https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
+        > /etc/apt/sources.list.d/cran.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        r-base r-base-dev \
+        libcurl4-openssl-dev libxml2-dev libssl-dev libfontconfig1-dev \
+        libharfbuzz-dev libfribidi-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
+        libv8-dev libcairo2-dev libgdal-dev libudunits2-dev \
+        libnlopt-dev cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# All R packages installed via Rscript from CRAN, against the system R
+# (so /usr/local/lib/R/site-library is shared by every user). Order matters
+# for compilation time: install the heaviest deps first; failures here
+# fail the build loudly (we want to know at image-build time, not at
+# cell-run time, if a package is broken on this R version).
+#
+# Coverage chosen from CB-capsule env survey (top extras across the 23
+# R capsules in CB-Hard).
+RUN R -e "options(repos=c(CRAN='https://cloud.r-project.org'), Ncpus=4); \
+    install.packages(c( \
+        'tidyverse', 'rmarkdown', 'knitr', \
+        'devtools', 'remotes', \
+        'lme4', 'lmerTest', 'psych', 'BayesFactor', 'afex', 'effects', \
+        'scales', 'gridExtra', 'xtable', 'patchwork', 'kableExtra', 'ggpubr', \
+        'RColorBrewer', 'magrittr', 'lubridate', 'plyr', 'readxl', \
+        'estimatr', 'beeswarm', 'jpeg', 'circlize', 'rvest', 'RCurl', \
+        'tinytex', 'BiocManager', 'yarrr', 'papaja' \
+    ))" \
+    && R -e "for (p in c('tidyverse','rmarkdown','papaja','yarrr','BayesFactor','afex','kableExtra')) { \
+        ok <- requireNamespace(p, quietly=TRUE); \
+        cat(sprintf('%-15s %s\n', p, if (ok) 'OK' else 'FAIL')); \
+        if (!ok) stop('R toolchain validation failed for: ', p) \
+    }"
+
 # Copy Node.js from builder
 COPY --from=builder /usr/bin/node /usr/bin/
 COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules
