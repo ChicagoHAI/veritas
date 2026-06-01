@@ -43,6 +43,33 @@ Explore the repository and generate a replication plan — a sequence of concret
 1. **Environment setup** — what to install, any system requirements
 2. **Running the code** — training scripts, experiments, evaluations
 3. **Collecting outputs** — what files / metrics each step produces
+{% if has_repo and mode != "paper-only" %}
+### Prefer the provided implementation (repo inventory first)
+
+This repository was provided by the paper's authors (or the user) and contains a
+working implementation of the analysis. **Inventory it before planning**: list
+the scripts / notebooks / entry points (`README`, `run.sh`/`Makefile`, top-level
+scripts, `__main__` modules, notebook cells), and for each claim map its
+described computation to the existing code path that produces it.
+
+Plan steps must **run the provided code paths** (execute the script, call the
+function, run the notebook) rather than re-deriving the analysis from scratch.
+The goal is to reproduce *this repository's* results, not to write a parallel
+implementation. Only plan a from-scratch computation when the repo genuinely
+lacks a path for that claim, the path depends on infrastructure unavailable in
+the workspace, or it provably contradicts the paper's methodology — and say so
+explicitly in the step description.
+
+When a step will need to patch the shipped code (e.g. a deprecated API), prefer
+**pinning the repo's authoring library versions** (from `requirements.txt`,
+`environment.yml`, `setup.py`, or a lockfile) over rewriting the call, since a
+"behavior-preserving" rewrite can silently shift numerical results. Note in the
+step description that the run used a code patch so it can be flagged downstream.
+
+Do **not** read the repository's *saved result artifacts* (cached notebook
+outputs, `results/`, `data/cache/`, pickled outputs) as the answer — those are
+not a reproduction. Run the code to regenerate them.
+{% endif %}
 
 For each step, provide:
 - A clear description of what to do
