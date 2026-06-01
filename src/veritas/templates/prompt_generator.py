@@ -196,6 +196,29 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_evaluation_prompt(
+        self,
+        output_dir: Path,
+        mode: str,
+        has_paper: bool,
+        paper_path: Optional[Path] = None,
+    ) -> str:
+        """Generate the post-verify contextual-evaluation prompt.
+
+        The external checker reads the replication artifacts, verdicts, and
+        (when present) the paper, and produces an advisory cheating-monitor +
+        contextual-evaluation JSON that does NOT alter the Replication Score.
+        """
+        template = self.env.get_template("evaluation/contextual_evaluation.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "mode": mode,
+            "has_paper": has_paper,
+        }
+        if paper_path is not None:
+            context["paper_path"] = str(Path(paper_path).absolute())
+        return template.render(**context)
+
     def generate_insufficient_spec_report(
         self,
         mode: str,

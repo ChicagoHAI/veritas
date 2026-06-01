@@ -26,12 +26,16 @@ PROMPTS_SUBDIR = "prompts"
 # New subdirectories introduced by the claim-verification pipeline.
 ASSESS_SUBDIR = "assess"
 VERIFY_SUBDIR = "verify"
+# Optional, opt-in contextual-evaluation phase (post-verify external checker).
+# Distinct from the benchmark harness's ``evaluate/`` scoring dir.
+EVALUATION_SUBDIR = "evaluation"
 
 OUTPUT_SUBDIRS = (
     ANALYZE_SUBDIR,
     REPLICATION_SUBDIR,
     ASSESS_SUBDIR,
     VERIFY_SUBDIR,
+    EVALUATION_SUBDIR,
     REPORT_SUBDIR,
     PROMPTS_SUBDIR,
 )
@@ -59,6 +63,10 @@ VERIFY_TRANSCRIPT_FILE_SUFFIX = "_transcript.jsonl"  # ``verify/<claim_id>_trans
 REPLICATION_PLAN_TRANSCRIPT_FILE = "replication_plan_transcript.jsonl"
 REPLICATION_TRANSCRIPT_FILE = "replication_transcript.jsonl"
 FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
+
+# Contextual-evaluation phase filenames.
+EVALUATION_FILE = "contextual_evaluation.json"
+EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
 
 @dataclass
@@ -88,6 +96,11 @@ class Config:
     codegen_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
+    evaluate_timeout: Optional[int] = None
+
+    # Opt-in contextual-evaluation phase (post-verify external checker). Off by
+    # default to keep per-run cost predictable; benchmark sweeps enable it.
+    run_evaluation: bool = False
 
     # Runtime settings
     verbose: bool = False
@@ -250,6 +263,10 @@ class Config:
         return self.output_dir / VERIFY_SUBDIR
 
     @property
+    def evaluation_dir(self) -> Path:
+        return self.output_dir / EVALUATION_SUBDIR
+
+    @property
     def report_dir(self) -> Path:
         return self.output_dir / REPORT_SUBDIR
 
@@ -266,6 +283,14 @@ class Config:
     @property
     def fix_severity_path(self) -> Path:
         return self.assess_dir / FIX_SEVERITY_FILE
+
+    @property
+    def evaluation_path(self) -> Path:
+        return self.evaluation_dir / EVALUATION_FILE
+
+    @property
+    def evaluation_transcript_path(self) -> Path:
+        return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
 
     @property
     def report_md_path(self) -> Path:

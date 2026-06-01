@@ -218,6 +218,12 @@ class ReplicationRunner:
 
             score = self._score_after_verify(claims, verdicts)
 
+            # Optional, opt-in contextual-evaluation phase (external checker).
+            # Advisory only: does not feed the Replication Score. Idempotent via
+            # a file-exists check so it doesn't re-run on resume.
+            if self.config.run_evaluation:
+                self._evaluate()
+
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
             )
@@ -748,6 +754,55 @@ class ReplicationRunner:
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: Could not parse fix severity assessment: {e}")
             return FixSeverityAssessment.empty()
+
+    def _evaluate(self) -> None:
+        """Post-verify contextual-evaluation phase (external checker).
+
+        Runs a single independent LLM pass over the replication artifacts,
+        verdicts, and paper, producing an advisory cheating-monitor +
+        contextual-evaluation JSON at ``evaluation/contextual_evaluation.json``.
+
+        This phase is advisory: its output does NOT alter the Replication Score.
+        It runs only when ``config.run_evaluation`` is set, and is idempotent —
+        if the output already exists it is skipped (resume-safe).
+        """
+        output_path = self.config.evaluation_path
+        if output_path.exists() and output_path.read_text(encoding='utf-8').strip():
+            print("[OK] evaluation: skipped (already produced)")
+            return
+
+        print("Running contextual-evaluation phase (external checker)...")
+        self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt = self.prompt_generator.generate_evaluation_prompt(
+            output_dir=self.config.output_dir,
+            mode=self.config.mode,
+            has_paper=self.config.paper_path is not None,
+            paper_path=self.config.paper_path,
+        )
+        prompt_path = self.config.prompts_dir / "evaluation_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        # Default env (API keys stripped) — the checker must not run paper code.
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=self.config.evaluation_transcript_path,
+            timeout=self.config.evaluate_timeout,
+        )
+        if not success:
+            print(f"  Warning: evaluation phase did not succeed (transcript: {self.config.evaluation_transcript_path})")
+            return
+        if not output_path.exists():
+            print(f"  Warning: evaluation agent did not write {output_path}")
+            return
+        # Validate it parses; leave the agent's file in place regardless.
+        try:
+            data = json.loads(_extract_json(output_path.read_text(encoding='utf-8')))
+            risk = (data.get("cheating_monitor") or {}).get("risk", "unknown")
+            print(f"  Contextual evaluation written; cheating-risk: {risk}")
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: evaluation output is not valid JSON ({e}); left as-is for audit")
 
     # -- Phase 4: Verify ---------------------------------------------------
 
