@@ -144,10 +144,16 @@ Populate `structured`:: (the grader compares per key — prefer flat dicts)
 
 Build BOTH dicts keyed by the claim's **exact** question keys (copied verbatim —
 see Answer Fidelity); the grader matches `replicated_table[key]` against
-`paper_table[key]` per key, so a mutated or missing key fails that cell. If the
-table is genuinely not expressible as a flat `{key: number}` dict, fall back to
-the older `{"columns": [...], "rows": [...]}` shape and set `status` yourself —
-the grader will keep your judgment for that case.
+`paper_table[key]` per key, so a mutated or missing key fails that cell.
+
+**Use the flat `{key: number}` shape whenever the table can be expressed that
+way — it almost always can** (per-question answers, per-label rows, a single
+cell). Only when the values are genuinely non-scalar or the table truly cannot be
+flattened, fall back to `{"columns": [...], "rows": [...]}` and set `status`
+yourself (the grader then keeps your judgment). Prefer the flat shape: it routes
+the verdict through the deterministic grader, which is the reliable, auditable
+path — emitting `{columns, rows}` for a flattenable table needlessly drops back
+to a subjective judgment.
 
 {% elif claim.type == "qualitative" %}
 **Qualitative claim** — paraphrase-match between the claim's described behavior and what the evidence shows.
