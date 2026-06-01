@@ -42,6 +42,27 @@ The replication pipeline has already run. Read the relevant files to gather evid
 {% if plan_step_ids %}- **Plan steps that targeted this claim** (cross-reference from `replication_plan.json::steps[*].verifies`): {{ plan_step_ids | join(", ") }}
 {% endif %}
 
+## Answer Fidelity (applies to every structured field you write)
+
+The `structured` field you produce is consumed downstream to score this run
+against the reference. Two reporting failures lose credit even when the
+underlying computation is correct — avoid both:
+
+- **Keys verbatim.** When the claim names specific question keys, labels, or
+  entities (in `paper_value`, `verification`, or the description), copy them
+  **byte-for-byte** into your structured output. Do not re-type, "fix" spelling,
+  pluralize, re-case, or paraphrase a key. Build your output by iterating the
+  claim's keys and filling the value for each — never invent keys the claim did
+  not ask for. (A value reported under a mutated or invented key cannot be
+  matched to the question.)
+- **Precision from the question, never from the target.** Report numeric values
+  at the precision the claim/units imply, mirroring how the value is naturally
+  expressed in the claim — not a raw 15-digit float dump. Do **not** look at the
+  reference/`paper_value` to decide how many digits to report or how to round;
+  precision is a function of the question and scientific convention only. If in
+  doubt, report the value as the produced evidence prints it, trimmed of
+  spurious trailing float noise.
+
 ## Type-Specific Adjudication Rules
 
 {% if claim.type == "scalar" %}
@@ -85,6 +106,14 @@ Populate `structured`::
 - `match` — every cell within tolerance. If the paper table provides per-cell uncertainty (e.g. an explicit `uncertainty` column or `±` markers), every numerical cell is within ±1σ; otherwise within 5% relative error. Label cells must match exactly.
 - `partial` — some cells match, others don't. If uncertainty is given, ±2σ defines the partial band per cell.
 - `no_match` — most cells outside tolerance.
+
+**Cell resolution.** When the claim asks for a specific cell of a table
+(e.g. "the similarity between A and B"), resolve it by **explicit row-label
+AND column-label lookup**, asserting both labels match what the claim names —
+not by row order or position. For an **asymmetric** matrix (where cell [A][B] ≠
+[B][A]), the order in the question matters: read the cell the question's phrasing
+designates, not its transpose. Report the value under the exact key the claim
+uses for that question.
 
 Populate `structured`::
 
