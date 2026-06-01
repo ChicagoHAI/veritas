@@ -16,9 +16,18 @@ Errors are puzzles to solve. If something breaks, fix it and keep going. Install
 
 - **Working directory:** `{{ codebase_dir }}/` — a writable copy of the original repo. Make all your changes here.
 {% if has_repo %}- **Original repo:** `{{ repo_path }}` — read-only reference. Do not attempt to write here.
-{% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology details, parameters, and expected results.
+{% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology, parameters, and experimental setup. See **Reporting Discipline** below for how to treat any result values it reports.
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
+
+## Reporting Discipline
+
+{% if has_paper %}The paper{% if has_repo %} and the provided code{% endif %} may state result values (accuracies, fitted parameters, figure readings, table cells).{% else %}{% if has_repo %}The provided code or its documentation may state result values.{% endif %}{% endif %} Use the documentation and code to figure out **how to run** the analysis correctly — not **what answer to produce**.
+
+- **Report what your execution actually produces**, even if it differs from a value you happened to read. A faithful result that diverges from the reported number is correct and useful; a number copied, rounded, or otherwise tuned to match the source is a failure.
+- **Do not hard-code** reported values, and do not adjust code, seeds, thresholds, or rounding to make your output land on a reported number.
+- If your result diverges from a value you saw, that is a finding to record in your evidence — not an error to "correct" by editing toward the reported value.
+- **Setup values are different from results.** Hyperparameters, dataset sizes, version pins, and initial conditions the source *prescribes* tell you how to run — use them. Reported *outcomes* are not targets.
 
 ## Available skills
 
