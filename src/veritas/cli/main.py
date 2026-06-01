@@ -106,6 +106,18 @@ def replicate(
         "--verify-timeout",
         help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
     ),
+    evaluate: bool = typer.Option(
+        False,
+        "--evaluate/--no-evaluate",
+        help="Run the post-verify contextual-evaluation phase (external checker: "
+             "cheating monitor + consistency grader). Advisory; does not change the "
+             "Replication Score. Default: off.",
+    ),
+    evaluate_timeout: Optional[int] = typer.Option(
+        None,
+        "--evaluate-timeout",
+        help="Timeout in seconds for the contextual-evaluation phase. Default: no timeout.",
+    ),
     restart: bool = typer.Option(
         False,
         "--restart",
@@ -155,6 +167,8 @@ def replicate(
             codegen_timeout=codegen_timeout,
             replicate_timeout=replicate_timeout,
             verify_timeout=verify_timeout,
+            evaluate_timeout=evaluate_timeout,
+            run_evaluation=evaluate,
             claim_scope=scope,
             mode=mode,
             claims_path=claims,
