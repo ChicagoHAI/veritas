@@ -2,6 +2,7 @@
 
 import json
 import math
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,24 @@ STATUS_COLOR = {
     "missing": "#57606a",
 }
 SEVERITY_COLOR = {"minor": "#1a7f37", "major": "#9a6700", "critical": "#cf222e"}
+
+# The em dash is the most common "this was written by an AI" tell, and the
+# evaluation prompt forbids it. This is the deterministic guarantee: a stray em
+# dash from the manager never reaches the rendered report. Only the em dash (—)
+# is scrubbed, not the en dash (–), to avoid mangling numeric ranges.
+_EMDASH_RE = re.compile(r"\s*—\s*")
+
+
+def _scrub_prose(obj):
+    """Recursively replace em dashes with a comma in every string in a parsed
+    JSON structure (the manager's evaluation output). Leaves non-strings as-is."""
+    if isinstance(obj, str):
+        return re.sub(r",\s*,", ",", _EMDASH_RE.sub(", ", obj))
+    if isinstance(obj, dict):
+        return {k: _scrub_prose(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_prose(v) for v in obj]
+    return obj
 
 
 class ReportGenerator:
@@ -186,7 +205,7 @@ class ReportGenerator:
             return None
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
-            return data if isinstance(data, dict) else None
+            return _scrub_prose(data) if isinstance(data, dict) else None
         except (OSError, json.JSONDecodeError):
             return None
 
