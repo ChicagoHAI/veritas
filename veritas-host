@@ -112,6 +112,25 @@ resolve_output_dir() {
     return 1
 }
 
+# Invoke the veritas CLI with whatever Python actually has its deps.
+# Preference order: an installed `veritas` on PATH (cluster default) -> the
+# repo's own .venv -> `uv run` in the repo -> a bare `python -m` fallback. The
+# bare fallback only runs on a host with none of the above, where it would have
+# failed before too; the cluster path (veritas on PATH) is unchanged.
+run_veritas_cli() {
+    if command -v veritas &> /dev/null; then
+        veritas "$@"
+    elif [ -x "$VERITAS_REPO/.venv/bin/python" ]; then
+        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$VERITAS_REPO/.venv/bin/python" -m veritas.cli.main "$@"
+    elif command -v uv &> /dev/null; then
+        ( cd "$VERITAS_REPO" && uv run python -m veritas.cli.main "$@" )
+    else
+        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+            python -m veritas.cli.main "$@"
+    fi
+}
+
 cmd_replicate() {
     # Tool check is provider-aware: python+uv are always needed, but the
     # agent CLI is only required for the provider the user actually picked.
@@ -217,26 +236,14 @@ cmd_replicate() {
     export VERITAS_SKILLS_DIR="$skills_dst"
     export VERITAS_VENV_DIR="$output_dir/.venv"
 
-    # Invoke veritas. Prefer the installed `veritas` command if available
-    # (cleaner argv in logs); fall back to `python -m` if not.
-    if command -v veritas &> /dev/null; then
-        veritas replicate "$@"
-    else
-        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
-            python -m veritas.cli.main replicate "$@"
-    fi
+    run_veritas_cli replicate "$@"
 }
 
 cmd_passthrough() {
-    # extract-plan / report / etc. — no pre/post staging needed; just
+    # extract-plan / report / evaluate — no pre/post staging needed; just
     # forward to the python CLI.
     local subcmd="$1"; shift
-    if command -v veritas &> /dev/null; then
-        veritas "$subcmd" "$@"
-    else
-        PYTHONPATH="$VERITAS_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
-            python -m veritas.cli.main "$subcmd" "$@"
-    fi
+    run_veritas_cli "$subcmd" "$@"
 }
 
 usage() {
