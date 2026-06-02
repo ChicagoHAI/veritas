@@ -980,6 +980,40 @@ class ReplicationRunner:
 
         return results
 
+    def evaluate_existing(self) -> RunResult:
+        """Run the evaluation manager + (re)render the report on an existing
+        replication output directory, without re-running the pipeline.
+
+        Powers ``./veritas evaluate <dir>`` — replicate once (e.g. for a
+        benchmark), evaluate later for the product report, no recompute. The
+        manager pass always runs here (it is the point of the command); it is
+        idempotent and skips if its output already exists. Advisory as always —
+        it does not change the Replication Score.
+        """
+        if not self.config.paper_claims_path.exists():
+            return RunResult(
+                success=False,
+                error=(
+                    f"No paper_claims.json at {self.config.paper_claims_path}. "
+                    "Run './veritas replicate' on this directory first."
+                ),
+            )
+        claims = self._load_paper_claims()
+        verdicts = self._load_verify_artifacts(claims)
+        score = self._score_after_verify(claims, verdicts)
+        evidence = gather_evidence(self.config.replication_dir)
+        fix_assessment = self._load_fix_assessment()
+
+        self._evaluate()  # the manager pass (advisory; idempotent)
+
+        report_path, pdf_path = self._report(
+            claims, verdicts, score, evidence, fix_assessment,
+        )
+        return RunResult(
+            success=True, verdicts=verdicts, score=score,
+            report_path=report_path, pdf_path=pdf_path,
+        )
+
     def _score_after_verify(
         self,
         claims: PaperClaims,

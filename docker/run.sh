@@ -1266,6 +1266,39 @@ cmd_report() {
 }
 
 # -----------------------------------------------------------------------------
+# Evaluate: run the evaluation manager + report on an existing replication dir
+# (the product layer, decoupled from replicate). Needs provider credentials
+# because the manager is an LLM pass; reads everything from the mounted output
+# dir, so the original paper/repo need not be re-supplied.
+# -----------------------------------------------------------------------------
+cmd_evaluate() {
+    ensure_image
+    warn_if_outdated
+    check_provider_credentials "$(extract_provider "$@")"
+
+    local eval_dir="$1"; shift
+    local host_eval_dir
+    host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
+    if [ ! -d "$host_eval_dir" ]; then
+        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
+        exit 1
+    fi
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        $credential_mounts \
+        -v \"$host_eval_dir:/workspace/eval\" \
+        -w /workspace \
+        \"$IMAGE_NAME\" \
+        veritas evaluate /workspace/eval $@"
+}
+
+# -----------------------------------------------------------------------------
 # Help
 # -----------------------------------------------------------------------------
 show_help() {
@@ -1274,9 +1307,14 @@ show_help() {
     echo ""
     echo -e "${BOLD}Commands:${NC}"
     echo "  setup         One-shot onboarding (prereqs, image, login, .env)"
-    echo "  replicate     Run the full replication pipeline"
+    echo "  full          Full pipeline: replicate + evaluate + report (the default)"
+    echo "                  e.g. ./veritas --paper p.pdf --repo ./myrepo"
+    echo "  replicate     Replication only, through verify (for benchmarking)"
     echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
     echo "                  add --data ./my-data to pre-position datasets (read-only)"
+    echo "  evaluate      Run the evaluation manager + report on an existing"
+    echo "                  replication dir (replicate once, evaluate later)"
+    echo "                  e.g. ./veritas evaluate ./myrepo/replicate"
     echo "  extract-plan  Extract a structured plan from a paper PDF"
     echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
@@ -1298,10 +1336,19 @@ show_help() {
 # -----------------------------------------------------------------------------
 main() {
     local cmd="${1:-help}"
+
+    # Bare invocation that starts with an option (e.g. `./veritas --paper p.pdf
+    # --repo ./r`) means the full pipeline: replicate + evaluate + report.
+    if [[ "$cmd" == -* ]]; then
+        cmd_replicate --evaluate "$@"
+        return
+    fi
     shift || true
 
     case "$cmd" in
+        full)          cmd_replicate --evaluate "$@" ;;
         replicate)     cmd_replicate "$@" ;;
+        evaluate)      cmd_evaluate "$@" ;;
         extract-plan)  cmd_extract_plan "$@" ;;
         report)        cmd_report "$@" ;;
         shell)         cmd_shell "$@" ;;

@@ -1,5 +1,6 @@
 """Main CLI entry point for Veritas."""
 
+import json
 import typer
 from pathlib import Path
 from typing import Optional
@@ -292,6 +293,94 @@ def report(
         raise typer.Exit(1)
 
 
+@app.command()
+def evaluate(
+    replicate_dir: Path = typer.Argument(
+        ...,
+        help="An existing replication output directory to evaluate.",
+        exists=True,
+        file_okay=False,
+    ),
+    provider: str = typer.Option(
+        "claude", "--provider", help="AI provider for the evaluation manager."
+    ),
+    evaluate_timeout: Optional[int] = typer.Option(
+        None, "--evaluate-timeout",
+        help="Timeout in seconds for the evaluation phase. Default: no timeout.",
+    ),
+    generate_pdf: bool = typer.Option(
+        True, "--pdf/--no-pdf", help="Render the PDF report."
+    ),
+):
+    """
+    Run the evaluation manager on an existing replication and render the report.
+
+    Adds the product layer (contextual evaluation + the human-facing report) to a
+    directory produced by `./veritas replicate`, without re-running the pipeline.
+    Replicate once (e.g. for a benchmark), evaluate later.
+    """
+    console.print(f"[blue]Evaluating replication at:[/blue] {replicate_dir}")
+
+    # Recover the original inputs/mode from the run's state; fall back to the
+    # patched codebase so evaluation works even if the source inputs moved.
+    state_path = replicate_dir / ".veritas" / "pipeline_state.json"
+    mode = "auto"
+    paper = repo = data = None
+    if state_path.exists():
+        try:
+            st = json.loads(state_path.read_text(encoding="utf-8"))
+            cfg = st.get("config") or {}
+            inp = st.get("inputs") or {}
+            mode = cfg.get("mode", "auto")
+            paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
+            repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
+            data = Path(inp["data_path"]) if inp.get("data_path") else None
+        except (OSError, ValueError):
+            pass
+
+    if paper is not None and not paper.exists():
+        paper = None
+    if repo is not None and not repo.exists():
+        repo = None
+    if repo is None:
+        codebase = replicate_dir / "replication" / "codebase"
+        repo = codebase if codebase.exists() else None
+    # A paper-dependent mode can't validate without the paper; fall back.
+    if paper is None and mode in ("full", "paper-only"):
+        mode = "repo-only" if repo is not None else "auto"
+    if repo is None and paper is None:
+        console.print(
+            "[bold red]Error:[/bold red] could not recover the original inputs "
+            "(paper/repo) for this run, and no patched codebase is present. "
+            "Cannot evaluate."
+        )
+        raise typer.Exit(1)
+
+    try:
+        config = Config(
+            paper_path=paper,
+            repo_path=repo,
+            output_dir=replicate_dir,
+            provider=provider,
+            mode=mode,
+            run_evaluation=True,
+            evaluate_timeout=evaluate_timeout,
+            generate_pdf=generate_pdf,
+            data_path=data if (data and data.exists()) else None,
+        )
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    result = ReplicationRunner(config).evaluate_existing()
+    if result.success:
+        console.print("[bold green]Evaluation + report complete.[/bold green]")
+        console.print(f"Report: {result.report_path}")
+        if result.pdf_path:
+            console.print(f"PDF: {result.pdf_path}")
+    else:
+        console.print(f"[bold red]Evaluation failed:[/bold red] {result.error}")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
