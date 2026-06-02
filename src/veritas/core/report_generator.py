@@ -1,16 +1,20 @@
 """Generate replication reports from per-claim verdicts and Replication Score."""
 
 import json
+import math
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import jinja2
 
 from veritas.core.config import (
     Config,
     REPORT_SUBDIR,
     REPORT_MD_FILE,
     REPORT_PDF_FILE,
+    REPORT_HTML_FILE,
     VERIFY_SUBDIR,
     VERDICTS_FILE,
     REPLICATION_SCORE_FILE,
@@ -42,6 +46,17 @@ STATUS_DISPLAY = {
     "not_applicable": "n/a",
 }
 
+# Color per verdict status, for the HTML report.
+STATUS_COLOR = {
+    "match": "#1a7f37",
+    "partial": "#9a6700",
+    "no_match": "#cf222e",
+    "not_attempted": "#57606a",
+    "not_applicable": "#57606a",
+    "missing": "#57606a",
+}
+SEVERITY_COLOR = {"minor": "#1a7f37", "major": "#9a6700", "critical": "#cf222e"}
+
 
 class ReportGenerator:
     """Generate the Replication Report."""
@@ -62,6 +77,7 @@ class ReportGenerator:
         verdicts = self._load_verdicts(replicate_dir)
         score = self._load_score(replicate_dir)
         mode = self._load_mode(replicate_dir)
+        evaluation = self._load_evaluation(replicate_dir)
 
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
@@ -69,24 +85,29 @@ class ReportGenerator:
             mode=mode,
             output_dir=replicate_dir,
         )
+        html_content = self._render_html(self._build_html_context(
+            claims, verdicts, score, None, None, evaluation, mode,
+        ))
 
         if output_path is None:
             output_path = replicate_dir / REPORT_SUBDIR / REPORT_MD_FILE
         else:
             output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         md_path: Optional[Path] = None
         pdf_path: Optional[Path] = None
 
         if generate_md:
             md_path = output_path.with_suffix(".md")
-            md_path.parent.mkdir(parents=True, exist_ok=True)
             md_path.write_text(md_content, encoding='utf-8')
+
+        output_path.with_suffix(".html").write_text(html_content, encoding='utf-8')
 
         if generate_pdf:
             pdf_path = output_path.with_suffix(".pdf")
-            pdf_path.parent.mkdir(parents=True, exist_ok=True)
-            self._generate_pdf(md_content, pdf_path, pdf_path.parent)
+            if not self._generate_pdf_from_html(html_content, pdf_path):
+                self._generate_pdf(md_content, pdf_path, pdf_path.parent)
 
         return md_path, pdf_path
 
@@ -102,22 +123,28 @@ class ReportGenerator:
         fix_assessment=None,
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """Render the report from live in-memory data."""
+        evaluation = self._load_evaluation(output_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=config.mode,
             output_dir=output_dir,
         )
+        html_content = self._render_html(self._build_html_context(
+            claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
+        ))
 
         report_dir = config.report_dir
+        report_dir.mkdir(parents=True, exist_ok=True)
         md_path = report_dir / REPORT_MD_FILE
-        md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md_content, encoding='utf-8')
+        (report_dir / REPORT_HTML_FILE).write_text(html_content, encoding='utf-8')
 
         pdf_path: Optional[Path] = None
         if generate_pdf:
             pdf_path = report_dir / REPORT_PDF_FILE
-            self._generate_pdf(md_content, pdf_path, report_dir)
+            if not self._generate_pdf_from_html(html_content, pdf_path):
+                self._generate_pdf(md_content, pdf_path, report_dir)
 
         return md_path, pdf_path
 
@@ -459,6 +486,137 @@ class ReportGenerator:
 
         section += "\n"
         return section
+
+    # -- HTML report (styled, human-facing) ---------------------------------
+
+    def _templates_dir(self) -> Path:
+        return Path(__file__).resolve().parents[3] / "templates"
+
+    def _render_html(self, ctx: dict) -> str:
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(str(self._templates_dir())),
+            autoescape=True,  # escape all {{ }} values; literal HTML in the template stays
+        )
+        return env.get_template("report/report.html.j2").render(**ctx)
+
+    def _build_html_context(
+        self, claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
+    ) -> dict:
+        verdict_by_id = {v.claim_id: v for v in verdicts}
+        claim_list = claims.claims if claims is not None else []
+        total = len(claim_list)
+
+        counts = {k: 0 for k in STATUS_COLOR}
+        for c in claim_list:
+            v = verdict_by_id.get(c.id)
+            st = v.status if v is not None else "missing"
+            counts[st] = counts.get(st, 0) + 1
+        n_match, n_partial, n_nomatch = counts["match"], counts["partial"], counts["no_match"]
+        n_missing = counts["missing"]
+        n_other = counts["not_attempted"] + counts["not_applicable"] + n_missing
+
+        score_val = score.score if (score is not None and score.score is not None) else None
+        score_pct = score_val * 100 if score_val is not None else None
+        if score_pct is None:
+            verdict_label, badge_color = "No score", "#57606a"
+        elif score_val >= 0.85:
+            verdict_label, badge_color = "Reproduced", "#1a7f37"
+        elif score_val >= 0.5:
+            verdict_label, badge_color = "Partially reproduced", "#9a6700"
+        else:
+            verdict_label, badge_color = "Not reproduced", "#cf222e"
+        circ = 2 * math.pi * 46
+
+        def pct(n: int) -> float:
+            return round(100 * n / total, 2) if total else 0
+
+        chips, claims_table = [], []
+        for c in claim_list:
+            v = verdict_by_id.get(c.id)
+            st = v.status if v is not None else "missing"
+            color = STATUS_COLOR.get(st, "#57606a")
+            chips.append({"id": c.id, "type": c.type, "status": st, "color": color})
+            rat = ((v.rationale if v is not None else "") or "(no verdict produced)").replace("\n", " ")
+            if len(rat) > 240:
+                rat = rat[:237] + "..."
+            claims_table.append({
+                "id": c.id, "tier": c.tier, "type": c.type,
+                "status_label": STATUS_DISPLAY.get(st, st), "color": color,
+                "graded_by": (getattr(v, "graded_by", None) if v is not None else None), "rationale": rat,
+            })
+
+        rep = (evaluation or {}).get("report", {}) if evaluation else {}
+        narrative = {
+            k: ((rep.get(k) or "").strip() if isinstance(rep.get(k), str) else "")
+            for k in ("important_claims", "replication_summary", "did_not_replicate",
+                      "code_quality_limitations", "whole_paper_consistency",
+                      "methodology_correspondence", "repo_divergence")
+        }
+        bottom_line = (rep.get("bottom_line") or "").strip() or None if isinstance(rep.get("bottom_line"), str) else None
+        cheating_risk = ((evaluation or {}).get("cheating_monitor") or {}).get("risk") if evaluation else None
+
+        steps, environment, duration_str, steps_ok = [], "", "", 0
+        if evidence is not None:
+            for s in evidence.step_outcomes:
+                steps.append({"id": s.step_id, "desc": s.description, "ok": s.succeeded,
+                              "duration": f"{s.duration_seconds:.0f}"})
+            steps_ok = evidence.steps_succeeded
+            duration_str = f"{evidence.total_duration_seconds:.0f}s"
+            env = evidence.environment or {}
+            parts = []
+            if env.get("python_version"):
+                parts.append(f"Python {env['python_version']}")
+            if env.get("gpu_model"):
+                parts.append(f"GPU {env['gpu_model']}")
+            pkgs = env.get("key_packages", {})
+            if pkgs:
+                parts.append(", ".join(f"{k} {v}" for k, v in list(pkgs.items())[:5]))
+            environment = " · ".join(parts)
+
+        fixes, n_minor, n_major, n_critical, total_fixes = [], 0, 0, 0, 0
+        if fix_assessment is not None and getattr(fix_assessment, "total_fixes", 0) > 0:
+            total_fixes = fix_assessment.total_fixes
+            n_minor, n_major, n_critical = (fix_assessment.minor_count,
+                                            fix_assessment.major_count, fix_assessment.critical_count)
+            for fx in fix_assessment.fixes:
+                fixes.append({"desc": fx.fix_description, "severity": fx.severity,
+                              "color": SEVERITY_COLOR.get(fx.severity, "#57606a")})
+
+        return {
+            "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "mode": mode, "paper_title": None,
+            "score_pct": score_pct, "score_pct_str": f"{score_pct:.0f}%" if score_pct is not None else "—",
+            "verdict_label": verdict_label, "badge_color": badge_color,
+            "gauge_dash": round((score_val or 0) * circ, 1), "gauge_circ": round(circ, 1),
+            "counted_match": n_match, "counted_total": (score.counted_claims if score is not None else total),
+            "n_match": n_match, "n_partial": n_partial, "n_nomatch": n_nomatch,
+            "n_other": n_other, "n_missing": n_missing,
+            "tier_total": total,
+            "seg_match": pct(n_match), "seg_partial": pct(n_partial),
+            "seg_nomatch": pct(n_nomatch), "seg_other": pct(n_other),
+            "claim_chips": chips, "claims_table": claims_table,
+            "narrative": narrative, "bottom_line": bottom_line, "cheating_risk": cheating_risk,
+            "steps": steps, "steps_ok": steps_ok, "duration_str": duration_str, "environment": environment,
+            "fixes": fixes, "total_fixes": total_fixes,
+            "n_minor": n_minor, "n_major": n_major, "n_critical": n_critical,
+            "flags": (score.flags if (score is not None and score.flags) else []),
+            "has_evaluation": evaluation is not None,
+        }
+
+    def _generate_pdf_from_html(self, html_content: str, output_path: Path) -> bool:
+        """Render the styled HTML to PDF via WeasyPrint (keeps the HTML look).
+        Returns True on success, False if WeasyPrint isn't available so the
+        caller can fall back to the pandoc/LaTeX path."""
+        try:
+            from weasyprint import HTML  # type: ignore
+        except Exception:
+            return False
+        try:
+            HTML(string=html_content).write_pdf(str(output_path))
+            return True
+        except Exception as e:  # noqa: BLE001 — never let PDF break the run
+            print(f"  Warning: WeasyPrint PDF failed ({e}); falling back to pandoc")
+            return False
 
     def _preprocess_markdown_for_pdf(self, md_content: str) -> str:
         """Pre-process markdown for PDF rendering via pdflatex.
