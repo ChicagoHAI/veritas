@@ -48,7 +48,12 @@ COPY templates/ ./templates/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv \
-    && uv sync --frozen --no-dev
+    && uv sync --frozen --no-dev \
+    && uv pip install --python /app/.venv/bin/python weasyprint
+    # WeasyPrint renders the styled HTML report to PDF (kept out of the frozen
+    # lockfile so host installs aren't burdened; report_generator falls back to
+    # pandoc/LaTeX when it's unavailable). Runtime system libs are installed in
+    # the runtime stage's "LaTeX + pandoc" apt block below.
 
 # === Stage 2: Runtime ===
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
@@ -65,7 +70,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcudnn8 \
     && rm -rf /var/lib/apt/lists/*
 
-# LaTeX + pandoc for PDF report generation
+# LaTeX + pandoc for PDF report generation (pandoc is the fallback PDF path).
+# libpangocairo + gdk-pixbuf are WeasyPrint's runtime deps for the primary
+# HTML->PDF path (libcairo/glib come transitively; harfbuzz is installed with R).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
     texlive-latex-base \
@@ -77,6 +84,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lmodern \
     cm-super \
     latexmk \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi8 \
     && rm -rf /var/lib/apt/lists/*
 
 # R toolchain for CORE-Bench (R-language capsules: ~23 of 45 in CB-Hard).
