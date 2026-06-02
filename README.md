@@ -2,254 +2,194 @@
 
 **A Replication Agent for Evaluating Scientific Reproducibility**
 
-Veritas is an AI-powered tool that evaluates whether scientific papers can be reproduced. Given a paper and (optionally) a repository, it runs a multi-phase pipeline — **Analyze**, **Codegen** (paper-only mode), **Plan**, **Replicate**, **Assess Fixes**, **Verify** — producing a Replication Report with a single tier-weighted Replication Score plus per-claim verdicts, execution evidence, and fix severity ratings.
+Veritas checks whether a scientific paper's results can actually be reproduced.
+Give it a paper and/or a code repository. It runs the methodology, fixes what it
+takes to make the code run, checks each of the paper's claims against the output
+it actually produced, and writes a human-readable report with a single
+Replication Score.
 
-The replication agent actively fixes issues it encounters (deprecated APIs, missing dependencies, configuration problems) rather than stopping at the first error. Every fix is tracked and rated for severity, so the final report honestly reflects both the results and what it took to get them.
+Correctness is the floor, not the goal. Veritas separates the work of *running*
+the science from the work of *judging* it: a replication agent reproduces the
+results, and a separate evaluation manager reviews the whole run and writes the
+report. The agent that produces a number never grades it.
 
-## How It Works
+## How it works
 
 ```
 Input (Paper PDF and/or Repository)
         |
-  1. ANALYZE
-  |  - Extract structured paper claims (paper_claims.json) from the paper
-  |    (or from the README in repo-only mode, or from --claims if supplied)
+  1. ANALYZE     Extract the paper's specific, checkable claims (paper_claims.json).
+        |        From the paper, the repo README, or a supplied --claims file.
+  2. CODEGEN      (paper-only mode) Write the methodology into a fresh codebase.
         |
-  2. CODEGEN  (paper-only mode only)
-  |  - Generate a fresh codebase from the paper's methodology
-  |  - Sentinel-based resume; skipped in full and repo-only modes
+  3. PLAN         A claim-aware plan. With a real repo, run the repo's own code
+        |         rather than reimplementing it.
+  4. REPLICATE    Run the plan on a writable copy of the code. Fix issues to keep
+        |         going. Report what was produced, never tune toward paper values.
+  5. ASSESS       Rate each applied fix (minor / major / critical).
         |
-  3. PLAN
-  |  - Generate a claim-aware replication plan (replication_plan.json)
-  |  - Steps reference claim IDs via the `verifies` field
+  6. VERIFY       Per claim: an LLM comparator extracts the produced value; a
+        |         deterministic, LLM-free grader decides match / partial / no_match.
+        |         Aggregate into a tier-weighted Replication Score.
         |
-  4. REPLICATE
-  |  - Execute the plan inside a Docker container on a writable copy of the codebase
-  |  - An AI agent (Claude/Codex/Gemini) runs the code, actively fixing issues
-  |  - Collect execution evidence and structured fix records
+  7. EVALUATE     (product runs) A manager reviews the whole run: which claims
+        |         matter, how well it reproduced, what didn't and why, and what
+        |         the provided code got wrong. It also flags integrity concerns.
         |
-  5. ASSESS FIXES
-  |  - Rate each applied fix as minor / major / critical
-  |  - Assess what each fix implies about reproducibility quality
-        |
-  6. VERIFY
-  |  - One verifier invocation per claim against produced evidence
-  |  - Per-claim structured verdict (match / partial / no_match / not_attempted / not_applicable)
-  |  - Tier-weighted Replication Score aggregation
-        |
-  REPORT
-     - Headline Replication Score with tier breakdown
-     - Per-claim verdict table with rationales
-     - Replication evidence, fixes-applied section, environment summary
+  REPORT          A styled HTML report (+ matching PDF, + markdown) with a
+                  gist-first verdict card, the manager's narrative, and the
+                  deterministic tables underneath.
 ```
 
-Rather than scoring papers on a fixed rubric, Veritas extracts each paper's specific reproducible claims and adjudicates them one at a time against the evidence the replication actually produced. The Replication Score is a tier-weighted average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`, `not_attempted=0.0`) with tier weights `headline=3, supporting=2, setup=1`. `not_applicable` claims are excluded from both the numerator and denominator.
+Veritas extracts each paper's own claims and checks them one at a time against
+the evidence the run produced. The **Replication Score** is a tier-weighted
+average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`,
+`not_attempted=0.0`) with tier weights `headline=3, supporting=2, setup=1`.
+`not_applicable` claims are excluded.
 
-## Features
-
-- **Active fix-and-continue replication**: The agent patches deprecated APIs, installs missing tools, and adjusts configurations — then reports what it changed
-- **Fix severity assessment**: A separate LLM pass rates each fix (minor/major/critical) so results are honest about what it took to reproduce
-- **Per-claim verification**: Each paper claim is adjudicated independently against produced evidence (5 typed shapes: scalar, scalar_range, table, qualitative, figure)
-- **Replication Score**: A single tier-weighted number summarising whether the paper's claims were reproduced
-- **Resumable pipeline**: Completed phases are checkpointed; the verify phase additionally resumes per-claim (a death after claim 17 doesn't redo 1-16)
-- **Streaming JSONL transcripts**: Every provider invocation streams a structured event log to disk for post-hoc inspection and debugging
-- **Docker-based replication**: Code runs inside a CUDA-enabled container; the original repo stays read-only
-- **Multi-provider support**: Works with Claude Code, Codex CLI, and Gemini CLI
-- **Scoped extraction**: `--scope main` (default) extracts headline+supporting claims; `--scope full` coming soon
-- **Three input modes**: paper+repo, paper-only (code generated from the paper), or repo-only (claims extracted from the README)
-- **Cross-platform**: Windows, macOS, and Linux (GPU acceleration on Linux with NVIDIA)
-
-## Installation
-
-Two ways to run veritas. **Docker is the default**; **host mode** is for
-environments without docker (HPC clusters, managed compute).
-
-### Docker (default)
-
-You need Docker. Nothing else — no Python, no pandoc, no LaTeX, no provider CLI on the host.
-
-```bash
-git clone https://github.com/ChicagoHAI/veritas.git
-cd veritas
-./veritas setup             # one-shot: prereqs, image, login, .env
-./veritas replicate --paper your_paper.pdf --repo your_repo/
-```
-
-On first run, `./veritas` pulls `ghcr.io/chicagohai/veritas:latest` (~3GB) from GitHub Container Registry. Subsequent runs are instant.
-
-Linux/macOS users: after cloning, the shell scripts are already marked executable in the git index. If you somehow ended up with non-executable scripts, run `chmod +x veritas docker/run.sh scripts/test_docker.sh`.
-
-Apple Silicon users: the wrapper automatically passes `--platform linux/amd64` because `nvidia/cuda` base images have no arm64 build. Rosetta emulation handles it.
-
-### Host mode (no docker)
-
-For environments where docker is unavailable (HPC clusters etc.), the
-`veritas-host` wrapper runs the same pipeline directly on the host. You
-provide the runtime: claude/codex/gemini CLI, python 3.10+, uv, and any
-package managers the agent might call (apt/conda/module). Same flags as
-the docker wrapper:
-
-```bash
-pip install -e .                                                # one-time
-./veritas-host replicate --paper paper.pdf --repo ./code --output ./run-1
-```
-
-The wrapper copies `templates/skills/` to `<--output>/veritas-skills/` so
-the agent never sees the veritas source tree, copies `--repo` to
-`<--output>/replication/codebase/` so the agent edits a copy rather than
-your original, and writes `codebase.diff` on exit (same outputs as the
-docker version). See `veritas-host --help`.
-
-## Replication API keys (`.env`)
-
-Veritas's own LLM provider (Claude / Codex / Gemini CLI) signs in via OAuth — no host env vars needed. But papers that call LLM APIs from inside their own code (e.g. hypogenic, PaperBench-style runs) need raw keys like `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in their environment.
-
-Veritas reads keys from a `.env` file at the repo root and passes them into the replication container via `--env-file`:
-
-```bash
-cp .env.example .env
-chmod 600 .env
-$EDITOR .env          # uncomment and set any keys your paper needs
-
-./veritas replicate --paper paper.pdf --repo ./my-project
-```
-
-Or use the interactive UX:
-
-```bash
-./veritas setup       # one-shot: prereqs, image, login, .env
-./veritas config      # edit .env via masked-input menu later
-```
-
-`./veritas status` reports whether `.env` is present. The keys are scoped to the replicate phase only — every other phase gets a stripped subprocess env.
-
-> **Windows note:** `chmod 600` only toggles NTFS's read-only bit on Git Bash; full POSIX owner-only semantics are not available. If you're on a shared Windows host, set the file's NTFS ACL manually.
+The score is computed by code, not by a model. For numeric and table claims the
+verify phase splits in two: the LLM **comparator** extracts the value the run
+produced, and a deterministic **grader** decides the verdict from that value
+against the paper value and a declared tolerance. Each verdict records how it was
+graded. Qualitative and figure claims, which have no number to compute on, keep
+the comparator's judgment.
 
 ## Commands
 
 ```bash
-./veritas replicate --paper p.pdf --repo ./myrepo    # full pipeline
-./veritas replicate --repo ./myrepo --scope main     # headline+supporting claims (default)
-./veritas replicate --repo ./myrepo --provider codex  # use a different provider
-./veritas replicate --repo ./myrepo --restart        # discard prior state and start fresh
-./veritas replicate --paper p.pdf --data ./prepositioned-data  # mount data at /workspace/data/ (read-only)
-./veritas extract-plan paper.pdf                     # plan only
-./veritas report ./replicate                          # regenerate report
-./veritas shell                                      # interactive container
-./veritas setup                                      # one-shot prereqs + image + login + .env
-./veritas config                                     # edit .env via masked-input menu
-./veritas login claude                               # provider OAuth
-./veritas status                                     # dashboard
-./veritas update                                     # pull latest image
-./veritas build                                      # build image locally
-./veritas help
+./veritas --paper p.pdf --repo ./myrepo     # full pipeline (the default)
+./veritas full --paper p.pdf --repo ./myrepo  # same thing, named
+./veritas replicate --repo ./myrepo         # replication only, for benchmarking
+./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
+./veritas report ./myrepo/replicate         # re-render the report (no LLM)
+./veritas extract-plan paper.pdf            # plan-only sketch
+./veritas shell                             # interactive container
+./veritas setup                             # one-shot prereqs + image + login + .env
+./veritas status                            # dashboard
+./veritas build | update                    # build locally | pull latest image
 ```
+
+- **`full`** (and the bare `./veritas <inputs>`) runs everything: replicate +
+  evaluate + the styled report. This is the normal way to use Veritas.
+- **`replicate`** stops after verify and skips the evaluation manager. This is
+  the lean mode for benchmarking, where an external harness scores the verdicts.
+- **`evaluate <dir>`** runs the manager and renders the report on a directory a
+  prior `replicate` produced, without re-running the pipeline. Replicate once,
+  evaluate later.
 
 Run `./veritas replicate --help` for the full option list.
 
 ### Input modes
 
-Veritas supports three input modes (the `--mode` flag, which auto-detects from the supplied inputs by default):
+`--mode` (auto-detected by default):
+- `full` — paper + repo. Claims from the paper; replication runs the repo.
+- `paper-only` — paper only. Veritas writes the code from the paper, then runs it.
+- `repo-only` — repo only. Claims come from the README.
 
-- `--mode full` — paper PDF + repo provided (default when both are supplied).
-- `--mode paper-only` — paper PDF only. Veritas writes code from the paper in a new codegen phase, then runs it.
-- `--mode repo-only` — repo only. Claims are extracted from the repo's README.
+Other inputs: `--claims path.json` supplies hand-authored claims and skips
+extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
+so the agent uses local files instead of fetching from the network.
 
-Universal override: `--claims path/to/claims.json` accepts a hand-authored claims file in the same JSON schema as `<output>/analyze/paper_claims.json`; when supplied, automatic claim extraction is skipped.
+## The report
 
-Pre-positioned data: `--data path/to/data-dir` mounts the directory read-only at `/workspace/data/` inside the container. Codegen, plan, and replicate prompts announce the path so the agent uses these files instead of fetching from the network. Useful when the agent shouldn't have to procure data over the network (bandwidth, mirrored archives, benchmark comparisons).
+Every run writes three files to `<output>/report/`:
+- `replication_report.html` — the primary, human-facing report. Self-contained;
+  open it by double-clicking. A verdict card up top (score gauge, a
+  reproduced / partially reproduced / not reproduced badge, a one-line bottom
+  line, key counts), a claims-at-a-glance bar, the manager's summary and
+  analysis, a limitations section, and collapsible details.
+- `replication_report.pdf` — the same report as a PDF, for sharing.
+- `replication_report.md` — the machine-readable source.
 
-Note: `--mode` (input mode) is distinct from `--scope` (claim-extraction scope: `main` or `full`).
+The verdict card and all tables are computed deterministically from the score and
+verdicts. The narrative is written by the evaluation manager and is advisory: it
+explains the result but never changes the score. If the manager pass did not run
+(e.g. a `replicate`-only benchmark run), the report still renders from the
+deterministic parts.
 
-## Resuming Runs
+## Installation
 
-A full replication can run for an hour or more, and Docker crashes, OOM kills, network hiccups, and Ctrl+C all happen. After each phase completes, Veritas writes its status to `<output>/.veritas/pipeline_state.json`. Re-invoking `replicate` against the same `--output` directory auto-detects that state and skips phases that already completed — analyze, codegen (paper-only mode), plan, replicate, assess_fixes, and verify are all tracked. The verify phase additionally records per-claim sub-completion so a half-finished verification pass resumes at the next un-verified claim.
+Two ways to run Veritas. **Docker is the default**; **host mode** is for
+environments without docker (HPC clusters, managed compute).
 
-Resume is automatic and prints a banner so the skip behavior isn't a surprise. Pass `--restart` to discard the state file and run everything from scratch.
+### Docker (default)
 
-## Claim Types and Tiers
+```bash
+git clone https://github.com/ChicagoHAI/veritas.git
+cd veritas
+./veritas setup                              # prereqs, image, login, .env
+./veritas --paper your_paper.pdf --repo your_repo/
+```
 
-Veritas extracts claims into five shape-typed categories. Each claim also carries a tier that determines its weight in the Replication Score.
+The first run pulls `ghcr.io/chicagohai/veritas:latest` from GitHub Container
+Registry. The image bakes in Python, the provider CLIs, R + LaTeX, and WeasyPrint
+(for the PDF). Apple Silicon: the wrapper passes `--platform linux/amd64`
+automatically.
 
-| Claim Type | Use for | Verifier behavior |
-|-----------|---------|-------------------|
-| **scalar** | A single numerical result | Compare to paper_value within tolerance (5% match, 30% partial) |
-| **scalar_range** | A numerical range or set | Check range overlap or set containment |
-| **table** | A tabular result with rows × cols | Per-cell comparison |
-| **qualitative** | A descriptive observation | Paraphrase-match between description and observed behavior |
-| **figure** | A paper figure the code produces | Read the figure file (multimodal); structural match against described features |
+### Host mode (no docker)
+
+```bash
+pip install -e .                             # one-time, into a venv
+./veritas-host --paper paper.pdf --repo ./code --output ./run-1
+./veritas-host evaluate ./run-1              # same subcommands as the docker wrapper
+```
+
+The host wrapper stages the same workspace the container would and runs the same
+pipeline. It resolves the Python that has the deps (an installed `veritas`, the
+repo's `.venv`, or `uv run`).
+
+## Replication API keys (`.env`)
+
+Veritas's own provider (Claude / Codex / Gemini CLI) signs in via OAuth. Papers
+that call LLM APIs from inside their own code need raw keys (e.g.
+`OPENAI_API_KEY`) in a `.env` file at the repo root:
+
+```bash
+cp .env.example .env && chmod 600 .env
+$EDITOR .env
+```
+
+Keys are passed into the container only on the replicate phase, which runs the
+paper's code. Every other phase gets a stripped environment.
+
+## Claim types and tiers
+
+Five shape-typed claim categories; each claim carries a tier that sets its weight.
+
+| Claim Type | Use for | How it's graded |
+|-----------|---------|-----------------|
+| **scalar** | A single number | Deterministic: rel. error (5% match, 30% partial), or ±1σ/±2σ when an uncertainty is given |
+| **scalar_range** | A range or set | Deterministic: containment / overlap |
+| **table** | A table of values | Deterministic: per-cell, keyed by the exact question labels |
+| **qualitative** | A described behavior | LLM paraphrase-match |
+| **figure** | A produced figure | LLM structural match (reads the figure file) |
 
 | Tier | Weight | Use for |
 |------|--------|---------|
-| **headline** | 3 | The paper's central reproducible result (typically 1-3 per paper) |
-| **supporting** | 2 | Intermediate measurements, secondary figures, qualitative observations |
+| **headline** | 3 | The paper's central result (usually 1-3 per paper) |
+| **supporting** | 2 | Intermediate measurements, secondary figures |
 | **setup** | 1 | Borderline configuration assertions (rare) |
 
-## Output Structure
-
-After a replication run, the output directory is organized by pipeline phase:
+## Output structure
 
 ```
 replicate/
-├── analyze/
-│   ├── paper_claims.json                    # Structured paper claims
-│   ├── replication_plan.json                # Claim-aware replication plan
-│   ├── paper_claims_transcript.jsonl
-│   └── replication_plan_transcript.jsonl
-├── replication/
-│   ├── codebase/                            # Patched repo (writable copy with agent's fixes)
-│   ├── codebase.diff                        # Unified diff of all changes the agent made
-│   ├── replication_log.json                 # Step-by-step execution log with fix records
-│   ├── evidence_summary.json
-│   └── replication_transcript.jsonl
-├── assess/
-│   ├── fix_severity.json                    # Fix severity ratings (minor/major/critical)
-│   └── fix_severity_transcript.jsonl
-├── verify/
-│   ├── C1.json                              # Per-claim structured verdict
-│   ├── C1_transcript.jsonl                  # Per-claim verifier transcript
-│   ├── C2.json
-│   ├── ...
-│   ├── verdicts.json                        # Aggregated verdicts
-│   └── replication_score.json               # Replication Score + tier breakdown
-├── report/
-│   ├── replication_report.md
-│   └── replication_report.pdf
-├── prompts/                                 # Debug: rendered prompts sent to the LLM
-└── .veritas/
-    └── pipeline_state.json                  # Resume checkpoint (schema_version=3)
+├── analyze/        paper_claims.json, replication_plan.json (+ transcripts)
+├── replication/    codebase/ (patched copy), codebase.diff, replication_log.json, evidence_summary.json
+├── assess/         fix_severity.json
+├── verify/         <claim_id>.json (per claim, with the grading rule), verdicts.json, replication_score.json
+├── evaluation/     contextual_evaluation.json  (the manager's notes; product runs only)
+├── report/         replication_report.{html,pdf,md}
+├── prompts/        rendered prompts (debug)
+└── .veritas/       pipeline_state.json (resume checkpoint)
 ```
 
-## Docker Container
+## Resuming runs
 
-The replication container is a CUDA 12.5.1 multi-stage build with:
-- Python 3.12 (via uv)
-- Node.js 22
-- Claude Code, Codex CLI, and Gemini CLI pre-installed
-- libcudnn8 for deep learning workloads
-
-### GPU Support
-
-GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and only works on Linux with NVIDIA GPUs. When detected, `./veritas` passes `--gpus all` to the container automatically. On all other platforms (Windows, macOS, Linux without NVIDIA), the container runs in CPU-only mode.
-
-### Credentials
-
-Veritas mounts your AI CLI credential directories (`~/.claude`, `~/.codex`, `~/.gemini`) into the container so the agent can authenticate. Run `./veritas login <provider>` to set up credentials before your first replication run.
-
-### Environment Variables
-
-API keys consumed by the paper's own code (e.g. `OPENAI_API_KEY`) are loaded from a `.env` file at the repo root and passed in via `--env-file`. See [Replication API keys](#replication-api-keys-env) above for setup details.
-
-## Configuration
-
-### Using with Different Providers
-
-```bash
-./veritas replicate --repo ./project --paper paper.pdf --provider claude   # default
-./veritas replicate --repo ./project --paper paper.pdf --provider codex
-./veritas replicate --repo ./project --paper paper.pdf --provider gemini
-```
+After each phase, Veritas writes its state to `<output>/.veritas/`. Re-invoking
+against the same `--output` directory skips completed phases. Verify resumes per
+claim. Pass `--restart` to start fresh.
 
 ## Acknowledgments
 
-- Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo)
+- Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo).
