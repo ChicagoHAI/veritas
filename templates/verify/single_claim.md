@@ -63,6 +63,24 @@ underlying computation is correct — avoid both:
   doubt, report the value as the produced evidence prints it, trimmed of
   spurious trailing float noise.
 
+## How your verdict is used (read first)
+
+For **scalar / scalar_range / table** claims you are the **comparator**: your job
+is to extract the replicated value *accurately and objectively* into `structured`.
+A separate deterministic grader (not an LLM) then decides `match | partial |
+no_match` from your extracted value against `paper_value` and the declared
+tolerances — so your numeric `status` is only a proposal and **will be
+re-derived from your `structured` values**. Get the *values, keys, and
+uncertainty* right; the pass/fail is computed, not argued. The rules below tell
+you what that grader will compute, so you can sanity-check your extraction.
+
+For **qualitative / figure** claims there is no number to compute on, so **your
+`status` is authoritative** — judge carefully.
+
+In all cases set `value_found` honestly: `true` only if this run actually
+produced a value/figure to compare; `false` (→ not_attempted) if it did not.
+Never guess a value to fill the slot.
+
 ## Type-Specific Adjudication Rules
 
 {% if claim.type == "scalar" %}
@@ -74,13 +92,15 @@ underlying computation is correct — avoid both:
 - `not_attempted` — relevant evidence files were never produced.
 - `not_applicable` — the claim isn't checkable from this run's evidence in principle (set `n_a_reason`).
 
-Populate `structured`::
+Populate `structured`:: (the grader reads these exact fields)
 
     {
-      "replicated_value": <number or list>,
-      "paper_value": <number or list, copied from the claim>,
-      "relative_error": <fraction or list of fractions>,
-      "within_tolerance": <true|false>
+      "replicated_value": <number or list — what THIS run produced; null if none>,
+      "paper_value": <number or list, copied verbatim from the claim>,
+      "uncertainty": <the 1σ uncertainty as a single number if the claim conveys
+                      one (from a ± marker, an *_sigma/*_err field, or a high/low
+                      range), else null>,
+      "value_found": <true|false>
     }
 
 {% elif claim.type == "scalar_range" %}
@@ -91,13 +111,12 @@ Populate `structured`::
 - `no_match` — no overlap.
 - `not_attempted` / `not_applicable` — as for scalar.
 
-Populate `structured`::
+Populate `structured`:: (the grader reads these exact fields)
 
     {
-      "replicated_value": <value or range>,
-      "paper_range": <copied from claim>,
-      "overlap_fraction": <float in [0,1]>,
-      "within_range": <true|false>
+      "replicated_value": <number or list of numbers this run produced; null if none>,
+      "paper_range": <[low, high], copied from the claim>,
+      "value_found": <true|false>
     }
 
 {% elif claim.type == "table" %}
@@ -115,14 +134,26 @@ not by row order or position. For an **asymmetric** matrix (where cell [A][B] �
 designates, not its transpose. Report the value under the exact key the claim
 uses for that question.
 
-Populate `structured`::
+Populate `structured`:: (the grader compares per key — prefer flat dicts)
 
     {
-      "replicated_table": {"columns": [...], "rows": [...]},
-      "paper_table": <copied from claim's paper_value>,
-      "per_cell_matches": [[bool, ...], ...],
-      "match_fraction": <float in [0,1]>
+      "replicated_table": {"<exact key1>": <number>, "<exact key2>": <number>, ...},
+      "paper_table": {"<exact key1>": <number>, ...},
+      "value_found": <true|false>
     }
+
+Build BOTH dicts keyed by the claim's **exact** question keys (copied verbatim —
+see Answer Fidelity); the grader matches `replicated_table[key]` against
+`paper_table[key]` per key, so a mutated or missing key fails that cell.
+
+**Use the flat `{key: number}` shape whenever the table can be expressed that
+way — it almost always can** (per-question answers, per-label rows, a single
+cell). Only when the values are genuinely non-scalar or the table truly cannot be
+flattened, fall back to `{"columns": [...], "rows": [...]}` and set `status`
+yourself (the grader then keeps your judgment). Prefer the flat shape: it routes
+the verdict through the deterministic grader, which is the reliable, auditable
+path — emitting `{columns, rows}` for a flattenable table needlessly drops back
+to a subjective judgment.
 
 {% elif claim.type == "qualitative" %}
 **Qualitative claim** — paraphrase-match between the claim's described behavior and what the evidence shows.

@@ -150,6 +150,10 @@ class ClaimVerdict:
     rationale: str = ""
     evidence_refs: List[str] = field(default_factory=list)
     n_a_reason: Optional[str] = None  # populated only when status == "not_applicable"
+    # How the status was decided: "deterministic" (graded by core.grading from
+    # the comparator's extracted value) or "llm" (the comparator's own judgment,
+    # used for qualitative/figure claims and non-gradable table shapes).
+    graded_by: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -161,6 +165,8 @@ class ClaimVerdict:
         }
         if self.n_a_reason is not None:
             d["n_a_reason"] = self.n_a_reason
+        if self.graded_by is not None:
+            d["graded_by"] = self.graded_by
         return d
 
     @classmethod
@@ -172,6 +178,7 @@ class ClaimVerdict:
             rationale=data.get("rationale", ""),
             evidence_refs=data.get("evidence_refs", []),
             n_a_reason=data.get("n_a_reason"),
+            graded_by=data.get("graded_by"),
         )
 
 

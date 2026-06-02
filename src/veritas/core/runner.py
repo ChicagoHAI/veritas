@@ -871,9 +871,49 @@ class ReplicationRunner:
             print(f"  Warning: could not parse verdict for {claim.id}: {e}")
             return None
 
+        # Verifier split: the LLM above is the *comparator* (it extracts the
+        # replicated value). For deterministically-gradable claim types, re-derive
+        # the status from that value with the LLM-free grader, so the entity that
+        # produced the value does not also grade it (independence + auditability).
+        verdict = self._apply_deterministic_grade(claim, verdict)
+
         output_json_path.write_text(
             json.dumps(verdict.to_dict(), indent=2), encoding='utf-8'
         )
+        return verdict
+
+    def _apply_deterministic_grade(
+        self, claim: PaperClaim, verdict: ClaimVerdict
+    ) -> ClaimVerdict:
+        """Re-grade a numeric/table claim deterministically from the comparator's
+        extracted value; passthrough for qualitative/figure and non-gradable
+        shapes. Records grading provenance in ``structured['grading']`` and sets
+        ``graded_by``."""
+        from veritas.core.grading import grade_claim, GradingTolerances, DETERMINISTIC_TYPES
+
+        # not_applicable is a structural call the comparator owns; never override.
+        if claim.type not in DETERMINISTIC_TYPES or verdict.status == "not_applicable":
+            verdict.graded_by = verdict.graded_by or "llm"
+            return verdict
+
+        tol = GradingTolerances()
+        status, why, graded_by = grade_claim(claim.type, verdict.structured, verdict.status, tol)
+
+        verdict.structured = dict(verdict.structured or {})
+        verdict.structured["grading"] = {
+            "deterministic_status": status if graded_by == "deterministic" else None,
+            "comparator_proposed_status": verdict.status,
+            "rule": why,
+            "graded_by": graded_by,
+            "tolerances": tol.to_dict(),
+        }
+        if graded_by == "deterministic" and status != verdict.status:
+            print(f"    {claim.id}: comparator said {verdict.status}, grader says {status} ({why})")
+        comparator_rationale = verdict.rationale
+        verdict.status = status
+        verdict.graded_by = graded_by
+        if graded_by == "deterministic":
+            verdict.rationale = f"[deterministic grade] {why}. Comparator notes: {comparator_rationale}"
         return verdict
 
     def _load_verdict(self, claim_id: str) -> Optional[ClaimVerdict]:
