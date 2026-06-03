@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from veritas.core.config import Config
-from veritas.core.diligence import DiligenceSignals
+from veritas.core.diligence import ExecutionFacts
 from veritas.core.manager import ManagerVerdict
 from veritas.core.models.replication import (
     ExecutionEvidence,
@@ -53,17 +53,18 @@ def _plan():
     )
 
 
-def _neg_signals():
-    s = DiligenceSignals()
-    s.looks_diligent = False
-    s.hard_negative_reasons = ["premature stop"]
-    return s
+def _neg_facts():
+    f = ExecutionFacts()
+    f.failed_steps = 1
+    f.failed_step_ids = [1]
+    return f
 
 
-def _clean_signals():
-    s = DiligenceSignals()
-    s.looks_diligent = True
-    return s
+def _clean_facts():
+    f = ExecutionFacts()
+    f.executed_steps = 1
+    f.succeeded_steps = 1
+    return f
 
 
 def test_loop_off_single_pass(tmp_path, monkeypatch):
@@ -76,7 +77,7 @@ def test_loop_off_single_pass(tmp_path, monkeypatch):
 
     def fake_replicate(plan, manager_guidance=None):
         calls["replicate"] += 1
-        runner._last_signals = _clean_signals()
+        runner._last_facts = _clean_facts()
         return _evidence()
 
     def fake_review(*a, **k):
@@ -103,7 +104,7 @@ def test_loop_accepts_iteration_1(tmp_path, monkeypatch):
 
     def fake_replicate(plan, manager_guidance=None):
         calls["replicate"] += 1
-        runner._last_signals = _neg_signals()  # force the LLM gate path
+        runner._last_facts = _neg_facts()  # manager always runs
         return _evidence()
 
     monkeypatch.setattr(runner, "_replicate", fake_replicate)
@@ -141,7 +142,7 @@ def test_loop_revise_then_accept_archives_and_injects_guidance(tmp_path, monkeyp
         (cfg.replication_dir / "replication_log.json").write_text(
             json.dumps({"attempt": replicate_calls["n"]}), encoding="utf-8"
         )
-        runner._last_signals = _neg_signals()
+        runner._last_facts = _neg_facts()
         return _evidence()
 
     reviews = iter([
@@ -195,7 +196,7 @@ def test_loop_cap_writes_handoff(tmp_path, monkeypatch):
         (cfg.replication_dir / "replication_log.json").write_text(
             json.dumps({"a": n["i"]}), encoding="utf-8"
         )
-        runner._last_signals = _neg_signals()
+        runner._last_facts = _neg_facts()
         return _evidence()
 
     monkeypatch.setattr(runner, "_replicate", fake_replicate)
@@ -267,7 +268,7 @@ def test_loop_no_progress_terminates_early(tmp_path, monkeypatch):
 
     def fake_replicate(plan, manager_guidance=None):
         n["i"] += 1
-        runner._last_signals = _neg_signals()  # never improves
+        runner._last_facts = _neg_facts()  # never improves
         return _evidence()
 
     monkeypatch.setattr(runner, "_replicate", fake_replicate)

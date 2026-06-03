@@ -1,17 +1,17 @@
 """Unit tests for the manager-controlled retry loop (Phase 2).
 
 Covers the deterministic, LLM-free pieces the design requires to be
-trustworthy: verdict parsing/normalization, the deterministic short-circuit,
-the termination predicate (accept / cap / no-progress), no-progress signal
-comparison, archival, the workflow-log writer, and the graceful hand-off.
+trustworthy: verdict parsing/normalization, the termination predicate (accept /
+cap / no-progress), the no-progress comparison over OBJECTIVE EXECUTION FACTS,
+archival, the workflow-log writer, and the graceful hand-off.
+
+There is no deterministic short-circuit-accept anymore: the manager (LLM) always
+judges diligence. The facts here drive only the mechanical no-progress check.
 """
 
 from __future__ import annotations
 
-from veritas.core.diligence import (
-    DiligenceSignals,
-    StepCoverageSignal,
-)
+from veritas.core.diligence import ExecutionFacts
 from veritas.core.manager import (
     DECISION_ACCEPT,
     DECISION_REVISE,
@@ -23,7 +23,7 @@ from veritas.core.manager import (
     WorkflowLog,
     archive_attempt,
     build_handoff,
-    deterministic_accept,
+    facts_improved,
     parse_manager_verdict,
     should_stop,
     signals_improved,
@@ -32,20 +32,25 @@ from veritas.core.manager import (
 # --- helpers ----------------------------------------------------------------
 
 
-def _clean_signals() -> DiligenceSignals:
-    s = DiligenceSignals()
-    s.looks_diligent = True
-    s.hard_negative_reasons = []
-    s.advisory_flags = []
-    return s
+def _clean_facts() -> ExecutionFacts:
+    f = ExecutionFacts()
+    f.planned_steps = 2
+    f.executed_steps = 2
+    f.succeeded_steps = 2
+    return f
 
 
-def _negative_signals(missing_steps=None, hard_reasons=None) -> DiligenceSignals:
-    s = DiligenceSignals()
-    s.looks_diligent = False
-    s.hard_negative_reasons = hard_reasons or ["premature stop: 2 failed steps"]
-    s.step_coverage = StepCoverageSignal(missing_step_ids=missing_steps or [])
-    return s
+def _negative_facts(missing_steps=None, failed_steps=1) -> ExecutionFacts:
+    f = ExecutionFacts()
+    f.missing_step_ids = missing_steps or []
+    f.failed_steps = failed_steps
+    f.failed_step_ids = list(range(1, failed_steps + 1))
+    return f
+
+
+# Back-compat aliases used by tests below.
+_clean_signals = _clean_facts
+_negative_signals = _negative_facts
 
 
 # --- verdict parsing --------------------------------------------------------
@@ -124,56 +129,46 @@ def test_parse_unknown_target_phase_nulled_on_accept():
     assert v.target_phase is None
 
 
-# --- deterministic short-circuit -------------------------------------------
+# --- no-progress comparison over objective execution facts ------------------
+#
+# There is no deterministic short-circuit-accept: the manager always judges.
+# These tests only cover the mechanical "did the run make headway?" check.
 
 
-def test_deterministic_accept_on_clean_signals():
-    v = deterministic_accept(_clean_signals())
-    assert v is not None
-    assert v.accepted
-    assert v.source == "deterministic"
+def test_facts_improved_when_failed_steps_drop():
+    prev = _negative_facts(failed_steps=2)
+    curr = _negative_facts(failed_steps=1)
+    assert facts_improved(prev, curr) is True
+    # legacy alias points at the same function
+    assert signals_improved is facts_improved
 
 
-def test_deterministic_no_shortcircuit_on_hard_negative():
-    assert deterministic_accept(_negative_signals()) is None
+def test_facts_not_improved_when_identical():
+    prev = _negative_facts(failed_steps=2)
+    curr = _negative_facts(failed_steps=2)
+    assert facts_improved(prev, curr) is False
 
 
-def test_deterministic_no_shortcircuit_on_advisory_flag():
-    s = _clean_signals()
-    s.advisory_flags = ["possible downsizing in steps [3]"]
-    # diligent but advisory -> ambiguous -> ask the LLM, never auto-accept.
-    assert deterministic_accept(s) is None
+def test_facts_improved_when_evidence_appears():
+    prev = ExecutionFacts(no_evidence=True)
+    curr = _negative_facts(failed_steps=1)
+    assert facts_improved(prev, curr) is True
 
 
-# --- no-progress signal comparison ------------------------------------------
+def test_facts_improved_when_missing_steps_drop():
+    prev = _negative_facts(missing_steps=[2, 3], failed_steps=1)
+    curr = _negative_facts(missing_steps=[3], failed_steps=1)
+    assert facts_improved(prev, curr) is True
 
 
-def test_signals_improved_when_hard_negatives_drop():
-    prev = _negative_signals(hard_reasons=["a", "b"])
-    curr = _negative_signals(hard_reasons=["a"])
-    assert signals_improved(prev, curr) is True
+def test_facts_improved_when_output_gaps_drop():
+    prev = ExecutionFacts(steps_without_output_files=[2, 3])
+    curr = ExecutionFacts(steps_without_output_files=[3])
+    assert facts_improved(prev, curr) is True
 
 
-def test_signals_not_improved_when_identical():
-    prev = _negative_signals(hard_reasons=["a", "b"])
-    curr = _negative_signals(hard_reasons=["a", "b"])
-    assert signals_improved(prev, curr) is False
-
-
-def test_signals_improved_when_flips_to_diligent():
-    prev = _negative_signals()
-    curr = _clean_signals()
-    assert signals_improved(prev, curr) is True
-
-
-def test_signals_improved_when_missing_steps_drop():
-    prev = _negative_signals(missing_steps=[2, 3], hard_reasons=["x"])
-    curr = _negative_signals(missing_steps=[3], hard_reasons=["x"])
-    assert signals_improved(prev, curr) is True
-
-
-def test_signals_improved_none_baseline():
-    assert signals_improved(None, _negative_signals()) is True
+def test_facts_improved_none_baseline():
+    assert facts_improved(None, _negative_facts()) is True
 
 
 # --- termination predicate --------------------------------------------------
@@ -199,8 +194,8 @@ def test_should_stop_at_cap_without_accept():
 
 
 def test_should_continue_when_progress_and_budget():
-    prev = _negative_signals(hard_reasons=["a", "b"])
-    curr = _negative_signals(hard_reasons=["a"])  # improved
+    prev = _negative_facts(failed_steps=2)
+    curr = _negative_facts(failed_steps=1)  # improved
     d = should_stop(
         verdict=ManagerVerdict(decision="revise", directive="new thing"),
         iteration=1, max_iters=3,
@@ -211,7 +206,7 @@ def test_should_continue_when_progress_and_budget():
 
 def test_should_stop_no_progress_repeated_directive():
     # No improvement AND the directive repeats -> stuck terminator fires.
-    sig = _negative_signals(hard_reasons=["a", "b"])
+    sig = _negative_facts(failed_steps=2)
     d = should_stop(
         verdict=ManagerVerdict(decision="revise", directive="do the SAME thing"),
         iteration=2, max_iters=5,
@@ -221,7 +216,7 @@ def test_should_stop_no_progress_repeated_directive():
 
 
 def test_no_progress_not_triggered_when_directive_changes():
-    sig = _negative_signals(hard_reasons=["a", "b"])
+    sig = _negative_facts(failed_steps=2)
     d = should_stop(
         verdict=ManagerVerdict(decision="revise", directive="a brand new approach"),
         iteration=2, max_iters=5,
@@ -308,14 +303,17 @@ def test_workflow_handoff_roundtrip(tmp_path):
 
 
 def test_build_handoff_cap():
-    sig = _negative_signals(hard_reasons=["premature stop: 2 failed steps"])
+    # Objective facts: step 3 failed (nonzero exit) and a planned step is missing.
+    sig = ExecutionFacts(missing_step_ids=[4], failed_steps=1, failed_step_ids=[3])
     v = ManagerVerdict(decision="revise", reason="still failing on step 3",
                        directive="get the data", deficiency_is_genuine="deficient")
     h = build_handoff(iteration=3, verdict=v, signals=sig, stop_reason="cap")
     assert h["resolved"] is False
     assert h["stop_reason"] == "cap"
     assert "step 3" in h["where_it_falls_short"]
-    assert "premature stop" in h["where_it_falls_short"]
+    # The objective facts are grounded into the hand-off.
+    assert "nonzero exit code" in h["where_it_falls_short"]
+    assert "[3]" in h["where_it_falls_short"]
     assert h["what_to_try_next"] == "get the data"
 
 
