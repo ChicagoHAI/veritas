@@ -120,8 +120,15 @@ class PromptGenerator:
         mode: str = "full",
         claim_scope: str = "main",
         data_path: Optional[Path] = None,
+        manager_guidance: Optional[object] = None,
     ) -> str:
-        """Generate prompt for creating a replication plan that targets claim IDs."""
+        """Generate prompt for creating a replication plan that targets claim IDs.
+
+        ``manager_guidance`` (a ``ManagerGuidance``) is set only on a
+        manager-directed re-run that targets the plan phase; the template's
+        ``{% if manager_guidance %}`` block then states the deficiency and the
+        specific new instructions so the regenerated plan is genuinely different.
+        """
         template = self.env.get_template("replication/plan_generation.md")
         context = {
             **self._runtime_paths_context(
@@ -134,6 +141,7 @@ class PromptGenerator:
             "mode": mode,
             "claim_scope": claim_scope,
             "has_data": data_path is not None,
+            "manager_guidance": manager_guidance,
         }
         return template.render(**context)
 
@@ -145,8 +153,15 @@ class PromptGenerator:
         repo_path: Optional[Path] = None,
         mode: str = "full",
         data_path: Optional[Path] = None,
+        manager_guidance: Optional[object] = None,
     ) -> str:
-        """Generate session instructions for the replication agent."""
+        """Generate session instructions for the replication agent.
+
+        ``manager_guidance`` (a ``ManagerGuidance``) is set only on a
+        manager-directed re-run; the template's ``{% if manager_guidance %}``
+        block then prepends the deficiency + specific new instructions + what was
+        already tried, so the re-run is genuinely different (never a blank repeat).
+        """
         template = self.env.get_template("replication/session_instructions.md")
         context = {
             **self._runtime_paths_context(
@@ -158,6 +173,7 @@ class PromptGenerator:
             "has_repo": repo_path is not None,
             "mode": mode,
             "has_data": data_path is not None,
+            "manager_guidance": manager_guidance,
         }
         return template.render(**context)
 
@@ -217,6 +233,31 @@ class PromptGenerator:
         }
         if paper_path is not None:
             context["paper_path"] = str(Path(paper_path).absolute())
+        return template.render(**context)
+
+    def generate_manager_review_prompt(
+        self,
+        output_dir: Path,
+        retries_remaining: int,
+        iteration: int,
+        manager_guidance: Optional[object] = None,
+    ) -> str:
+        """Generate the post-replicate manager-review (control-gate) prompt.
+
+        Independent critic pass (fresh context, API keys stripped — it must not
+        run paper code): reads the trajectory + evidence + diligence signals and
+        emits a structured accept/revise verdict. Distinct from the post-verify
+        contextual-evaluation report author. ``manager_guidance`` is the prior
+        iteration's directive (so the manager can check whether it was followed);
+        ``retries_remaining`` is the soft budget signal (hard cap is in code).
+        """
+        template = self.env.get_template("manager/replication_review.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "retries_remaining": retries_remaining,
+            "iteration": iteration,
+            "manager_guidance": manager_guidance,
+        }
         return template.render(**context)
 
     def generate_insufficient_spec_report(
