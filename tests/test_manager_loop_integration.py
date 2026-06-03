@@ -227,6 +227,35 @@ def test_loop_cap_writes_handoff(tmp_path, monkeypatch):
     assert "UNRESOLVED HAND-OFF" in md
 
 
+def test_loop_resume_skips_when_already_converged(tmp_path, monkeypatch):
+    """Resume: replicate completed + a prior accept in the log -> no re-review."""
+    from veritas.core.manager import WorkflowLog
+    cfg = _make_config(tmp_path, max_iters=3)
+    runner = ReplicationRunner(cfg)
+    state = PipelineState(cfg.output_dir)
+    state.start_stage("replicate")
+    state.complete_stage("replicate", success=True)
+    wf = WorkflowLog(cfg.veritas_state_dir)
+    wf.append({"iteration": 1, "phase": "replicate", "status": "completed"})
+    wf.append({
+        "iteration": 1, "phase": "manager_review", "status": "accept",
+        "manager_verdict": {"decision": "accept", "source": "llm"},
+    })
+    (cfg.replication_dir / "replication_log.json").write_text(
+        json.dumps({"step_outcomes": [], "environment": {}}), encoding="utf-8"
+    )
+
+    reviewed = {"n": 0}
+
+    def fake_review(*a, **k):
+        reviewed["n"] += 1
+        return ManagerVerdict()
+
+    monkeypatch.setattr(runner, "_manager_review", fake_review)
+    runner._replicate_with_manager_loop(state, None, _plan())
+    assert reviewed["n"] == 0  # converged loop is not re-entered on resume
+
+
 def test_loop_no_progress_terminates_early(tmp_path, monkeypatch):
     """Same directive + no signal improvement -> stop before the cap."""
     cfg = _make_config(tmp_path, max_iters=5)

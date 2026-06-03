@@ -782,8 +782,27 @@ class ReplicationRunner:
         if max_iters <= 1:
             return evidence, replication_plan
 
+        # --- Resume guard: a prior process already converged ----------------
+        # If replicate was skipped (already completed) AND the workflow log shows
+        # the loop already reached a terminal state (an accept verdict or a
+        # hand-off), do not re-run the manager — the trajectory is settled.
+        prior_records = workflow.records()
+        if state.is_stage_completed('replicate') and prior_records:
+            last_review = next(
+                (r for r in reversed(prior_records) if r.get("phase") == "manager_review"),
+                None,
+            )
+            already_accepted = (
+                last_review is not None
+                and (last_review.get("manager_verdict") or {}).get("decision") == "accept"
+            )
+            has_handoff = any(r.get("phase") == "handoff" for r in prior_records)
+            if already_accepted or has_handoff:
+                print("[OK] manager loop: skipped (already converged on a prior run)")
+                return evidence, replication_plan
+
         # --- Determine where we are in the loop (resume-aware) -------------
-        prior_runs = [r for r in workflow.records() if r.get("phase") == "replicate"]
+        prior_runs = [r for r in prior_records if r.get("phase") == "replicate"]
         iteration = len(prior_runs) if prior_runs else 1
         if iteration < 1:
             iteration = 1
@@ -1021,7 +1040,7 @@ class ReplicationRunner:
         # 1) Deterministic short-circuit — clean signals accept without an LLM.
         short = deterministic_accept(signals) if signals is not None else None
         if short is not None:
-            print(f"  Manager: deterministic ACCEPT (clean signals) — no LLM call")
+            print("  Manager: deterministic ACCEPT (clean signals) — no LLM call")
             return short
 
         # 2) Independent LLM review pass.
