@@ -21,14 +21,13 @@ from veritas.core.replication import (
     gather_evidence,
     _extract_json,
 )
-from veritas.core.diligence import compute_diligence_signals, DiligenceSignals
+from veritas.core.diligence import compute_execution_facts, ExecutionFacts
 from veritas.core.manager import (
     ManagerGuidance,
     ManagerVerdict,
     WorkflowLog,
     archive_attempt,
     build_handoff,
-    deterministic_accept,
     parse_manager_verdict,
     should_stop,
 )
@@ -113,9 +112,11 @@ class ReplicationRunner:
         self.config = config
         self.prompt_generator = PromptGenerator()
         self.report_generator = ReportGenerator()
-        # Last-computed diligence signals from the most recent _replicate call;
-        # consumed by the manager retry loop (None until replicate runs).
-        self._last_signals: Optional[DiligenceSignals] = None
+        # Last-computed objective execution facts from the most recent
+        # _replicate call; consumed by the manager retry loop (None until
+        # replicate runs). These are facts, not a diligence verdict — the
+        # manager does the judging.
+        self._last_facts: Optional[ExecutionFacts] = None
 
     def run(self) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
@@ -722,12 +723,14 @@ class ReplicationRunner:
         else:
             print("  Warning: No evidence collected from replication")
 
-        # Compute deterministic diligence signals over the replicate evidence and
-        # persist them (notes/2026-06-03-iterative-manager-design.md §4.2). The
-        # computed signals are stashed on the runner so the manager gate (when
-        # the loop is enabled) can consume them without recomputing. With
-        # ``max_iters == 1`` the gate never runs and this stays log-only.
-        self._last_signals = self._compute_and_write_diligence_signals(
+        # Compute objective execution facts over the replicate evidence and
+        # persist them. These are facts (step counts, exit codes, declared
+        # outputs, repeated commands) — NOT a diligence verdict; the manager
+        # judges diligence from these facts + the trajectory. The facts are
+        # stashed on the runner so the manager loop (when enabled) can consume
+        # them without recomputing. With ``max_iters == 1`` the loop never runs
+        # and this stays log-only.
+        self._last_facts = self._compute_and_write_execution_facts(
             evidence, replication_plan
         )
 
@@ -743,16 +746,17 @@ class ReplicationRunner:
     ) -> Tuple[Optional[ExecutionEvidence], Optional[ReplicationPlan]]:
         """Run replicate, then (when ``max_iters > 1``) the manager retry loop.
 
-        The loop sits AFTER replicate and BEFORE verify (notes §4.1). Each
-        iteration: compute deterministic diligence signals (already done inside
-        ``_replicate``), run the manager control gate, log to the workflow
-        artifact, and — on a genuine-deficiency ``revise`` within budget —
-        archive the prior attempt, invalidate the target phase + downstream, and
-        re-run with the manager's directive injected. Hard cap + no-progress
-        terminator + graceful hand-off enforced here in python.
+        The loop sits AFTER replicate and BEFORE verify. Each iteration: compute
+        objective execution facts (already done inside ``_replicate``), run the
+        manager review — which ALWAYS does the diligence judging (there is no
+        deterministic short-circuit-accept) — log to the workflow artifact, and
+        — on a genuine-deficiency ``revise`` within budget — archive the prior
+        attempt, invalidate the target phase + downstream, and re-run with the
+        manager's directive injected. Hard cap + no-progress terminator (over
+        the objective facts) + graceful hand-off enforced here in python.
 
         With ``max_iters <= 1`` (the default for ``replicate`` / the benchmark)
-        the manager gate never runs: behavior is identical to a single pass.
+        the manager never runs: behavior is identical to a single pass.
         Resume-safe: a completed-and-accepted replicate is skipped; an
         in-progress loop re-enters at the correct iteration via the workflow log.
         """
@@ -763,10 +767,10 @@ class ReplicationRunner:
         if state.is_stage_completed('replicate'):
             print("[OK] replicate: skipped (already completed)")
             evidence = gather_evidence(self.config.replication_dir)
-            # Recompute signals for the loop (cheap, pure) when the loop is on
+            # Recompute facts for the loop (cheap, pure) when the loop is on
             # and we don't already have them from this process.
-            if max_iters > 1 and self._last_signals is None:
-                self._last_signals = self._compute_and_write_diligence_signals(
+            if max_iters > 1 and self._last_facts is None:
+                self._last_facts = self._compute_and_write_execution_facts(
                     evidence, replication_plan
                 )
         else:
@@ -809,15 +813,15 @@ class ReplicationRunner:
         # If the workflow log has no replicate entry yet, this first pass is
         # iteration 1; record it.
         if not prior_runs:
-            workflow.append(self._workflow_replicate_record(iteration, self._last_signals, None))
+            workflow.append(self._workflow_replicate_record(iteration, self._last_facts, None))
 
-        prev_signals: Optional[DiligenceSignals] = None
+        prev_facts: Optional[ExecutionFacts] = None
         prev_directive: Optional[str] = None
         last_verdict: Optional[ManagerVerdict] = None
 
         # --- Bounded review→decide→(accept|revise) loop --------------------
         while True:
-            signals = self._last_signals
+            facts = self._last_facts
             retries_remaining = max(0, max_iters - iteration)
 
             prior_guidance = (
@@ -826,22 +830,22 @@ class ReplicationRunner:
                 else None
             )
             verdict = self._manager_review(
-                signals,
+                facts,
                 iteration=iteration,
                 retries_remaining=retries_remaining,
                 prior_guidance=prior_guidance,
             )
 
             workflow.append(
-                self._workflow_review_record(iteration, signals, verdict)
+                self._workflow_review_record(iteration, facts, verdict)
             )
 
             stop = should_stop(
                 verdict=verdict,
                 iteration=iteration,
                 max_iters=max_iters,
-                prev_signals=prev_signals,
-                curr_signals=signals,
+                prev_signals=prev_facts,
+                curr_signals=facts,
                 prev_directive=prev_directive,
             )
 
@@ -853,7 +857,7 @@ class ReplicationRunner:
                     handoff = build_handoff(
                         iteration=iteration,
                         verdict=verdict,
-                        signals=signals,
+                        signals=facts,
                         stop_reason=stop.reason,
                     )
                     workflow.write_handoff(handoff)
@@ -873,7 +877,7 @@ class ReplicationRunner:
             # Invalidate the target phase + downstream so they re-run.
             self._invalidate_for_rerun(state, target)
 
-            prev_signals = signals
+            prev_facts = facts
             prev_directive = verdict.directive
             last_verdict = verdict
             iteration += 1
@@ -910,7 +914,7 @@ class ReplicationRunner:
 
             workflow.append(
                 self._workflow_replicate_record(
-                    iteration, self._last_signals, archived, guidance=guidance
+                    iteration, self._last_facts, archived, guidance=guidance
                 )
             )
 
@@ -931,7 +935,7 @@ class ReplicationRunner:
     def _workflow_replicate_record(
         self,
         iteration: int,
-        signals: Optional[DiligenceSignals],
+        facts: Optional[ExecutionFacts],
         archived_attempt_path: Optional[Path],
         guidance: Optional[ManagerGuidance] = None,
     ) -> Dict[str, Any]:
@@ -940,7 +944,7 @@ class ReplicationRunner:
             "phase": "replicate",
             "status": "completed",
             "transcript_path": str(self.config.replication_transcript_path),
-            "signals": self._signals_record(signals),
+            "signals": self._facts_record(facts),
             "manager_verdict": None,
             "directive": guidance.directive if guidance is not None else None,
             "archived_attempt_path": str(archived_attempt_path) if archived_attempt_path else None,
@@ -950,7 +954,7 @@ class ReplicationRunner:
     def _workflow_review_record(
         self,
         iteration: int,
-        signals: Optional[DiligenceSignals],
+        facts: Optional[ExecutionFacts],
         verdict: ManagerVerdict,
     ) -> Dict[str, Any]:
         return {
@@ -958,94 +962,89 @@ class ReplicationRunner:
             "phase": "manager_review",
             "status": verdict.decision,
             "transcript_path": str(self.config.manager_review_transcript_path),
-            "signals": self._signals_record(signals),
+            "signals": self._facts_record(facts),
             "manager_verdict": verdict.to_dict(),
             "directive": verdict.directive or None,
             "archived_attempt_path": None,
         }
 
     @staticmethod
-    def _signals_record(signals: Optional[DiligenceSignals]) -> Optional[Dict[str, Any]]:
-        if signals is None:
+    def _facts_record(facts: Optional[ExecutionFacts]) -> Optional[Dict[str, Any]]:
+        """Workflow-log payload for one run's objective execution facts.
+
+        The JSON key in the workflow log stays ``"signals"`` for backward
+        compatibility with the markdown renderer and existing logs, but the
+        content is the objective execution facts (no diligence verdict).
+        """
+        if facts is None:
             return None
-        d = signals.to_dict()
-        d["summary_line"] = signals.summary_line()
+        d = facts.to_dict()
+        d["summary_line"] = facts.summary_line()
         return d
 
-    def _compute_and_write_diligence_signals(
+    def _compute_and_write_execution_facts(
         self,
         evidence: Optional[ExecutionEvidence],
         replication_plan: Optional[ReplicationPlan],
-    ) -> Optional[DiligenceSignals]:
-        """Compute deterministic diligence signals and write them to disk.
+    ) -> Optional[ExecutionFacts]:
+        """Compute objective execution facts and write them to disk.
 
         Pure-compute + log; never raises into the pipeline. Writes
         ``replication/diligence_signals.json`` and prints a one-line summary,
-        and returns the computed :class:`DiligenceSignals` (or ``None`` on
-        failure) so the manager gate can consume them. With ``max_iters == 1``
-        the return value is simply ignored, preserving the prior log-only
-        behavior.
+        and returns the computed :class:`ExecutionFacts` (or ``None`` on
+        failure) so the manager loop can consume them as evidence. With
+        ``max_iters == 1`` the return value is simply ignored, preserving the
+        prior log-only behavior. These are facts — NOT a diligence verdict; the
+        manager judges diligence.
         """
         try:
-            codebase_diff = None
-            diff_path = self.config.replication_dir / "codebase.diff"
-            if diff_path.exists():
-                try:
-                    codebase_diff = diff_path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    codebase_diff = None
-
-            signals = compute_diligence_signals(
-                evidence,
-                plan=replication_plan,
-                codebase_diff=codebase_diff,
-            )
+            facts = compute_execution_facts(evidence, plan=replication_plan)
 
             out_path = self.config.diligence_signals_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(
-                json.dumps(signals.to_dict(), indent=2),
+                json.dumps(facts.to_dict(), indent=2),
                 encoding="utf-8",
             )
-            print(f"  Diligence signals: {signals.summary_line()}")
-            print(f"  Diligence signals written to {out_path}")
-            return signals
-        except Exception as exc:  # never let signals computation break the run
-            print(f"  Warning: diligence-signal computation failed ({exc}); continuing")
+            print(f"  Execution facts: {facts.summary_line()}")
+            print(f"  Execution facts written to {out_path}")
+            return facts
+        except Exception as exc:  # never let facts computation break the run
+            print(f"  Warning: execution-facts computation failed ({exc}); continuing")
             return None
 
     # -- Phase 2.5: Manager review (post-replicate control gate) -----------
 
     def _manager_review(
         self,
-        signals: Optional[DiligenceSignals],
+        facts: Optional[ExecutionFacts],
         *,
         iteration: int,
         retries_remaining: int,
         prior_guidance: Optional["ManagerGuidance"],
     ) -> ManagerVerdict:
-        """Independent post-replicate control gate (notes §4.1/§4.3).
+        """Independent post-replicate control gate — the manager ALWAYS judges.
 
-        Deterministic gate first: a clean run short-circuits to ACCEPT with no
-        LLM call. Otherwise an independent LLM pass (fresh context, API keys
-        stripped — it must NOT run paper code) reads the trajectory + evidence +
-        diligence signals and emits a structured accept/revise verdict. This is
-        distinct from the post-verify contextual-evaluation report author; it
-        never alters the deterministic Replication Score.
+        There is NO deterministic short-circuit-accept. The manager (an
+        independent LLM pass: fresh context, API keys stripped — it must NOT run
+        paper code) ALWAYS runs and makes the accept/revise decision, reading the
+        trajectory + evidence + the objective execution facts. Diligence
+        questions (skipped/downsized/premature-stop/placeholder) are the
+        manager's to assess from the real evidence, not pre-decided by
+        keyword-matching code. This is distinct from the post-verify
+        contextual-evaluation report author; it never alters the deterministic
+        Replication Score.
+
+        ``facts`` are the objective execution facts, passed to the prompt builder
+        only as a place to surface evidence; they do not gate the call.
 
         Always returns a :class:`ManagerVerdict`; on any failure it falls back to
         ACCEPT (fail-open is the safe default for a control gate over an already-
         completed replication — we never block the score on a flaky judge call).
         """
-        # 1) Deterministic short-circuit — clean signals accept without an LLM.
-        short = deterministic_accept(signals) if signals is not None else None
-        if short is not None:
-            print("  Manager: deterministic ACCEPT (clean signals) — no LLM call")
-            return short
-
-        # 2) Independent LLM review pass.
+        # The manager always runs — no clean-signals auto-accept path.
         print(
-            f"  Manager: signals ambiguous/negative — running independent review "
+            f"  Manager: running independent review "
             f"(iteration {iteration}, {retries_remaining} retries remaining)..."
         )
         output_path = self.config.manager_review_path

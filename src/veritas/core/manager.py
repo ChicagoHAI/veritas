@@ -9,11 +9,14 @@ systems studied (CrewAI ``LLMGuardrail`` accept/resend, Magentic-One Progress
 Ledger, LangGraph hard+soft bounds, Reflexion diagnosis-injected-as-guidance):
 
   * a **hard, deterministic cap** the python enforces regardless of the LLM,
-  * a **deterministic gate first** (Phase 1 diligence signals) that can
-    short-circuit to ACCEPT without ever calling the LLM,
-  * an **independent critic** (fresh context, API keys stripped — it must not
-    run paper code) that emits a **structured verdict**,
-  * a **no-progress terminator** independent of the iteration count,
+  * an **independent critic** (the manager — fresh context, API keys stripped,
+    must not run paper code) that ALWAYS does the diligence judging and emits a
+    **structured verdict**. There is no deterministic short-circuit-accept:
+    deterministic code computes objective execution *facts* (see
+    ``diligence.py``); the manager reads those facts + the trajectory and owns
+    every semantic verdict (skipped/downsized/premature-stop/placeholder),
+  * a **no-progress terminator** independent of the iteration count, comparing
+    objective execution facts between attempts,
   * a **graceful terminal hand-off** when the cap is hit without acceptance.
 
 Everything here that does not need an LLM is a pure function so it can be
@@ -32,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from veritas.core.diligence import DiligenceSignals
+from veritas.core.diligence import ExecutionFacts
 
 # --- Verdict vocabulary -----------------------------------------------------
 
@@ -160,77 +163,59 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     return v
 
 
-# --- Deterministic short-circuit (gate first, before any LLM call) ----------
-
-
-def deterministic_accept(signals: DiligenceSignals) -> Optional[ManagerVerdict]:
-    """Short-circuit to ACCEPT on a clean run, without an LLM call (§4.1 / §4.2).
-
-    Returns an ACCEPT verdict ONLY when the deterministic signals are
-    unambiguously clean: ``looks_diligent`` is True AND there are no advisory
-    flags (downsizing / placeholder hints). When anything is ambiguous we return
-    ``None`` — meaning "ask the LLM manager"; we never short-circuit to *revise*
-    deterministically (the design reserves the revise call for the LLM, which
-    must judge genuine-deficiency vs honest-divergence).
-    """
-    if signals.looks_diligent and not signals.advisory_flags:
-        return ManagerVerdict(
-            decision=DECISION_ACCEPT,
-            diligence_sufficient=True,
-            deficiency_is_genuine=GENUINENESS_DIVERGENT,
-            reason="deterministic signals clean (all steps executed, artifacts "
-            "emitted, no premature stop / stuck / downsizing / placeholder hints)",
-            confidence=1.0,
-            source="deterministic",
-        )
-    return None
-
-
 # --- No-progress terminator (independent of the count) ----------------------
+#
+# This compares OBJECTIVE EXECUTION FACTS between attempts. It is NOT a diligence
+# judgment (the manager owns that) — it only answers the mechanical question
+# "did the re-run mechanically make headway, or is it spinning?", so the loop can
+# stop a stalled trajectory without waiting for the cap.
 
 
-def _signals_fingerprint(signals: Optional[DiligenceSignals]) -> Dict[str, Any]:
-    """A small, comparable summary of a run's signals for progress detection."""
-    if signals is None:
+def _facts_fingerprint(facts: Optional[ExecutionFacts]) -> Dict[str, Any]:
+    """A small, comparable summary of a run's facts for progress detection."""
+    if facts is None:
         return {}
-    sc = signals.step_coverage
-    a = signals.artifacts
     return {
-        "looks_diligent": signals.looks_diligent,
-        "hard_negatives": sorted(signals.hard_negative_reasons),
-        "advisory": sorted(signals.advisory_flags),
-        "missing_steps": sorted(sc.missing_step_ids),
-        "skipped_steps": sorted(sc.skipped_step_ids),
-        "missing_artifacts": sorted(a.result_steps_missing_artifact_ids),
-        "premature_stop": signals.premature_stop.premature_stop_suspected,
-        "stuck": signals.stuck.stuck_suspected,
+        "no_evidence": facts.no_evidence,
+        "missing_steps": sorted(facts.missing_step_ids),
+        "failed_steps": facts.failed_steps,
+        "steps_without_output_files": sorted(facts.steps_without_output_files),
+        "executed_steps": facts.executed_steps,
     }
 
 
-def signals_improved(
-    prev: Optional[DiligenceSignals],
-    curr: Optional[DiligenceSignals],
+def facts_improved(
+    prev: Optional[ExecutionFacts],
+    curr: Optional[ExecutionFacts],
 ) -> bool:
-    """Did the *current* run's signals improve over the previous run's?
+    """Did the *current* run's execution facts improve over the previous run's?
 
-    Conservative: improvement means strictly fewer hard-negative reasons, or
-    flipping from not-diligent to diligent, or strictly fewer missing
-    steps/artifacts. Equal-or-worse counts as "no progress". Used (with a
-    repeated directive) by :func:`should_stop` as the no-progress terminator.
+    Conservative and mechanical: improvement means strictly fewer missing
+    planned steps, strictly fewer failed steps, strictly fewer steps without any
+    declared output file, or going from no-evidence to having evidence.
+    Equal-or-worse counts as "no progress". Used (with a repeated directive) by
+    :func:`should_stop` as the no-progress terminator.
+
+    This is set/count arithmetic over objective facts — it makes no claim about
+    whether the run was diligent. That remains the manager's call.
     """
     if prev is None or curr is None:
         return True  # no baseline to compare — don't declare stuck
-    p = _signals_fingerprint(prev)
-    c = _signals_fingerprint(curr)
-    if not p["looks_diligent"] and c["looks_diligent"]:
-        return True
-    if len(c["hard_negatives"]) < len(p["hard_negatives"]):
+    p = _facts_fingerprint(prev)
+    c = _facts_fingerprint(curr)
+    if p["no_evidence"] and not c["no_evidence"]:
         return True
     if len(c["missing_steps"]) < len(p["missing_steps"]):
         return True
-    if len(c["missing_artifacts"]) < len(p["missing_artifacts"]):
+    if c["failed_steps"] < p["failed_steps"]:
+        return True
+    if len(c["steps_without_output_files"]) < len(p["steps_without_output_files"]):
         return True
     return False
+
+
+# Back-compat alias: the loop historically called this ``signals_improved``.
+signals_improved = facts_improved
 
 
 def _normalize_directive(directive: str) -> str:
@@ -248,8 +233,8 @@ def should_stop(
     verdict: ManagerVerdict,
     iteration: int,
     max_iters: int,
-    prev_signals: Optional[DiligenceSignals],
-    curr_signals: Optional[DiligenceSignals],
+    prev_signals: Optional[ExecutionFacts],
+    curr_signals: Optional[ExecutionFacts],
     prev_directive: Optional[str],
 ) -> StopDecision:
     """Termination predicate (hard cap + acceptance + no-progress).
@@ -257,11 +242,13 @@ def should_stop(
     ``iteration`` is 1-based (the iteration that just produced ``curr_signals``
     and ``verdict``). The hard cap is enforced here AND by the runner; this is
     the single source of truth for *why* we stop so the workflow log is honest.
+    ``prev_signals`` / ``curr_signals`` are :class:`ExecutionFacts` (objective
+    facts), compared mechanically for progress — not a diligence judgment.
 
     Order of checks:
       1. ACCEPT  -> stop "accepted".
       2. Hard cap reached (``iteration >= max_iters``) -> stop "cap".
-      3. No-progress: signals did not improve AND the new directive repeats the
+      3. No-progress: facts did not improve AND the new directive repeats the
          previous one -> stop "no-progress" (Magentic-One stall analogue).
       4. Otherwise continue.
     """
@@ -271,7 +258,7 @@ def should_stop(
     if iteration >= max_iters:
         return StopDecision(stop=True, reason="cap")
 
-    improved = signals_improved(prev_signals, curr_signals)
+    improved = facts_improved(prev_signals, curr_signals)
     directive_repeats = (
         prev_directive is not None
         and _normalize_directive(prev_directive) == _normalize_directive(verdict.directive)
@@ -418,19 +405,27 @@ def build_handoff(
     *,
     iteration: int,
     verdict: ManagerVerdict,
-    signals: Optional[DiligenceSignals],
+    signals: Optional[ExecutionFacts],
     stop_reason: str,
 ) -> Dict[str, Any]:
     """Construct the structured ``unresolved_handoff`` for the graceful terminal.
 
     Produced when the loop ends WITHOUT acceptance (cap or no-progress). States
     where the work still falls short, why a re-run is still warranted, and what
-    to try next — drawing on the manager's own last verdict plus the
-    deterministic signals so it is grounded, not invented.
+    to try next — drawing on the manager's own last verdict plus the objective
+    execution facts so it is grounded, not invented.
     """
     where = verdict.reason or "the manager did not accept the replication"
-    if signals is not None and signals.hard_negative_reasons:
-        where += " | deterministic hard-negatives: " + "; ".join(signals.hard_negative_reasons)
+    if signals is not None:
+        fact_notes: List[str] = []
+        if signals.no_evidence:
+            fact_notes.append("no replication evidence collected")
+        if signals.missing_step_ids:
+            fact_notes.append(f"planned steps with no record: {signals.missing_step_ids}")
+        if signals.failed_step_ids:
+            fact_notes.append(f"steps with nonzero exit code: {signals.failed_step_ids}")
+        if fact_notes:
+            where += " | execution facts: " + "; ".join(fact_notes)
     return {
         "iteration": iteration,
         "resolved": False,
@@ -439,7 +434,7 @@ def build_handoff(
         "why_rerun_needed": (
             "Reached the retry cap without an accept verdict."
             if stop_reason == "cap"
-            else "The re-run did not improve the diligence signals and the "
+            else "The re-run did not improve the execution facts and the "
             "manager's directive was not making progress."
         ),
         "what_to_try_next": verdict.directive or "Manual review of the replication trajectory is recommended.",
