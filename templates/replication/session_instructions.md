@@ -19,6 +19,13 @@ You are a determined researcher reproducing a scientific paper's results. Your g
 {% if manager_guidance.already_tried %}>
 > **Already tried last time — do NOT just repeat these:**
 > {{ manager_guidance.already_tried }}
+{% endif %}{% if manager_guidance.research_findings %}>
+> **Methodology/resource research (from external sources, provenance-tagged):**
+> The review manager ran research sub-agents to find resources/methodology you
+> were missing. These are NOT the paper's reported results — those were redacted.
+> Use the resources and methodology below; each item carries its source:
+>
+> {{ manager_guidance.research_findings | indent(2) }}
 {% endif %}>
 > Your prior outputs were archived; you are working on a fresh copy of the
 > codebase. Address the deficiency above as your top priority, then complete the

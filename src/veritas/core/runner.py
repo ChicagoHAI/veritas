@@ -31,6 +31,17 @@ from veritas.core.manager import (
     parse_manager_verdict,
     should_stop,
 )
+from veritas.core.research import (
+    KIND_TEMPLATES,
+    RedactionResult,
+    ResearchConfig,
+    ResearchFinding,
+    format_findings_for_guidance,
+    known_value_strings,
+    parse_research_requests,
+    redact_known_values,
+    split_requests,
+)
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -870,6 +881,16 @@ class ReplicationRunner:
             # --- Re-run: archive, invalidate, inject guidance, replicate ---
             target = verdict.target_phase or "replicate"
             guidance = ManagerGuidance.from_verdict(verdict, iteration=iteration + 1)
+
+            # Phase 3: if the manager requested methodology/resource research,
+            # dispatch the matching sub-agent(s), redact each finding, and fold
+            # the provenance-tagged, post-redaction methodology into the re-run
+            # guidance. Bounded + opt-in; runs only inside the loop. Never raises
+            # into the pipeline — research is best-effort augmentation.
+            guidance.research_findings = self._run_research(
+                verdict, claims, iteration=iteration, workflow=workflow
+            )
+
             archived = archive_attempt(self.config.replication_dir, iteration)
             if archived is not None:
                 print(f"  Archived attempt {iteration} -> {archived}")
@@ -1108,6 +1129,257 @@ class ReplicationRunner:
             confidence=0.0,
             source="fallback",
         )
+
+    # -- Phase 3: Manager research sub-agents (behind anti-leakage barriers) -
+
+    def _run_research(
+        self,
+        verdict: ManagerVerdict,
+        claims: Optional[PaperClaims],
+        *,
+        iteration: int,
+        workflow: WorkflowLog,
+    ) -> str:
+        """Dispatch the manager's honored research requests; return guidance text.
+
+        Phase 3. Reads ``verdict.research_requests``, applies the THREE structural
+        anti-leakage barriers, and returns a provenance-tagged, post-redaction
+        guidance block to fold into the re-run (or "" if nothing usable).
+
+          a. **Intent allow-list** (``split_requests``): only ``resource`` /
+             ``literature`` kinds are honored; answer-seeking requests are
+             rejected and recorded as rejected.
+          b. **Redaction before injection**: each finding goes through the LLM
+             redactor (semantic, no keyword matching) and then a deterministic
+             exact-string scrub of known ``paper_value`` strings, before it can
+             reach the replicate agent.
+          c. **Provenance-tagged injection** (``format_findings_for_guidance``):
+             every injected item carries its source URL; the post-verify cheating
+             monitor watches the re-run trace.
+
+        Bounded by ``VERITAS_RESEARCH_MAX_CALLS`` (per iteration) and never raises
+        into the pipeline. All requests, findings, redaction results, and what
+        got injected are logged to the workflow trajectory.
+        """
+        research_cfg = ResearchConfig.from_env()
+        requests = parse_research_requests(verdict.research_requests)
+        if not requests:
+            return ""
+
+        honored, rejected = split_requests(requests)
+        cap = research_cfg.max_calls_per_iteration
+        # Apply the per-iteration cap on honored requests (bound the fan-out).
+        capped = honored[:cap] if cap >= 0 else honored
+        dropped_for_cap = honored[len(capped):]
+
+        # Known reported-value strings for the deterministic belt-and-suspenders
+        # scrub. The runner (python) holds these; the searcher/redactor agents
+        # never receive them — this is an objective exact-match fact, not a hint.
+        known_values = known_value_strings(
+            [c.paper_value for c in claims.claims] if claims is not None else []
+        )
+
+        if not capped:
+            workflow.append(self._workflow_research_record(
+                iteration, honored=[], rejected=rejected,
+                dropped_for_cap=dropped_for_cap, findings=[],
+            ))
+            return ""
+
+        print(
+            f"  Manager research: {len(capped)} honored request(s) "
+            f"(rejected {len(rejected)}, cap {cap})..."
+        )
+
+        findings: List[ResearchFinding] = []
+        # Disambiguate multiple requests of the same kind within one iteration.
+        kind_seen: Dict[str, int] = {}
+        for req in capped:
+            idx = kind_seen.get(req.kind, 0)
+            kind_seen[req.kind] = idx + 1
+            finding = self._dispatch_research_agent(req, index=idx)
+            if finding is not None and finding.finding.strip() and not finding.error:
+                finding = self._redact_finding(finding, known_values, index=idx)
+            findings.append(finding if finding is not None else ResearchFinding(
+                kind=req.kind, need=req.need, finding="", error="dispatch failed"
+            ))
+
+        guidance_text = format_findings_for_guidance(findings)
+
+        workflow.append(self._workflow_research_record(
+            iteration, honored=capped, rejected=rejected,
+            dropped_for_cap=dropped_for_cap, findings=findings,
+            injected=guidance_text,
+        ))
+        return guidance_text
+
+    def _dispatch_research_agent(
+        self, request, *, index: int
+    ) -> Optional[ResearchFinding]:
+        """Invoke one finder sub-agent (resource/literature) and parse its result.
+
+        A SEPARATE provider invocation from the manager and the replicate agent,
+        with web-search/fetch access (the one place tools are warranted). It runs
+        with API keys stripped (it must not run paper code) and working dir at the
+        output tree. Returns a :class:`ResearchFinding` (un-redacted at this
+        point) or ``None`` on hard failure.
+        """
+        template_name = KIND_TEMPLATES.get(request.kind)
+        if template_name is None:
+            return None
+
+        out_path = self.config.research_finding_path(request.kind, index)
+        transcript = self.config.research_transcript_path(request.kind, index)
+        try:
+            if out_path.exists():
+                out_path.unlink()
+        except OSError:
+            pass
+
+        prompt = self.prompt_generator.generate_research_prompt(
+            template_name=template_name,
+            output_dir=self.config.output_dir,
+            need=request.need,
+            rationale=request.rationale,
+        )
+        prompt_path = self.config.prompts_dir / f"research_{request.kind}_{index}_prompt.txt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=transcript,
+            timeout=self.config.evaluate_timeout,
+        )
+        if not success or not out_path.exists():
+            print(f"    research [{request.kind}]: no finding produced")
+            return ResearchFinding(
+                kind=request.kind, need=request.need, finding="",
+                error="sub-agent produced no finding",
+            )
+        try:
+            raw = json.loads(_extract_json(out_path.read_text(encoding="utf-8")))
+        except (ValueError, json.JSONDecodeError) as e:
+            return ResearchFinding(
+                kind=request.kind, need=request.need, finding="",
+                error=f"unparseable finding: {e}",
+            )
+
+        if not bool(raw.get("found", False)):
+            return ResearchFinding(
+                kind=request.kind, need=request.need, finding="",
+                error="resource/method not found by sub-agent",
+            )
+        sources = raw.get("sources") or []
+        if not isinstance(sources, list):
+            sources = [str(sources)]
+        sources = [str(s).strip() for s in sources if str(s).strip()]
+        return ResearchFinding(
+            kind=request.kind,
+            need=request.need,
+            finding=str(raw.get("finding", "") or "").strip(),
+            sources=sources,
+        )
+
+    def _redact_finding(
+        self, finding: ResearchFinding, known_values: List[str], *, index: int
+    ) -> ResearchFinding:
+        """Two-layer redaction of a finding (anti-leakage barrier b).
+
+        Primary layer: an LLM/agent redactor reads the finding and removes
+        reported result/metric values by JUDGMENT (no keyword matching),
+        preserving methodology/resources + provenance. Belt-and-suspenders layer:
+        a deterministic exact-string scrub of *known* ``paper_value`` strings on
+        top of the LLM's output. The redactor agent runs with keys stripped and
+        does NOT receive the known values (the deterministic scrub is the runner's
+        objective check). On LLM-redactor failure we fall CLOSED to the
+        deterministic scrub of the original finding (never inject un-redacted
+        text past a failed LLM pass).
+        """
+        kind = finding.kind
+        out_path = self.config.research_redaction_path(kind, index)
+        transcript = self.config.research_redaction_transcript_path(kind, index)
+        try:
+            if out_path.exists():
+                out_path.unlink()
+        except OSError:
+            pass
+
+        prompt = self.prompt_generator.generate_research_redactor_prompt(
+            output_dir=self.config.output_dir,
+            out_path=out_path,
+            kind=kind,
+            need=finding.need,
+            finding=finding.finding,
+            sources=finding.sources,
+        )
+        prompt_path = self.config.prompts_dir / f"research_{kind}_{index}_redactor_prompt.txt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        llm_text = finding.finding
+        llm_removed = False
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=transcript,
+            timeout=self.config.evaluate_timeout,
+        )
+        if success and out_path.exists():
+            try:
+                raw = json.loads(_extract_json(out_path.read_text(encoding="utf-8")))
+                llm_text = str(raw.get("redacted_finding", finding.finding) or "").strip()
+                llm_removed = bool(raw.get("removed_anything", False))
+            except (ValueError, json.JSONDecodeError):
+                # Fall closed: LLM output unparseable -> redact the ORIGINAL text
+                # deterministically rather than trusting the raw finding.
+                llm_text = finding.finding
+                llm_removed = False
+        else:
+            print(f"    redactor [{kind}]: LLM pass failed; falling back to exact scrub only")
+
+        # Belt-and-suspenders deterministic scrub of KNOWN paper values on top.
+        det = redact_known_values(llm_text, known_values)
+        finding.finding = det.redacted_text
+        finding.redaction = RedactionResult(
+            redacted_text=det.redacted_text,
+            llm_removed=llm_removed,
+            exact_hits=det.exact_hits,
+        )
+        if det.exact_hits:
+            print(
+                f"    redactor [{kind}]: deterministic scrub removed "
+                f"{len(det.exact_hits)} known paper value(s)"
+            )
+        return finding
+
+    def _workflow_research_record(
+        self,
+        iteration: int,
+        *,
+        honored,
+        rejected,
+        dropped_for_cap,
+        findings,
+        injected: str = "",
+    ) -> Dict[str, Any]:
+        """Workflow-log record for one iteration's research dispatch (§6 logging)."""
+        return {
+            "iteration": iteration,
+            "phase": "research",
+            "status": "completed" if findings else "none",
+            "research": {
+                "honored": [r.to_dict() for r in honored],
+                "rejected": [r.to_dict() for r in rejected],
+                "dropped_for_cap": [r.to_dict() for r in dropped_for_cap],
+                "findings": [f.to_dict() for f in findings],
+                "injected_guidance": injected,
+            },
+            "manager_verdict": None,
+            "directive": None,
+            "archived_attempt_path": None,
+        }
 
     # -- Fix Assessment ----------------------------------------------------
 

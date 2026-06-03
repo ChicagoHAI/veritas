@@ -144,14 +144,16 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     except (TypeError, ValueError):
         v.confidence = 0.0
 
+    # Research requests (Phase 3): kept as raw dicts here; the honoring decision
+    # (the intent allow-list) lives in ``research.honor_request`` so there is one
+    # auditable gate. We only retain dict-shaped entries; everything semantic
+    # (which kinds are allowed, redaction) is enforced downstream.
     rr = raw.get("research_requests") or []
     if isinstance(rr, list):
         v.research_requests = [r for r in rr if isinstance(r, dict)]
 
     # Calibration guard: a revise with no actionable directive becomes an accept
-    # (never re-run blind). Anti-leakage: research is deferred to Phase 3, so we
-    # strip any research_requests here — the manager only reviews + directs.
-    v.research_requests = []
+    # (never re-run blind).
     if v.decision == DECISION_REVISE:
         if not v.directive:
             v.decision = DECISION_ACCEPT
@@ -384,6 +386,37 @@ class WorkflowLog:
                     lines.append(f"- **Directive (new instructions):** {verdict['directive']}")
                 if verdict.get("already_tried"):
                     lines.append(f"- **Already tried (don't repeat):** {verdict['already_tried']}")
+            research = rec.get("research")
+            if isinstance(research, dict):
+                honored = research.get("honored") or []
+                rejected = research.get("rejected") or []
+                lines.append(
+                    f"- **Research:** {len(honored)} honored, "
+                    f"{len(rejected)} rejected (intent gate)"
+                )
+                for f in research.get("findings") or []:
+                    if f.get("error"):
+                        lines.append(
+                            f"  - [{f.get('kind')}] {f.get('need')}: "
+                            f"_no usable finding ({f.get('error')})_"
+                        )
+                        continue
+                    red = f.get("redaction") or {}
+                    hits = red.get("exact_hits") or []
+                    flags = []
+                    if red.get("llm_removed"):
+                        flags.append("LLM redacted")
+                    if hits:
+                        flags.append(f"{len(hits)} known-value scrub(s)")
+                    flag_str = f" ({'; '.join(flags)})" if flags else ""
+                    srcs = ", ".join(f.get("sources") or []) or "(no source)"
+                    lines.append(
+                        f"  - [{f.get('kind')}] {f.get('need')} -> source: {srcs}{flag_str}"
+                    )
+                for r in rejected:
+                    lines.append(
+                        f"  - REJECTED (intent gate): kind=`{r.get('kind')}` need: {r.get('need')}"
+                    )
             if rec.get("directive") and not isinstance(verdict, dict):
                 lines.append(f"- **Directive:** {rec['directive']}")
             if rec.get("archived_attempt_path"):
@@ -460,6 +493,11 @@ class ManagerGuidance:
     deficiency: str
     directive: str
     already_tried: str = ""
+    # Phase 3: provenance-tagged, post-redaction methodology/resource findings
+    # from the manager's research sub-agents. Rendered as its own block in the
+    # re-run templates. Always answer-free (it has been through the two-layer
+    # redactor); empty when no research ran for this iteration.
+    research_findings: str = ""
 
     @classmethod
     def from_verdict(cls, verdict: ManagerVerdict, *, iteration: int) -> "ManagerGuidance":

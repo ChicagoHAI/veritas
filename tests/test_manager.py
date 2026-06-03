@@ -110,13 +110,18 @@ def test_parse_long_genuineness_phrasings():
     ).deficiency_is_genuine == GENUINENESS_DIVERGENT
 
 
-def test_parse_strips_research_requests_phase2():
-    # Anti-leakage: research is Phase 3; the manager only reviews + directs.
+def test_parse_retains_research_requests_phase3():
+    # Phase 3: research_requests are retained (dict-shaped only) so the intent
+    # allow-list (research.honor_request) can gate them downstream. The parse
+    # step no longer strips them — honoring is a single auditable gate.
     v = parse_manager_verdict({
         "decision": "revise", "directive": "do X",
-        "research_requests": [{"kind": "resource", "need": "dataset"}],
+        "research_requests": [
+            {"kind": "resource", "need": "dataset"},
+            "not-a-dict",  # non-dict entries dropped
+        ],
     })
-    assert v.research_requests == []
+    assert v.research_requests == [{"kind": "resource", "need": "dataset"}]
 
 
 def test_parse_bad_confidence_defaults_zero():

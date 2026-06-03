@@ -81,6 +81,16 @@ MANAGER_REVIEW_TRANSCRIPT_FILE = "manager_review_transcript.jsonl"
 WORKFLOW_LOG_FILE = "workflow.jsonl"
 WORKFLOW_MD_FILE = "workflow.md"
 
+# Manager research sub-agents (Phase 3) filenames. Each honored research request
+# spawns a finder sub-agent (separate provider invocation, web access) whose
+# finding + transcript land in the replication subdir, then an LLM-redactor pass
+# whose result lands alongside. ``{kind}`` is ``resource`` | ``literature`` and
+# ``{i}`` disambiguates multiple requests of the same kind in one iteration.
+RESEARCH_FINDING_FILE_TMPL = "research_{kind}.json"
+RESEARCH_TRANSCRIPT_FILE_TMPL = "research_{kind}_transcript.jsonl"
+RESEARCH_REDACTION_FILE_TMPL = "research_{kind}_redaction.json"
+RESEARCH_REDACTION_TRANSCRIPT_FILE_TMPL = "research_{kind}_redaction_transcript.jsonl"
+
 
 @dataclass
 class Config:
@@ -373,6 +383,36 @@ class Config:
     @property
     def workflow_log_path(self) -> Path:
         return self.veritas_state_dir / WORKFLOW_LOG_FILE
+
+    # -- Manager research sub-agents (Phase 3) artifacts --------------------
+
+    def research_finding_path(self, kind: str, index: int = 0) -> Path:
+        suffix = f"_{index}" if index else ""
+        name = RESEARCH_FINDING_FILE_TMPL.format(kind=kind)
+        if suffix:
+            name = name.replace(".json", f"{suffix}.json")
+        return self.replication_dir / name
+
+    def research_transcript_path(self, kind: str, index: int = 0) -> Path:
+        suffix = f"_{index}" if index else ""
+        name = RESEARCH_TRANSCRIPT_FILE_TMPL.format(kind=kind)
+        if suffix:
+            name = name.replace(".jsonl", f"{suffix}.jsonl")
+        return self.replication_dir / name
+
+    def research_redaction_path(self, kind: str, index: int = 0) -> Path:
+        suffix = f"_{index}" if index else ""
+        name = RESEARCH_REDACTION_FILE_TMPL.format(kind=kind)
+        if suffix:
+            name = name.replace(".json", f"{suffix}.json")
+        return self.replication_dir / name
+
+    def research_redaction_transcript_path(self, kind: str, index: int = 0) -> Path:
+        suffix = f"_{index}" if index else ""
+        name = RESEARCH_REDACTION_TRANSCRIPT_FILE_TMPL.format(kind=kind)
+        if suffix:
+            name = name.replace(".jsonl", f"{suffix}.jsonl")
+        return self.replication_dir / name
 
     def verify_path(self, claim_id: str) -> Path:
         """Path to the per-claim verdict JSON, e.g. ``verify/C1.json``."""
