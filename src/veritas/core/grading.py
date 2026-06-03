@@ -19,8 +19,10 @@ caller's job (``runner._run_single_verify``); this module exposes
 ``DETERMINISTIC_TYPES`` so the caller knows which.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
+
+from veritas.core.config_env import _env_float
 
 # Claim types this module grades deterministically. Others (qualitative,
 # figure) keep the comparator's LLM judgment.
@@ -34,14 +36,18 @@ class GradingTolerances:
     Defaults mirror the rules previously described in prose in
     ``templates/verify/single_claim.md``. Lifted into a config object so a run
     is reproducible from its tolerances and they can be tuned per domain.
+
+    Each default is overridable via a ``VERITAS_GRADE_*`` env var (read from
+    ``.env``; see ``config_env`` and ``.env.example``) — no code change needed.
+    Defaults are unchanged when no env var is set.
     """
-    match_rel: float = 0.05        # |rel err| <= this -> match (no uncertainty)
-    partial_rel: float = 0.30      # |rel err| <= this -> partial
-    sigma_match: float = 1.0       # within +/- this many sigma -> match
-    sigma_partial: float = 2.0     # within +/- this many sigma -> partial
-    near_zero_abs: float = 1e-9    # |paper| below this -> use absolute compare
-    match_abs: float = 1e-6        # absolute match band when paper value ~ 0
-    range_overlap_match: float = 0.80  # range overlap fraction for a table/range match
+    match_rel: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_MATCH_REL", 0.05))                  # |rel err| <= this -> match (no uncertainty)
+    partial_rel: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_PARTIAL_REL", 0.30))              # |rel err| <= this -> partial
+    sigma_match: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_SIGMA_MATCH", 1.0))               # within +/- this many sigma -> match
+    sigma_partial: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_SIGMA_PARTIAL", 2.0))           # within +/- this many sigma -> partial
+    near_zero_abs: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_NEAR_ZERO_ABS", 1e-9))          # |paper| below this -> use absolute compare
+    match_abs: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_MATCH_ABS", 1e-6))                  # absolute match band when paper value ~ 0
+    range_overlap_match: float = field(default_factory=lambda: _env_float("VERITAS_GRADE_RANGE_OVERLAP_MATCH", 0.80))  # range overlap fraction for a table/range match
 
     def to_dict(self) -> dict:
         return {
