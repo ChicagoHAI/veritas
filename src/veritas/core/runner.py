@@ -21,6 +21,7 @@ from veritas.core.replication import (
     gather_evidence,
     _extract_json,
 )
+from veritas.core.diligence import compute_execution_facts, ExecutionFacts
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -102,6 +103,10 @@ class ReplicationRunner:
         self.config = config
         self.prompt_generator = PromptGenerator()
         self.report_generator = ReportGenerator()
+        # Last-computed objective execution facts from the most recent
+        # _replicate call (None until replicate runs). These are facts, not a
+        # diligence verdict — the manager (an LLM) does the judging.
+        self._last_facts: Optional[ExecutionFacts] = None
 
     def run(self) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
@@ -691,7 +696,47 @@ class ReplicationRunner:
         else:
             print("  Warning: No evidence collected from replication")
 
+        # Compute objective execution facts over the replicate evidence and
+        # persist them. These are facts (step counts, exit codes, declared
+        # outputs, repeated commands) — NOT a diligence verdict; the manager (an
+        # LLM) judges diligence from these facts + the trajectory. COMPUTE + LOG
+        # only here: this does not change control flow or block.
+        self._last_facts = self._compute_and_write_execution_facts(
+            evidence, replication_plan
+        )
+
         return evidence
+
+    def _compute_and_write_execution_facts(
+        self,
+        evidence: Optional[ExecutionEvidence],
+        replication_plan: Optional[ReplicationPlan],
+    ) -> Optional[ExecutionFacts]:
+        """Compute objective execution facts and write them to disk.
+
+        Pure-compute + log; never raises into the pipeline. Writes
+        ``replication/diligence_signals.json`` and prints a one-line summary,
+        and returns the computed :class:`ExecutionFacts` (or ``None`` on
+        failure) so the manager loop can consume them as evidence. With
+        ``max_iters == 1`` the return value is simply ignored, preserving the
+        prior log-only behavior. These are facts — NOT a diligence verdict; the
+        manager judges diligence.
+        """
+        try:
+            facts = compute_execution_facts(evidence, plan=replication_plan)
+
+            out_path = self.config.diligence_signals_path
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(facts.to_dict(), indent=2),
+                encoding="utf-8",
+            )
+            print(f"  Execution facts: {facts.summary_line()}")
+            print(f"  Execution facts written to {out_path}")
+            return facts
+        except Exception as exc:  # never let facts computation break the run
+            print(f"  Warning: execution-facts computation failed ({exc}); continuing")
+            return None
 
     # -- Fix Assessment ----------------------------------------------------
 

@@ -45,6 +45,7 @@ OUTPUT_SUBDIRS = (
 
 # Well-known output filenames produced by the pipeline.
 REPLICATION_PLAN_FILE = "replication_plan.json"
+DILIGENCE_SIGNALS_FILE = "diligence_signals.json"
 FIX_SEVERITY_FILE = "fix_severity.json"
 REPORT_MD_FILE = "replication_report.md"
 REPORT_PDF_FILE = "replication_report.pdf"
@@ -341,6 +342,10 @@ class Config:
     @property
     def replication_score_path(self) -> Path:
         return self.verify_dir / REPLICATION_SCORE_FILE
+
+    @property
+    def diligence_signals_path(self) -> Path:
+        return self.replication_dir / DILIGENCE_SIGNALS_FILE
 
     def verify_path(self, claim_id: str) -> Path:
         """Path to the per-claim verdict JSON, e.g. ``verify/C1.json``."""
