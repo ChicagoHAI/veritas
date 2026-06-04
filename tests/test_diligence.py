@@ -1,7 +1,13 @@
-"""Unit tests for deterministic diligence signals (`veritas.core.diligence`).
+"""Unit tests for objective execution facts (`veritas.core.diligence`).
 
-Covers each signal on synthetic evidence and the overall aggregation, plus a
-real on-disk replication_log.json example.
+These cover the FACTS the module asserts — step counts, missing planned steps,
+exit-code detection, declared-output-file presence, byte-identical repeated
+commands, and effort accounting — on synthetic evidence and the real on-disk
+`replication_log.json`. There are deliberately NO keyword/pattern tests: the
+module no longer does any semantic (placeholder/skip/downsize) matching. Those
+judgments belong to the manager (an LLM); deterministic code asserts only facts.
+
+The module must also never raise on malformed or missing evidence.
 """
 
 import json
@@ -10,14 +16,8 @@ from pathlib import Path
 import pytest
 
 from veritas.core.diligence import (
-    DiligenceSignals,
-    compute_artifacts,
-    compute_diligence_signals,
-    compute_downsizing,
-    compute_placeholders,
-    compute_premature_stop,
-    compute_step_coverage,
-    compute_stuck,
+    ExecutionFacts,
+    compute_execution_facts,
 )
 from veritas.core.models.replication import (
     AppliedFix,
@@ -31,7 +31,7 @@ from veritas.core.models.replication import (
 
 
 def _step(step_id, *, description="", command="cmd", exit_code=0, stdout="",
-          stderr="", output_files=None, notes="", fixes=None):
+          stderr="", output_files=None, notes="", fixes=None, duration=0.0):
     return StepOutcome(
         step_id=step_id,
         description=description,
@@ -40,6 +40,7 @@ def _step(step_id, *, description="", command="cmd", exit_code=0, stdout="",
         stdout=stdout,
         stderr=stderr,
         output_files=list(output_files or []),
+        duration_seconds=duration,
         notes=notes,
         fixes_applied=list(fixes or []),
     )
@@ -60,302 +61,187 @@ def _plan(step_ids, expected="produce results.csv"):
     )
 
 
-# --- step coverage ----------------------------------------------------------
+# --- step coverage (planned vs executed; missing = set difference) ----------
 
 
-def test_step_coverage_all_executed():
-    ev = _evidence([_step(1), _step(2), _step(3)])
-    plan = _plan([1, 2, 3])
-    sig = compute_step_coverage(ev, plan)
-    assert sig.planned_steps == 3
-    assert sig.executed_steps == 3
-    assert sig.missing_step_ids == []
-    assert sig.all_planned_executed is True
+def test_all_planned_steps_executed():
+    facts = compute_execution_facts(_evidence([_step(1), _step(2), _step(3)]), _plan([1, 2, 3]))
+    assert facts.planned_steps == 3
+    assert facts.executed_steps == 3
+    assert facts.missing_step_ids == []
 
 
-def test_step_coverage_missing_step():
-    ev = _evidence([_step(1), _step(3)])  # step 2 never ran
-    plan = _plan([1, 2, 3])
-    sig = compute_step_coverage(ev, plan)
-    assert sig.missing_step_ids == [2]
-    assert sig.all_planned_executed is False
+def test_missing_planned_step_detected():
+    # step 2 produced no record
+    facts = compute_execution_facts(_evidence([_step(1), _step(3)]), _plan([1, 2, 3]))
+    assert facts.planned_steps == 3
+    assert facts.executed_steps == 2
+    assert facts.missing_step_ids == [2]
 
 
-def test_step_coverage_skipped_narration():
-    ev = _evidence([
-        _step(1),
-        _step(2, notes="Skipped this step because data was missing; moved on."),
-    ])
-    plan = _plan([1, 2])
-    sig = compute_step_coverage(ev, plan)
-    assert 2 in sig.skipped_step_ids
-    assert sig.all_planned_executed is False
+def test_no_plan_falls_back_to_executed_count():
+    facts = compute_execution_facts(_evidence([_step(1), _step(2)]), None)
+    assert facts.planned_steps == 2
+    assert facts.missing_step_ids == []
 
 
-def test_step_coverage_no_plan_falls_back_to_executed():
-    ev = _evidence([_step(1), _step(2)])
-    sig = compute_step_coverage(ev, None)
-    assert sig.planned_steps == 2
-    assert sig.missing_step_ids == []
+def test_extra_executed_steps_not_counted_as_missing():
+    # executed more steps than planned: no planned step is missing
+    facts = compute_execution_facts(_evidence([_step(1), _step(2), _step(3)]), _plan([1, 2]))
+    assert facts.planned_steps == 2
+    assert facts.executed_steps == 3
+    assert facts.missing_step_ids == []
 
 
-# --- artifacts --------------------------------------------------------------
+# --- exit codes (nonzero == failure, a fact) --------------------------------
 
 
-def test_artifacts_result_step_with_output_file():
-    ev = _evidence([_step(1, description="generate the results table",
-                          output_files=["results.csv"])])
-    plan = _plan([1])
-    sig = compute_artifacts(ev, plan)
-    assert sig.result_steps_total == 1
-    assert sig.result_steps_with_artifact == 1
-    assert sig.all_result_steps_emitted is True
-
-
-def test_artifacts_result_step_with_metric_in_stdout():
-    ev = _evidence([_step(1, description="compute accuracy metric",
-                          stdout="final accuracy = 0.834")])
-    plan = _plan([1])
-    sig = compute_artifacts(ev, plan)
-    assert sig.result_steps_with_artifact == 1
-
-
-def test_artifacts_result_step_missing_artifact():
-    ev = _evidence([_step(1, description="generate the figure",
-                          stdout="done", output_files=[])])
-    plan = _plan([1], expected="save figure.png")
-    sig = compute_artifacts(ev, plan)
-    assert sig.result_steps_total == 1
-    assert sig.result_steps_missing_artifact_ids == [1]
-    assert sig.all_result_steps_emitted is False
-
-
-def test_artifacts_non_result_step_ignored():
-    ev = _evidence([_step(1, description="install dependencies", command="pip install foo")])
-    plan = ReplicationPlan(environment={}, steps=[
-        ReplicationStep(id=1, description="install deps", command_hint="pip install",
-                        expected_outcome="environment ready"),
-    ])
-    sig = compute_artifacts(ev, plan)
-    assert sig.result_steps_total == 0
-
-
-# --- premature stop ---------------------------------------------------------
-
-
-def test_premature_stop_unresolved_errors_thin_fixes():
-    ev = _evidence([
-        _step(1),
-        _step(2, exit_code=1, stderr="Error: module not found", notes="gave up"),
-    ])
-    sig = compute_premature_stop(ev)
-    assert sig.failed_steps == 1
-    assert sig.failed_steps_with_unresolved_errors == 1
-    assert sig.total_fixes_applied == 0
-    assert sig.premature_stop_suspected is True
-
-
-def test_premature_stop_not_flagged_when_fixes_applied():
-    fix = AppliedFix(file_path="a.py", description="patch", original_error="ImportError",
-                     diff_snippet="- x\n+ y")
-    ev = _evidence([
-        _step(1, fixes=[fix]),
-        _step(2, fixes=[fix]),  # 2 fixes total, more than the failures
-    ])
-    sig = compute_premature_stop(ev)
-    assert sig.premature_stop_suspected is False
-
-
-def test_premature_stop_last_step_failed():
-    ev = _evidence([
-        _step(1, fixes=[AppliedFix("a", "b", "c", "d")]),
-        _step(2, exit_code=2, stderr="Traceback: fatal error"),
-    ])
-    sig = compute_premature_stop(ev)
-    assert sig.last_step_failed is True
-    assert sig.premature_stop_suspected is True
-
-
-# --- stuck / looping --------------------------------------------------------
-
-
-def test_stuck_repeated_identical_commands():
-    ev = _evidence([
-        _step(1, command="python train.py"),
-        _step(2, command="python train.py"),
-        _step(3, command="python  train.py"),  # whitespace-different => normalized equal
-    ])
-    sig = compute_stuck(ev, repeat_threshold=3)
-    assert sig.max_repeat == 3
-    assert sig.stuck_suspected is True
-
-
-def test_stuck_below_threshold():
-    ev = _evidence([
-        _step(1, command="python a.py"),
-        _step(2, command="python a.py"),
-        _step(3, command="python b.py"),
-    ])
-    sig = compute_stuck(ev, repeat_threshold=3)
-    assert sig.max_repeat == 2
-    assert sig.stuck_suspected is False
-    assert "python a.py" in sig.repeated_commands
-
-
-def test_stuck_ignores_blank_commands():
-    ev = _evidence([_step(1, command=""), _step(2, command="")])
-    sig = compute_stuck(ev)
-    assert sig.max_repeat == 1
-    assert sig.stuck_suspected is False
-
-
-# --- downsizing -------------------------------------------------------------
-
-
-def test_downsizing_detected_in_notes():
-    ev = _evidence([
-        _step(1, notes="Only ran 1 epoch to save time; full run is 100 epochs."),
-    ])
-    sig = compute_downsizing(ev)
-    assert sig.downsizing_suspected is True
-    assert 1 in sig.downsized_step_ids
-    assert sig.hints[1]
-
-
-def test_downsizing_toy_run():
-    ev = _evidence([_step(1, notes="used a toy subset of the data")])
-    sig = compute_downsizing(ev)
-    assert sig.downsizing_suspected is True
-
-
-def test_downsizing_clean_run():
-    ev = _evidence([_step(1, notes="ran the full grid over all 100 epochs")])
-    sig = compute_downsizing(ev)
-    assert sig.downsizing_suspected is False
-
-
-# --- placeholders / silent exceptions ---------------------------------------
-
-
-def test_placeholder_keyword_in_notes():
-    ev = _evidence([_step(1, notes="returned a placeholder value for now (TODO)")])
-    sig = compute_placeholders(ev)
-    assert sig.placeholder_suspected is True
-    assert 1 in sig.flagged_step_ids
-
-
-def test_placeholder_swallowed_exception_in_fix_diff():
-    fix = AppliedFix(file_path="run.py", description="wrap in try", original_error="err",
-                     diff_snippet="+ try:\n+     compute()\n+ except Exception: pass")
-    ev = _evidence([_step(1, fixes=[fix])])
-    sig = compute_placeholders(ev)
-    assert sig.placeholder_suspected is True
-
-
-def test_placeholder_in_codebase_diff_added_lines_only():
-    diff = (
-        "--- a/run.py\n+++ b/run.py\n"
-        "@@ -1 +1,2 @@\n"
-        "-real_value = compute()\n"
-        "+real_value = 0.5  # hardcode value for now\n"
+def test_exit_codes_recorded_per_step():
+    facts = compute_execution_facts(
+        _evidence([_step(1, exit_code=0), _step(2, exit_code=2)]), None
     )
-    ev = _evidence([_step(1)])
-    sig = compute_placeholders(ev, codebase_diff=diff)
-    assert sig.placeholder_suspected is True
-    assert sig.diff_hints
+    assert facts.exit_codes == {1: 0, 2: 2}
+    assert facts.succeeded_steps == 1
+    assert facts.failed_steps == 1
+    assert facts.failed_step_ids == [2]
 
 
-def test_placeholder_ignores_removed_lines_in_diff():
-    # A placeholder appearing only on a removed ("-") line was in the upstream
-    # repo and was removed by the agent — not introduced. Should not flag.
-    diff = (
-        "--- a/run.py\n+++ b/run.py\n"
-        "@@ -1,2 +1 @@\n"
-        "-value = 0  # placeholder\n"
-        "+value = compute()\n"
+def test_last_step_failed_flag():
+    ok = compute_execution_facts(_evidence([_step(1, exit_code=1), _step(2, exit_code=0)]), None)
+    assert ok.last_step_failed is False
+    bad = compute_execution_facts(_evidence([_step(1, exit_code=0), _step(2, exit_code=1)]), None)
+    assert bad.last_step_failed is True
+
+
+def test_all_steps_succeed_no_failures():
+    facts = compute_execution_facts(_evidence([_step(1), _step(2)]), None)
+    assert facts.failed_steps == 0
+    assert facts.failed_step_ids == []
+    assert facts.last_step_failed is False
+
+
+# --- declared output files (present/absent is a fact) -----------------------
+
+
+def test_declared_output_files_present_and_absent():
+    facts = compute_execution_facts(
+        _evidence([
+            _step(1, output_files=["results.csv", "fig.png"]),
+            _step(2, output_files=[]),
+        ]),
+        None,
     )
-    ev = _evidence([_step(1)])
-    sig = compute_placeholders(ev, codebase_diff=diff)
-    assert sig.diff_hints == []
-    assert sig.placeholder_suspected is False
+    assert facts.steps_with_output_files == [1]
+    assert facts.steps_without_output_files == [2]
+    assert facts.total_output_files == 2
 
 
-def test_placeholder_clean_run():
-    ev = _evidence([_step(1, notes="computed real result from data")])
-    sig = compute_placeholders(ev, codebase_diff="+ real = compute()\n")
-    assert sig.placeholder_suspected is False
+# --- stuck / looping (byte-identical commands; string equality only) --------
 
 
-# --- top-level aggregation --------------------------------------------------
+def test_repeated_identical_commands_counted():
+    facts = compute_execution_facts(
+        _evidence([
+            _step(1, command="python train.py"),
+            _step(2, command="python train.py"),
+            _step(3, command="python  train.py"),  # whitespace-collapsed => identical
+        ]),
+        None,
+    )
+    assert facts.max_command_repeat == 3
+    assert facts.repeated_commands["python train.py"] == 3
 
 
-def test_aggregate_clean_run_is_diligent():
-    ev = _evidence([
-        _step(1, description="install deps", command="pip install -e ."),
-        _step(2, description="run experiment and save results.csv",
-              command="python run.py", output_files=["results.csv"],
-              stdout="accuracy = 0.91"),
-    ])
-    plan = ReplicationPlan(environment={}, steps=[
-        ReplicationStep(id=1, description="install deps", command_hint="pip install -e .",
-                        expected_outcome="environment ready"),
-        ReplicationStep(id=2, description="run experiment", command_hint="python run.py",
-                        expected_outcome="save results.csv"),
-    ])
-    signals = compute_diligence_signals(ev, plan=plan)
-    assert isinstance(signals, DiligenceSignals)
-    assert signals.looks_diligent is True
-    assert signals.hard_negative_reasons == []
+def test_distinct_commands_not_flagged_as_repeats():
+    facts = compute_execution_facts(
+        _evidence([_step(1, command="python a.py"), _step(2, command="python b.py")]),
+        None,
+    )
+    assert facts.max_command_repeat == 1
+    assert facts.repeated_commands == {}
 
 
-def test_aggregate_missing_step_not_diligent():
-    ev = _evidence([_step(1, output_files=["x"], description="produce x")])
-    plan = _plan([1, 2, 3])
-    signals = compute_diligence_signals(ev, plan=plan)
-    assert signals.looks_diligent is False
-    assert any("not executed" in r for r in signals.hard_negative_reasons)
+def test_blank_commands_ignored_for_repeat():
+    facts = compute_execution_facts(_evidence([_step(1, command=""), _step(2, command="")]), None)
+    assert facts.max_command_repeat == 1
+    assert facts.repeated_commands == {}
 
 
-def test_aggregate_no_evidence_not_diligent():
-    signals = compute_diligence_signals(None)
-    assert signals.looks_diligent is False
-    assert signals.hard_negative_reasons
-    signals2 = compute_diligence_signals(_evidence([]))
-    assert signals2.looks_diligent is False
+# --- effort accounting ------------------------------------------------------
 
 
-def test_aggregate_downsizing_is_advisory_not_hard_negative():
-    # Downsizing alone should NOT flip looks_diligent; it's advisory.
-    ev = _evidence([
-        _step(1, description="run experiment, save metrics.json",
-              output_files=["metrics.json"], stdout="acc 0.8",
-              notes="downsized to 1 epoch due to time"),
-    ])
-    plan = _plan([1])
-    signals = compute_diligence_signals(ev, plan=plan)
-    assert signals.downsizing.downsizing_suspected is True
-    assert signals.looks_diligent is True
-    assert any("downsizing" in f for f in signals.advisory_flags)
+def test_fix_and_duration_counts():
+    fix = AppliedFix(file_path="a.py", description="patch", original_error="e", diff_snippet="d")
+    facts = compute_execution_facts(
+        _evidence([
+            _step(1, fixes=[fix, fix], duration=1.5),
+            _step(2, fixes=[fix], duration=2.0),
+        ]),
+        None,
+    )
+    assert facts.total_fixes_applied == 3
+    assert facts.total_duration_seconds == pytest.approx(3.5)
 
 
-def test_aggregate_to_dict_round_trips_keys():
-    ev = _evidence([_step(1, output_files=["a"], description="produce a")])
-    signals = compute_diligence_signals(ev, plan=_plan([1]))
-    d = signals.to_dict()
-    for key in ("looks_diligent", "hard_negative_reasons", "advisory_flags",
-                "step_coverage", "artifacts", "premature_stop", "stuck",
-                "downsizing", "placeholders"):
+# --- no-evidence / robustness (never raises) --------------------------------
+
+
+def test_no_evidence_marks_flag_and_surfaces_planned_missing():
+    facts = compute_execution_facts(None, _plan([1, 2, 3]))
+    assert facts.no_evidence is True
+    assert facts.planned_steps == 3
+    assert facts.missing_step_ids == [1, 2, 3]
+    assert facts.executed_steps == 0
+
+
+def test_empty_evidence_marks_no_evidence():
+    facts = compute_execution_facts(_evidence([]), None)
+    assert facts.no_evidence is True
+    assert facts.executed_steps == 0
+
+
+def test_no_evidence_no_plan_is_safe():
+    facts = compute_execution_facts(None, None)
+    assert facts.no_evidence is True
+    assert facts.planned_steps == 0
+    assert facts.missing_step_ids == []
+
+
+def test_never_raises_on_malformed_steps():
+    # A step with a None command / odd output_files should not blow up.
+    bad = StepOutcome(step_id=1, description="", command_executed=None, exit_code=0,
+                      output_files=None)  # type: ignore[arg-type]
+    facts = compute_execution_facts(_evidence([bad]), None)
+    assert facts.executed_steps == 1
+    # output_files=None coerces to empty
+    assert facts.steps_without_output_files == [1]
+    json.dumps(facts.to_dict())
+
+
+def test_to_dict_is_json_serializable_and_has_expected_keys():
+    facts = compute_execution_facts(_evidence([_step(1, output_files=["a"])]), _plan([1]))
+    d = facts.to_dict()
+    for key in ("planned_steps", "executed_steps", "missing_step_ids",
+                "succeeded_steps", "failed_steps", "failed_step_ids", "exit_codes",
+                "last_step_failed", "steps_with_output_files",
+                "steps_without_output_files", "total_output_files",
+                "repeated_commands", "max_command_repeat", "total_fixes_applied",
+                "total_duration_seconds", "no_evidence"):
         assert key in d
-    # JSON-serializable
     json.dumps(d)
 
 
-def test_summary_line_mentions_verdict():
-    ev = _evidence([_step(1, output_files=["a"], description="produce a")])
-    signals = compute_diligence_signals(ev, plan=_plan([1]))
-    line = signals.summary_line()
-    assert "diligence=" in line
+def test_summary_line_is_factual_no_verdict():
+    facts = compute_execution_facts(_evidence([_step(1, output_files=["a"])]), _plan([1]))
+    line = facts.summary_line()
     assert "steps=" in line
+    # No diligence verdict language in the factual summary.
+    assert "diligent" not in line.lower()
+
+
+def test_summary_line_no_evidence():
+    line = compute_execution_facts(None, None).summary_line()
+    assert "no replication evidence" in line
 
 
 # --- real on-disk example ---------------------------------------------------
@@ -367,30 +253,31 @@ REAL_LOG = Path(
 
 
 @pytest.mark.skipif(not REAL_LOG.exists(), reason="real replication_log.json not present")
-def test_real_replication_log_is_diligent():
+def test_real_replication_log_facts():
     data = json.loads(REAL_LOG.read_text(encoding="utf-8"))
     ev = ExecutionEvidence.from_dict(data)
-    # This run (cb-3849634) ran all 4 steps, fixed path/library issues, and
-    # produced 18 PNGs + an 18-block REML log: it should read as diligent.
-    signals = compute_diligence_signals(ev, plan=None)
-    assert ev.steps_attempted == 4
-    assert signals.looks_diligent is True, signals.hard_negative_reasons
-    # All steps succeeded => no premature stop, no missing artifacts.
-    assert signals.premature_stop.premature_stop_suspected is False
-    assert signals.artifacts.all_result_steps_emitted is True
-    # No identical command repeated 3+ times.
-    assert signals.stuck.stuck_suspected is False
+    facts = compute_execution_facts(ev, plan=None)
+    assert isinstance(facts, ExecutionFacts)
+    # This run (cb-3849634) ran all 4 steps and produced artifacts.
+    assert facts.no_evidence is False
+    assert facts.executed_steps == ev.steps_attempted == 4
+    # All steps succeeded => no failures, last step did not fail.
+    assert facts.failed_steps == 0
+    assert facts.failed_step_ids == []
+    assert facts.last_step_failed is False
+    # At least one step declared output files (18 PNGs etc.).
+    assert facts.total_output_files >= 1
+    assert facts.steps_with_output_files
+    # No identical command repeated 3+ times in this clean run.
+    assert facts.max_command_repeat < 3
     # Output is JSON-serializable.
-    json.dumps(signals.to_dict())
+    json.dumps(facts.to_dict())
 
 
 @pytest.mark.skipif(not REAL_LOG.exists(), reason="real replication_log.json not present")
-def test_real_replication_log_artifact_steps_detected():
+def test_real_replication_log_exit_codes_all_zero():
     data = json.loads(REAL_LOG.read_text(encoding="utf-8"))
     ev = ExecutionEvidence.from_dict(data)
-    signals = compute_diligence_signals(ev, plan=None)
-    # Steps 3 (run meta-analysis) and 4 (confirm PNGs) are result-producing and
-    # both list output files, so at least one artifact step should be detected
-    # and all detected ones should have emitted.
-    assert signals.artifacts.result_steps_total >= 1
-    assert signals.artifacts.result_steps_with_artifact == signals.artifacts.result_steps_total
+    facts = compute_execution_facts(ev, plan=None)
+    assert all(code == 0 for code in facts.exit_codes.values())
+    assert facts.succeeded_steps == facts.executed_steps

@@ -21,7 +21,7 @@ from veritas.core.replication import (
     gather_evidence,
     _extract_json,
 )
-from veritas.core.diligence import compute_diligence_signals
+from veritas.core.diligence import compute_execution_facts, ExecutionFacts
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -103,6 +103,10 @@ class ReplicationRunner:
         self.config = config
         self.prompt_generator = PromptGenerator()
         self.report_generator = ReportGenerator()
+        # Last-computed objective execution facts from the most recent
+        # _replicate call (None until replicate runs). These are facts, not a
+        # diligence verdict — the manager (an LLM) does the judging.
+        self._last_facts: Optional[ExecutionFacts] = None
 
     def run(self) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
@@ -692,51 +696,47 @@ class ReplicationRunner:
         else:
             print("  Warning: No evidence collected from replication")
 
-        # Compute deterministic diligence signals over the replicate evidence and
-        # persist them. This is groundwork for a later manager gate
-        # (notes/2026-06-03-iterative-manager-design.md §4.2): COMPUTE + LOG only.
-        # It does NOT act on the signals, change control flow, or block.
-        self._compute_and_write_diligence_signals(evidence, replication_plan)
+        # Compute objective execution facts over the replicate evidence and
+        # persist them. These are facts (step counts, exit codes, declared
+        # outputs, repeated commands) — NOT a diligence verdict; the manager (an
+        # LLM) judges diligence from these facts + the trajectory. COMPUTE + LOG
+        # only here: this does not change control flow or block.
+        self._last_facts = self._compute_and_write_execution_facts(
+            evidence, replication_plan
+        )
 
         return evidence
 
-    def _compute_and_write_diligence_signals(
+    def _compute_and_write_execution_facts(
         self,
         evidence: Optional[ExecutionEvidence],
         replication_plan: Optional[ReplicationPlan],
-    ) -> None:
-        """Compute deterministic diligence signals and write them to disk.
+    ) -> Optional[ExecutionFacts]:
+        """Compute objective execution facts and write them to disk.
 
-        Pure-compute + log only; never raises into the pipeline. Writes
-        ``replication/diligence_signals.json`` and prints a one-line summary.
-        The signals are not consumed by any later phase yet — they are
-        groundwork for the iterative-manager gate.
+        Pure-compute + log; never raises into the pipeline. Writes
+        ``replication/diligence_signals.json`` and prints a one-line summary,
+        and returns the computed :class:`ExecutionFacts` (or ``None`` on
+        failure) so the manager loop can consume them as evidence. With
+        ``max_iters == 1`` the return value is simply ignored, preserving the
+        prior log-only behavior. These are facts — NOT a diligence verdict; the
+        manager judges diligence.
         """
         try:
-            codebase_diff = None
-            diff_path = self.config.replication_dir / "codebase.diff"
-            if diff_path.exists():
-                try:
-                    codebase_diff = diff_path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    codebase_diff = None
-
-            signals = compute_diligence_signals(
-                evidence,
-                plan=replication_plan,
-                codebase_diff=codebase_diff,
-            )
+            facts = compute_execution_facts(evidence, plan=replication_plan)
 
             out_path = self.config.diligence_signals_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(
-                json.dumps(signals.to_dict(), indent=2),
+                json.dumps(facts.to_dict(), indent=2),
                 encoding="utf-8",
             )
-            print(f"  Diligence signals: {signals.summary_line()}")
-            print(f"  Diligence signals written to {out_path}")
-        except Exception as exc:  # never let signals computation break the run
-            print(f"  Warning: diligence-signal computation failed ({exc}); continuing")
+            print(f"  Execution facts: {facts.summary_line()}")
+            print(f"  Execution facts written to {out_path}")
+            return facts
+        except Exception as exc:  # never let facts computation break the run
+            print(f"  Warning: execution-facts computation failed ({exc}); continuing")
+            return None
 
     # -- Fix Assessment ----------------------------------------------------
 
