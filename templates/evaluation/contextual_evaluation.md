@@ -93,6 +93,30 @@ Cover, concisely and specifically:
 Be honest and calibrated: do not inflate a weak replication, and do not
 manufacture concerns about a clean one. Where you are uncertain, say so.
 
+Also write a **`bottom_line`**: one or two sentences a busy reader can read first
+and understand the gist — did the paper reproduce, and the single most important
+caveat. Lead with the answer.
+
+## Writing for a human reader
+
+A person reads this report. Write plainly and directly. Follow these rules in
+every `report.*` field:
+
+- Short, clear sentences. One idea each. Prefer common words over jargon; if a
+  technical term is needed, say what it means in a few words.
+- Lead with the conclusion, then the reason. Do not bury the point.
+- No em dashes. Use a period or a comma.
+- Do not use the "not X, but Y" construction, or "it's not just X, it's Y". State
+  what is true directly.
+- Avoid long lists joined by commas. Two or three items in a sentence is fine; if
+  you have more, use separate sentences or a real list.
+- Skip filler and hedging throat-clearing ("it is worth noting that",
+  "importantly", "in essence"). Just say the thing.
+- Be specific and concrete: name the file, the number, the step. Point the reader
+  to where they can check.
+- Sound like a careful colleague explaining the result, not like a press release
+  or a chatbot.
+
 ## Output
 
 Write `{{ output_dir }}/evaluation/contextual_evaluation.json`:
@@ -107,6 +131,7 @@ Write `{{ output_dir }}/evaluation/contextual_evaluation.json`:
     "rationale": "<one paragraph; explicitly state if you found nothing>"
   },
   "report": {
+    "bottom_line": "<1-2 plain sentences: did it reproduce, and the key caveat>",
     "important_claims": "<which claims are central and their outcomes>",
     "replication_summary": "<overall narrative + score attribution>",
     "did_not_replicate": "<per-failed-claim cause; '' or 'Everything in scope replicated.' if none>",

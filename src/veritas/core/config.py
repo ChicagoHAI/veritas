@@ -46,6 +46,7 @@ REPLICATION_PLAN_FILE = "replication_plan.json"
 FIX_SEVERITY_FILE = "fix_severity.json"
 REPORT_MD_FILE = "replication_report.md"
 REPORT_PDF_FILE = "replication_report.pdf"
+REPORT_HTML_FILE = "replication_report.html"
 
 # Claim-verification pipeline filenames.
 PAPER_CLAIMS_FILE = "paper_claims.json"

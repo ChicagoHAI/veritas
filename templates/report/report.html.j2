@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replication Report{% if paper_title %} — {{ paper_title }}{% endif %}</title>
+<style>
+  :root {
+    --match: #1a7f37; --partial: #9a6700; --nomatch: #cf222e;
+    --na: #57606a; --bg: #f6f8fa; --card: #ffffff; --ink: #1f2328;
+    --muted: #57606a; --line: #d0d7de; --accent: #0969da;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink); background: var(--bg); margin: 0; line-height: 1.55;
+    font-size: 15px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 22px 60px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  h2 { font-size: 17px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 14px; margin: 16px 0 4px; color: var(--ink); }
+  p { margin: 6px 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 12.5px; }
+
+  /* Verdict card */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-top: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .hero { display: flex; gap: 22px; align-items: center; }
+  .gauge { flex: 0 0 auto; }
+  .hero-body { flex: 1 1 auto; }
+  .badge { display: inline-block; font-weight: 600; font-size: 12px; letter-spacing: .02em; padding: 3px 10px; border-radius: 999px; color: #fff; }
+  .bottomline { font-size: 16px; font-weight: 500; margin: 8px 0 10px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; }
+  .stats b { color: var(--ink); }
+
+  /* Tier bar */
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin: 4px 0 2px; }
+  .bar > span { display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  /* Claim chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
+  .chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: #fff; font-weight: 500; }
+
+  /* Tables */
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .st { font-weight: 600; }
+
+  details { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  details > summary { cursor: pointer; padding: 9px 12px; font-weight: 600; font-size: 13.5px; }
+  details[open] > summary { border-bottom: 1px solid var(--line); }
+  details .inner { padding: 4px 14px 12px; }
+  .refs { font-size: 12.5px; color: var(--muted); }
+  .refs code { font-size: 12px; }
+  footer { margin-top: 34px; color: var(--muted); font-size: 12px; text-align: center; }
+  @media print { body { background: #fff; } .card { box-shadow: none; } details { border: none; } details > summary { display: none; } details .inner { padding: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Replication Report</h1>
+  <div class="sub">{% if paper_title %}{{ paper_title }} · {% endif %}Mode: {{ mode or "n/a" }} · Generated {{ generated }}</div>
+
+  <!-- VERDICT CARD -->
+  <div class="card">
+    <div class="hero">
+      <div class="gauge">
+        <svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label="Replication score {{ score_pct_str }}">
+          <circle cx="52" cy="52" r="46" fill="none" stroke="#eaeef2" stroke-width="10"/>
+          {% if score_pct is not none %}
+          <circle cx="52" cy="52" r="46" fill="none" stroke="{{ badge_color }}" stroke-width="10"
+                  stroke-linecap="round" stroke-dasharray="{{ gauge_dash }} {{ gauge_circ }}"
+                  transform="rotate(-90 52 52)"/>
+          <text x="52" y="50" text-anchor="middle" font-size="22" font-weight="700" fill="{{ '#1f2328' }}">{{ score_pct_str }}</text>
+          <text x="52" y="68" text-anchor="middle" font-size="10" fill="#57606a">score</text>
+          {% else %}
+          <text x="52" y="56" text-anchor="middle" font-size="13" fill="#57606a">no score</text>
+          {% endif %}
+        </svg>
+      </div>
+      <div class="hero-body">
+        <span class="badge" style="background: {{ badge_color }}">{{ verdict_label }}</span>
+        {% if bottom_line %}<div class="bottomline">{{ bottom_line }}</div>{% endif %}
+        <div class="stats">
+          <span><b>{{ counted_match }}/{{ counted_total }}</b> claims reproduced</span>
+          {% if n_partial %}<span><b>{{ n_partial }}</b> partial</span>{% endif %}
+          {% if n_nomatch %}<span><b>{{ n_nomatch }}</b> did not reproduce</span>{% endif %}
+          {% if n_missing %}<span><b>{{ n_missing }}</b> unverified</span>{% endif %}
+          <span><b>{{ total_fixes }}</b> fix{{ '' if total_fixes == 1 else 'es' }} applied</span>
+          {% if cheating_risk and cheating_risk != "low" %}<span style="color: var(--nomatch)"><b>integrity risk: {{ cheating_risk }}</b></span>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if tier_total > 0 %}
+    <h3 style="margin-top:16px">Claims at a glance</h3>
+    <div class="bar" aria-hidden="true">
+      {% if seg_match %}<span style="width: {{ seg_match }}%; background: var(--match)"></span>{% endif %}
+      {% if seg_partial %}<span style="width: {{ seg_partial }}%; background: var(--partial)"></span>{% endif %}
+      {% if seg_nomatch %}<span style="width: {{ seg_nomatch }}%; background: var(--nomatch)"></span>{% endif %}
+      {% if seg_other %}<span style="width: {{ seg_other }}%; background: var(--na)"></span>{% endif %}
+    </div>
+    <div class="legend">
+      <span><i style="background: var(--match)"></i>match {{ n_match }}</span>
+      <span><i style="background: var(--partial)"></i>partial {{ n_partial }}</span>
+      <span><i style="background: var(--nomatch)"></i>no match {{ n_nomatch }}</span>
+      <span><i style="background: var(--na)"></i>other {{ n_other }}</span>
+    </div>
+    {% if claim_chips %}
+    <div class="chips">
+      {% for c in claim_chips %}<span class="chip" style="background: {{ c.color }}" title="{{ c.type }} · {{ c.status }}">{{ c.id }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  {% if flags %}
+  <div class="card" style="border-color: #d4a72c; background: #fff8c5">
+    <b>Flags</b>
+    <ul style="margin:6px 0 0">{% for f in flags %}<li>{{ f }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  <!-- NARRATIVE (summary-first) -->
+  {% if narrative.replication_summary or narrative.important_claims %}
+  <h2>Summary</h2>
+  {% if narrative.replication_summary %}<p>{{ narrative.replication_summary }}</p>{% endif %}
+  {% if narrative.important_claims %}<h3>What was checked</h3><p>{{ narrative.important_claims }}</p>{% endif %}
+  {% if narrative.did_not_replicate %}<h3>What did not reproduce</h3><p>{{ narrative.did_not_replicate }}</p>{% endif %}
+  {% endif %}
+
+  <!-- LIMITATIONS -->
+  {% if narrative.code_quality_limitations or fixes %}
+  <h2>Limitations &amp; code quality</h2>
+  {% if narrative.code_quality_limitations %}<p>{{ narrative.code_quality_limitations }}</p>{% endif %}
+  {% if fixes %}
+  <p class="sub">{{ total_fixes }} fix{{ '' if total_fixes == 1 else 'es' }} were needed to run the provided code ({{ n_minor }} minor, {{ n_major }} major, {{ n_critical }} critical). These describe the code, not the replication.</p>
+  <table>
+    <thead><tr><th>#</th><th>Fix</th><th>Severity</th></tr></thead>
+    <tbody>{% for fx in fixes %}<tr><td>{{ loop.index }}</td><td>{{ fx.desc }}</td><td class="st" style="color: {{ fx.color }}">{{ fx.severity }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+
+  <!-- DETAILS (collapsible) -->
+  <h2>Details</h2>
+
+  <details>
+    <summary>Per-claim verdicts ({{ claims_table|length }})</summary>
+    <div class="inner">
+      <table>
+        <thead><tr><th>ID</th><th>Tier</th><th>Type</th><th>Status</th><th>How graded</th><th>Why</th></tr></thead>
+        <tbody>
+        {% for r in claims_table %}
+          <tr>
+            <td><code>{{ r.id }}</code></td><td>{{ r.tier }}</td><td>{{ r.type }}</td>
+            <td class="st" style="color: {{ r.color }}">{{ r.status_label }}</td>
+            <td>{{ r.graded_by or "—" }}</td>
+            <td>{{ r.rationale }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  {% if steps %}
+  <details>
+    <summary>Replication run ({{ steps_ok }}/{{ steps|length }} steps, {{ duration_str }})</summary>
+    <div class="inner">
+      <p class="sub">{{ environment }}</p>
+      <table>
+        <thead><tr><th>Step</th><th>What it did</th><th>Result</th><th>Time</th></tr></thead>
+        <tbody>{% for s in steps %}<tr><td>{{ s.id }}</td><td>{{ s.desc }}</td><td class="st" style="color: {{ '#1a7f37' if s.ok else '#cf222e' }}">{{ 'ok' if s.ok else 'failed' }}</td><td>{{ s.duration }}s</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+
+  {% if narrative.whole_paper_consistency or narrative.methodology_correspondence or narrative.repo_divergence %}
+  <details>
+    <summary>Consistency &amp; methodology</summary>
+    <div class="inner">
+      {% if narrative.whole_paper_consistency %}<h3>Whole-paper consistency</h3><p>{{ narrative.whole_paper_consistency }}</p>{% endif %}
+      {% if narrative.methodology_correspondence %}<h3>Methodology correspondence</h3><p>{{ narrative.methodology_correspondence }}</p>{% endif %}
+      {% if narrative.repo_divergence %}<h3>Repository divergence</h3><p>{{ narrative.repo_divergence }}</p>{% endif %}
+    </div>
+  </details>
+  {% endif %}
+
+  <details>
+    <summary>Where to look (artifacts)</summary>
+    <div class="inner refs">
+      <p>The full machine-readable record is on disk next to this report:</p>
+      <ul>
+        <li><code>verify/verdicts.json</code> — every claim verdict, with the deterministic grading rule.</li>
+        <li><code>verify/replication_score.json</code> — the score and tier breakdown.</li>
+        <li><code>replication/replication_log.json</code> — step-by-step execution, with the fixes applied.</li>
+        <li><code>replication/codebase.diff</code> — every change made to the provided code.</li>
+        {% if has_evaluation %}<li><code>evaluation/contextual_evaluation.json</code> — the evaluator's full notes (this report's narrative).</li>{% endif %}
+        <li><code>replication/codebase/</code> — the patched code that was actually run.</li>
+      </ul>
+    </div>
+  </details>
+
+  <footer>Generated by Veritas{% if has_evaluation %} · narrative by the post-replication evaluator (advisory; the score is computed deterministically){% endif %}</footer>
+</div>
+</body>
+</html>
