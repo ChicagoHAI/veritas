@@ -260,6 +260,55 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_research_prompt(
+        self,
+        template_name: str,
+        output_dir: Path,
+        need: str,
+        rationale: str = "",
+    ) -> str:
+        """Render a research sub-agent prompt (resource- or literature-finder).
+
+        ``template_name`` is one of ``research.KIND_TEMPLATES`` values
+        (``research/resource_finder.md`` / ``research/literature_finder.md``).
+        These are separate provider invocations with web-search/fetch access;
+        they return findings + provenance, never the paper's reported values.
+        """
+        template = self.env.get_template(template_name)
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "need": need,
+            "rationale": rationale,
+        }
+        return template.render(**context)
+
+    def generate_research_redactor_prompt(
+        self,
+        output_dir: Path,
+        out_path: Path,
+        kind: str,
+        need: str,
+        finding: str,
+        sources: List[str],
+    ) -> str:
+        """Render the LLM redactor prompt (anti-leakage barrier b, primary layer).
+
+        The redactor reads a research finding and removes the paper's reported
+        result values by LLM judgment (no keyword matching), preserving
+        methodology/resources and provenance. ``out_path`` is where the redactor
+        must write its single JSON object.
+        """
+        template = self.env.get_template("research/redactor.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "out_path": str(out_path),
+            "kind": kind,
+            "need": need,
+            "finding": finding,
+            "sources": sources or [],
+        }
+        return template.render(**context)
+
     def generate_insufficient_spec_report(
         self,
         mode: str,

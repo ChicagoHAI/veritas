@@ -98,6 +98,26 @@ the missing artifact to produce — not "try harder". Put what was already tried
 `replicate` (almost always), `plan` (only if the plan itself was wrong), or
 `codegen` (paper-only mode, generated code was the problem).
 
+## Optional: request methodology/resource research (NOT answers)
+
+If the deficiency is that the agent was **missing a resource** (a dataset,
+download script, dependency, install recipe) or an **underspecified methodology
+detail** (a standard hyperparameter from the original method paper, a reference
+implementation, a preprocessing convention), you may request a narrow research
+sub-agent to go find it. Each request is one object in `research_requests`:
+
+- `kind`: `"resource"` (a missing dataset/script/dependency to obtain) or
+  `"literature"` (a methodological detail / standard implementation to look up).
+  Requests with any other kind are ignored.
+- `need`: a specific description of what to find.
+- `rationale`: why this is blocking the replication.
+
+**You must NOT request the paper's reported result/metric values.** Research is
+strictly for *methodology and resources*; a request like "find the reported
+accuracy of X" is out of bounds and will be rejected. Findings are redacted of
+any reported values before they reach the re-run. Only request research when a
+genuine missing resource/method is the deficiency — otherwise leave it empty.
+
 ## Output
 
 Write **only** a single JSON object to
@@ -113,9 +133,11 @@ Write **only** a single JSON object to
   "directive": "<specific NEW instructions for the re-run; empty if accept>",
   "already_tried": "<what the agent already attempted, so the re-run doesn't repeat it>",
   "confidence": 0.0,
-  "research_requests": []
+  "research_requests": [
+    {"kind": "resource | literature", "need": "<what to find>", "rationale": "<why it blocks replication>"}
+  ]
 }
 ```
 
-Leave `research_requests` empty — methodology/resource research is a later phase
-and out of scope here. Decide now.
+Leave `research_requests` empty `[]` unless a missing resource/method is the
+actual deficiency. Decide now.
