@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from veritas.core.config_env import _env_float
+
 
 ClaimType = Literal["scalar", "scalar_range", "table", "qualitative", "figure"]
 ClaimTier = Literal["headline", "supporting", "setup"]
@@ -11,11 +13,13 @@ VerdictStatus = Literal[
 ]
 
 # Tier weights for the Replication Score formula. Headline claims weigh most;
-# setup-tier claims are scored but down-weighted.
+# setup-tier claims are scored but down-weighted. Each weight is overridable
+# via a ``VERITAS_TIER_WEIGHT_*`` env var (issue #61; read from ``.env``, see
+# ``config_env`` / ``.env.example``). Defaults are unchanged when unset.
 TIER_WEIGHTS: Dict[str, float] = {
-    "headline": 3.0,
-    "supporting": 2.0,
-    "setup": 1.0,
+    "headline": _env_float("VERITAS_TIER_WEIGHT_HEADLINE", 3.0),
+    "supporting": _env_float("VERITAS_TIER_WEIGHT_SUPPORTING", 2.0),
+    "setup": _env_float("VERITAS_TIER_WEIGHT_SETUP", 1.0),
 }
 
 # Verdict-to-score mapping. ``not_applicable`` is excluded from the score

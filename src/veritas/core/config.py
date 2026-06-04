@@ -1,8 +1,10 @@
 """Configuration for Veritas."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
+
+from veritas.core.config_env import _env_int, _env_opt_int
 
 
 # All valid AI providers
@@ -93,6 +95,10 @@ class Config:
     # Defaults are None — killing a hung run discards partial progress, which
     # is worse than letting it finish. Re-enable once there's a checkpoint /
     # resume mechanism to recover the work.
+    #
+    # Resolution (highest wins): CLI flag -> ``VERITAS_*_TIMEOUT`` env var ->
+    # code default (None). The CLI passes an explicit value only when its flag
+    # is set; when it passes None, ``__post_init__`` consults the env var.
     analyze_timeout: Optional[int] = None
     codegen_timeout: Optional[int] = None
     replicate_timeout: Optional[int] = None
@@ -103,10 +109,33 @@ class Config:
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
 
+    # Hard cap on manager-driven retry iterations (reserved for the later
+    # iterative-manager loop phase; no behavior wired yet). Overridable via
+    # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
+    max_iters: int = field(
+        default_factory=lambda: _env_int("VERITAS_MAX_ITERS", 3)
+    )
+
     # Runtime settings
     verbose: bool = False
 
+    # Env-var names backing each per-phase timeout, consulted in __post_init__
+    # when the CLI flag is absent (the field is left as None).
+    _TIMEOUT_ENV_VARS = {
+        "analyze_timeout": "VERITAS_ANALYZE_TIMEOUT",
+        "codegen_timeout": "VERITAS_CODEGEN_TIMEOUT",
+        "replicate_timeout": "VERITAS_REPLICATE_TIMEOUT",
+        "verify_timeout": "VERITAS_VERIFY_TIMEOUT",
+        "evaluate_timeout": "VERITAS_EVALUATE_TIMEOUT",
+    }
+
     def __post_init__(self):
+        # Timeouts: CLI (explicit value) wins; otherwise honor the env var as
+        # the default. Code default (None) remains when neither is set.
+        for field_name, env_name in self._TIMEOUT_ENV_VARS.items():
+            if getattr(self, field_name) is None:
+                setattr(self, field_name, _env_opt_int(env_name, None))
+
         # Convert input paths to Path objects (if provided)
         if self.repo_path is not None:
             self.repo_path = Path(self.repo_path)
