@@ -22,6 +22,15 @@ from veritas.core.replication import (
     _extract_json,
 )
 from veritas.core.diligence import compute_execution_facts, ExecutionFacts
+from veritas.core.manager import (
+    ManagerGuidance,
+    ManagerVerdict,
+    WorkflowLog,
+    archive_attempt,
+    build_handoff,
+    parse_manager_verdict,
+    should_stop,
+)
 from veritas.core.report_generator import ReportGenerator
 from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
@@ -104,8 +113,9 @@ class ReplicationRunner:
         self.prompt_generator = PromptGenerator()
         self.report_generator = ReportGenerator()
         # Last-computed objective execution facts from the most recent
-        # _replicate call (None until replicate runs). These are facts, not a
-        # diligence verdict — the manager (an LLM) does the judging.
+        # _replicate call; consumed by the manager retry loop (None until
+        # replicate runs). These are facts, not a diligence verdict — the
+        # manager does the judging.
         self._last_facts: Optional[ExecutionFacts] = None
 
     def run(self) -> RunResult:
@@ -173,18 +183,10 @@ class ReplicationRunner:
                     state.complete_stage('plan', success=False)
                     raise
 
-            # replicate
-            if state.is_stage_completed('replicate'):
-                print("[OK] replicate: skipped (already completed)")
-                evidence = gather_evidence(self.config.replication_dir)
-            else:
-                state.start_stage('replicate')
-                try:
-                    evidence = self._replicate(replication_plan)
-                    state.complete_stage('replicate', success=True)
-                except Exception:
-                    state.complete_stage('replicate', success=False)
-                    raise
+            # replicate (+ manager retry loop when max_iters > 1)
+            evidence, replication_plan = self._replicate_with_manager_loop(
+                state, claims, replication_plan
+            )
 
             # assess_fixes
             if state.is_stage_completed('assess_fixes'):
@@ -498,8 +500,17 @@ class ReplicationRunner:
         sentinel.parent.mkdir(parents=True, exist_ok=True)
         sentinel.touch()
 
-    def _generate_replication_plan(self, claims: PaperClaims) -> Optional[ReplicationPlan]:
-        """Generate a replication plan whose steps reference claim IDs."""
+    def _generate_replication_plan(
+        self,
+        claims: PaperClaims,
+        manager_guidance: Optional["ManagerGuidance"] = None,
+    ) -> Optional[ReplicationPlan]:
+        """Generate a replication plan whose steps reference claim IDs.
+
+        ``manager_guidance`` is set only on a manager-directed re-run that
+        targets the plan phase; it is threaded into the prompt so the
+        regenerated plan addresses the prior deficiency (never a blank repeat).
+        """
         print("Generating replication plan...")
 
         effective_repo_path = self.config.effective_repo_path
@@ -512,6 +523,7 @@ class ReplicationRunner:
             mode=self.config.mode,
             claim_scope=self.config.claim_scope,
             data_path=self.config.data_path,
+            manager_guidance=manager_guidance,
         )
 
         prompt_path = self.config.prompts_dir / "replication_plan_prompt.txt"
@@ -648,7 +660,11 @@ class ReplicationRunner:
 
     # -- Phase 2: Replicate ------------------------------------------------
 
-    def _replicate(self, replication_plan: Optional[ReplicationPlan]) -> Optional[ExecutionEvidence]:
+    def _replicate(
+        self,
+        replication_plan: Optional[ReplicationPlan],
+        manager_guidance: Optional["ManagerGuidance"] = None,
+    ) -> Optional[ExecutionEvidence]:
         """Phase 2: Execute replication via the configured provider.
 
         Runs as an in-process subprocess. When the whole veritas CLI is
@@ -656,12 +672,22 @@ class ReplicationRunner:
         the provider sees `/workspace/repo` as the read-only repo and
         `/workspace/output` as the writable scratch space. When run
         outside Docker (dev-time), paths come from `self.config` as-is.
+
+        ``manager_guidance`` is set only on a manager-directed re-run; it is
+        threaded into the session prompt's guidance block so the re-run is
+        genuinely different (deficiency + new instructions + already-tried).
         """
         if replication_plan is None:
             print("No replication plan available, skipping replication phase")
             return None
 
-        print("Running replication phase...")
+        if manager_guidance is not None:
+            print(
+                f"Running replication phase (manager-directed re-run, "
+                f"iteration {manager_guidance.iteration})..."
+            )
+        else:
+            print("Running replication phase...")
 
         session_instructions = self.prompt_generator.generate_replication_session_prompt(
             replication_plan,
@@ -670,6 +696,7 @@ class ReplicationRunner:
             repo_path=self.config.repo_path,
             mode=self.config.mode,
             data_path=self.config.data_path,
+            manager_guidance=manager_guidance,
         )
 
         log_path = self.config.replication_transcript_path
@@ -698,14 +725,262 @@ class ReplicationRunner:
 
         # Compute objective execution facts over the replicate evidence and
         # persist them. These are facts (step counts, exit codes, declared
-        # outputs, repeated commands) — NOT a diligence verdict; the manager (an
-        # LLM) judges diligence from these facts + the trajectory. COMPUTE + LOG
-        # only here: this does not change control flow or block.
+        # outputs, repeated commands) — NOT a diligence verdict; the manager
+        # judges diligence from these facts + the trajectory. The facts are
+        # stashed on the runner so the manager loop (when enabled) can consume
+        # them without recomputing. With ``max_iters == 1`` the loop never runs
+        # and this stays log-only.
         self._last_facts = self._compute_and_write_execution_facts(
             evidence, replication_plan
         )
 
         return evidence
+
+    # -- Phase 2 loop: replicate + manager-controlled retries --------------
+
+    def _replicate_with_manager_loop(
+        self,
+        state: PipelineState,
+        claims: PaperClaims,
+        replication_plan: Optional[ReplicationPlan],
+    ) -> Tuple[Optional[ExecutionEvidence], Optional[ReplicationPlan]]:
+        """Run replicate, then (when ``max_iters > 1``) the manager retry loop.
+
+        The loop sits AFTER replicate and BEFORE verify. Each iteration: compute
+        objective execution facts (already done inside ``_replicate``), run the
+        manager review — which ALWAYS does the diligence judging (there is no
+        deterministic short-circuit-accept) — log to the workflow artifact, and
+        — on a genuine-deficiency ``revise`` within budget — archive the prior
+        attempt, invalidate the target phase + downstream, and re-run with the
+        manager's directive injected. Hard cap + no-progress terminator (over
+        the objective facts) + graceful hand-off enforced here in python.
+
+        With ``max_iters <= 1`` (the default for ``replicate`` / the benchmark)
+        the manager never runs: behavior is identical to a single pass.
+        Resume-safe: a completed-and-accepted replicate is skipped; an
+        in-progress loop re-enters at the correct iteration via the workflow log.
+        """
+        max_iters = max(1, int(self.config.max_iters))
+        workflow = WorkflowLog(self.config.veritas_state_dir)
+
+        # --- First pass (or resume of a completed replicate) ---------------
+        if state.is_stage_completed('replicate'):
+            print("[OK] replicate: skipped (already completed)")
+            evidence = gather_evidence(self.config.replication_dir)
+            # Recompute facts for the loop (cheap, pure) when the loop is on
+            # and we don't already have them from this process.
+            if max_iters > 1 and self._last_facts is None:
+                self._last_facts = self._compute_and_write_execution_facts(
+                    evidence, replication_plan
+                )
+        else:
+            state.start_stage('replicate')
+            try:
+                evidence = self._replicate(replication_plan)
+                state.complete_stage('replicate', success=True)
+            except Exception:
+                state.complete_stage('replicate', success=False)
+                raise
+
+        # Loop off: single-pass, no manager gate, no workflow log entries.
+        if max_iters <= 1:
+            return evidence, replication_plan
+
+        # --- Resume guard: a prior process already converged ----------------
+        # If replicate was skipped (already completed) AND the workflow log shows
+        # the loop already reached a terminal state (an accept verdict or a
+        # hand-off), do not re-run the manager — the trajectory is settled.
+        prior_records = workflow.records()
+        if state.is_stage_completed('replicate') and prior_records:
+            last_review = next(
+                (r for r in reversed(prior_records) if r.get("phase") == "manager_review"),
+                None,
+            )
+            already_accepted = (
+                last_review is not None
+                and (last_review.get("manager_verdict") or {}).get("decision") == "accept"
+            )
+            has_handoff = any(r.get("phase") == "handoff" for r in prior_records)
+            if already_accepted or has_handoff:
+                print("[OK] manager loop: skipped (already converged on a prior run)")
+                return evidence, replication_plan
+
+        # --- Determine where we are in the loop (resume-aware) -------------
+        prior_runs = [r for r in prior_records if r.get("phase") == "replicate"]
+        iteration = len(prior_runs) if prior_runs else 1
+        if iteration < 1:
+            iteration = 1
+        # If the workflow log has no replicate entry yet, this first pass is
+        # iteration 1; record it.
+        if not prior_runs:
+            workflow.append(self._workflow_replicate_record(iteration, self._last_facts, None))
+
+        prev_facts: Optional[ExecutionFacts] = None
+        prev_directive: Optional[str] = None
+        last_verdict: Optional[ManagerVerdict] = None
+
+        # --- Bounded review→decide→(accept|revise) loop --------------------
+        while True:
+            facts = self._last_facts
+            retries_remaining = max(0, max_iters - iteration)
+
+            prior_guidance = (
+                ManagerGuidance.from_verdict(last_verdict, iteration=iteration)
+                if last_verdict is not None and last_verdict.decision == "revise"
+                else None
+            )
+            verdict = self._manager_review(
+                facts,
+                iteration=iteration,
+                retries_remaining=retries_remaining,
+                prior_guidance=prior_guidance,
+            )
+
+            workflow.append(
+                self._workflow_review_record(iteration, facts, verdict)
+            )
+
+            stop = should_stop(
+                verdict=verdict,
+                iteration=iteration,
+                max_iters=max_iters,
+                prev_signals=prev_facts,
+                curr_signals=facts,
+                prev_directive=prev_directive,
+            )
+
+            if stop.stop:
+                if verdict.accepted:
+                    print(f"  Manager ACCEPTED replication at iteration {iteration}.")
+                else:
+                    # Graceful terminal: cap or no-progress without acceptance.
+                    handoff = build_handoff(
+                        iteration=iteration,
+                        verdict=verdict,
+                        signals=facts,
+                        stop_reason=stop.reason,
+                    )
+                    workflow.write_handoff(handoff)
+                    print(
+                        f"  Manager did NOT accept (stop reason: {stop.reason}); "
+                        f"wrote unresolved hand-off to {workflow.md_path}"
+                    )
+                return evidence, replication_plan
+
+            # --- Re-run: archive, invalidate, inject guidance, replicate ---
+            target = verdict.target_phase or "replicate"
+            guidance = ManagerGuidance.from_verdict(verdict, iteration=iteration + 1)
+            archived = archive_attempt(self.config.replication_dir, iteration)
+            if archived is not None:
+                print(f"  Archived attempt {iteration} -> {archived}")
+
+            # Invalidate the target phase + downstream so they re-run.
+            self._invalidate_for_rerun(state, target)
+
+            prev_facts = facts
+            prev_directive = verdict.directive
+            last_verdict = verdict
+            iteration += 1
+
+            print(
+                f"  Manager REVISE: re-running '{target}' "
+                f"(iteration {iteration}/{max_iters}) with new directive."
+            )
+
+            # Re-run the plan first if the manager targeted it, then replicate.
+            if target == "plan":
+                state.start_stage('plan')
+                try:
+                    replication_plan = self._generate_replication_plan(
+                        claims, manager_guidance=guidance
+                    )
+                    if replication_plan is not None:
+                        self._validate_plan_claim_refs(replication_plan, claims)
+                    state.complete_stage('plan', success=True)
+                except Exception:
+                    state.complete_stage('plan', success=False)
+                    raise
+
+            # Replicate again. The guidance is always surfaced to the replicate
+            # agent (even on a plan-targeted re-run the deficiency is relevant to
+            # how it executes), so the re-run is never a blank repeat.
+            state.start_stage('replicate')
+            try:
+                evidence = self._replicate(replication_plan, manager_guidance=guidance)
+                state.complete_stage('replicate', success=True)
+            except Exception:
+                state.complete_stage('replicate', success=False)
+                raise
+
+            workflow.append(
+                self._workflow_replicate_record(
+                    iteration, self._last_facts, archived, guidance=guidance
+                )
+            )
+
+    def _invalidate_for_rerun(self, state: PipelineState, target_phase: str) -> None:
+        """Invalidate the manager's target phase + all downstream phases.
+
+        Uses the existing per-field invalidation map as the canonical phase
+        ordering so a re-run cleanly discards stale downstream state (assess /
+        verify) and they recompute against the new attempt.
+        """
+        order = ['analyze', 'plan', 'replicate', 'assess_fixes', 'verify']
+        if target_phase not in order:
+            target_phase = 'replicate'
+        idx = order.index(target_phase)
+        to_invalidate = order[idx:]
+        state.invalidate_stages(to_invalidate)
+
+    def _workflow_replicate_record(
+        self,
+        iteration: int,
+        facts: Optional[ExecutionFacts],
+        archived_attempt_path: Optional[Path],
+        guidance: Optional[ManagerGuidance] = None,
+    ) -> Dict[str, Any]:
+        rec: Dict[str, Any] = {
+            "iteration": iteration,
+            "phase": "replicate",
+            "status": "completed",
+            "transcript_path": str(self.config.replication_transcript_path),
+            "signals": self._facts_record(facts),
+            "manager_verdict": None,
+            "directive": guidance.directive if guidance is not None else None,
+            "archived_attempt_path": str(archived_attempt_path) if archived_attempt_path else None,
+        }
+        return rec
+
+    def _workflow_review_record(
+        self,
+        iteration: int,
+        facts: Optional[ExecutionFacts],
+        verdict: ManagerVerdict,
+    ) -> Dict[str, Any]:
+        return {
+            "iteration": iteration,
+            "phase": "manager_review",
+            "status": verdict.decision,
+            "transcript_path": str(self.config.manager_review_transcript_path),
+            "signals": self._facts_record(facts),
+            "manager_verdict": verdict.to_dict(),
+            "directive": verdict.directive or None,
+            "archived_attempt_path": None,
+        }
+
+    @staticmethod
+    def _facts_record(facts: Optional[ExecutionFacts]) -> Optional[Dict[str, Any]]:
+        """Workflow-log payload for one run's objective execution facts.
+
+        The JSON key in the workflow log stays ``"signals"`` for backward
+        compatibility with the markdown renderer and existing logs, but the
+        content is the objective execution facts (no diligence verdict).
+        """
+        if facts is None:
+            return None
+        d = facts.to_dict()
+        d["summary_line"] = facts.summary_line()
+        return d
 
     def _compute_and_write_execution_facts(
         self,
@@ -737,6 +1012,102 @@ class ReplicationRunner:
         except Exception as exc:  # never let facts computation break the run
             print(f"  Warning: execution-facts computation failed ({exc}); continuing")
             return None
+
+    # -- Phase 2.5: Manager review (post-replicate control gate) -----------
+
+    def _manager_review(
+        self,
+        facts: Optional[ExecutionFacts],
+        *,
+        iteration: int,
+        retries_remaining: int,
+        prior_guidance: Optional["ManagerGuidance"],
+    ) -> ManagerVerdict:
+        """Independent post-replicate control gate — the manager ALWAYS judges.
+
+        There is NO deterministic short-circuit-accept. The manager (an
+        independent LLM pass: fresh context, API keys stripped — it must NOT run
+        paper code) ALWAYS runs and makes the accept/revise decision, reading the
+        trajectory + evidence + the objective execution facts. Diligence
+        questions (skipped/downsized/premature-stop/placeholder) are the
+        manager's to assess from the real evidence, not pre-decided by
+        keyword-matching code. This is distinct from the post-verify
+        contextual-evaluation report author; it never alters the deterministic
+        Replication Score.
+
+        ``facts`` are the objective execution facts, passed to the prompt builder
+        only as a place to surface evidence; they do not gate the call.
+
+        Always returns a :class:`ManagerVerdict`; on any failure it falls back to
+        ACCEPT (fail-open is the safe default for a control gate over an already-
+        completed replication — we never block the score on a flaky judge call).
+        """
+        # The manager always runs — no clean-signals auto-accept path.
+        print(
+            f"  Manager: running independent review "
+            f"(iteration {iteration}, {retries_remaining} retries remaining)..."
+        )
+        output_path = self.config.manager_review_path
+        # Clear any stale verdict from a prior iteration so we read this run's.
+        try:
+            if output_path.exists():
+                output_path.unlink()
+        except OSError:
+            pass
+
+        prompt = self.prompt_generator.generate_manager_review_prompt(
+            output_dir=self.config.output_dir,
+            retries_remaining=retries_remaining,
+            iteration=iteration,
+            manager_guidance=prior_guidance,
+        )
+        prompt_path = self.config.prompts_dir / "manager_review_prompt.txt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        # Default env (API keys stripped) + working dir = output tree: the
+        # manager reads artifacts but cannot run the paper's code. Mirrors the
+        # contextual-evaluation checker's isolation.
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=self.config.manager_review_transcript_path,
+            timeout=self.config.evaluate_timeout,
+        )
+        if not success:
+            print("  Warning: manager review pass did not succeed; defaulting to ACCEPT")
+            return self._fallback_accept_verdict("manager review invocation failed")
+        if not output_path.exists():
+            print("  Warning: manager wrote no verdict; defaulting to ACCEPT")
+            return self._fallback_accept_verdict("manager produced no verdict file")
+
+        try:
+            raw = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: manager verdict is not valid JSON ({e}); defaulting to ACCEPT")
+            return self._fallback_accept_verdict(f"unparseable manager verdict: {e}")
+
+        verdict = parse_manager_verdict(raw, source="llm")
+        print(
+            f"  Manager verdict: {verdict.decision.upper()} "
+            f"(genuine={verdict.deficiency_is_genuine}, "
+            f"target={verdict.target_phase}, confidence={verdict.confidence})"
+        )
+        if verdict.reason:
+            print(f"    reason: {verdict.reason}")
+        if verdict.decision == 'revise' and verdict.directive:
+            print(f"    directive: {verdict.directive}")
+        return verdict
+
+    @staticmethod
+    def _fallback_accept_verdict(reason: str) -> ManagerVerdict:
+        return ManagerVerdict(
+            decision="accept",
+            diligence_sufficient=True,
+            reason=f"manager fallback accept ({reason})",
+            confidence=0.0,
+            source="fallback",
+        )
 
     # -- Fix Assessment ----------------------------------------------------
 
@@ -1024,40 +1395,6 @@ class ReplicationRunner:
                 print(f"  {claim.id}: verifier failed (no verdict written; retry on next run)")
 
         return results
-
-    def evaluate_existing(self) -> RunResult:
-        """Run the evaluation manager + (re)render the report on an existing
-        replication output directory, without re-running the pipeline.
-
-        Powers ``./veritas evaluate <dir>`` — replicate once (e.g. for a
-        benchmark), evaluate later for the product report, no recompute. The
-        manager pass always runs here (it is the point of the command); it is
-        idempotent and skips if its output already exists. Advisory as always —
-        it does not change the Replication Score.
-        """
-        if not self.config.paper_claims_path.exists():
-            return RunResult(
-                success=False,
-                error=(
-                    f"No paper_claims.json at {self.config.paper_claims_path}. "
-                    "Run './veritas replicate' on this directory first."
-                ),
-            )
-        claims = self._load_paper_claims()
-        verdicts = self._load_verify_artifacts(claims)
-        score = self._score_after_verify(claims, verdicts)
-        evidence = gather_evidence(self.config.replication_dir)
-        fix_assessment = self._load_fix_assessment()
-
-        self._evaluate()  # the manager pass (advisory; idempotent)
-
-        report_path, pdf_path = self._report(
-            claims, verdicts, score, evidence, fix_assessment,
-        )
-        return RunResult(
-            success=True, verdicts=verdicts, score=score,
-            report_path=report_path, pdf_path=pdf_path,
-        )
 
     def _score_after_verify(
         self,

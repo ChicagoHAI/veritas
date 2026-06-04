@@ -4,6 +4,24 @@ You are generating a step-by-step replication plan for testing whether a paper's
 
 **Run mode:** {{ mode }} — {% if mode == "full" %}paper and repository both provided.{% elif mode == "paper-only" %}paper-only mode; the codebase at the repository path was just written from the paper by an earlier phase and may be rough.{% elif mode == "repo-only" %}repo-only mode; no paper available — claims came from the README.{% endif %}
 
+{% if manager_guidance %}
+> ## ⚠️ This plan is being regenerated at the review manager's request (iteration {{ manager_guidance.iteration }})
+>
+> A previous replication attempt was reviewed and judged insufficient, and the
+> **plan itself** was identified as the thing to fix. Revise the plan with the
+> guidance below — do not just reproduce the previous plan.
+>
+> **Where the previous attempt fell short:**
+> {{ manager_guidance.deficiency }}
+>
+> **What the revised plan must do differently:**
+> {{ manager_guidance.directive }}
+{% if manager_guidance.already_tried %}>
+> **Already tried — do not re-propose these:**
+> {{ manager_guidance.already_tried }}
+{% endif %}
+
+{% endif %}
 ## Available skills
 
 A catalog of scientific-computing skills is staged at

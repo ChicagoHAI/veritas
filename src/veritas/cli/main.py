@@ -119,6 +119,17 @@ def replicate(
         "--evaluate-timeout",
         help="Timeout in seconds for the contextual-evaluation phase. Default: no timeout.",
     ),
+    max_iters: Optional[int] = typer.Option(
+        None,
+        "--max-iters",
+        help=(
+            "Max manager-controlled retry iterations for the replicate phase. "
+            "1 (default) = single-pass (loop OFF; benchmark-comparable, identical "
+            "to prior behavior). >1 enables the post-replicate manager gate that "
+            "may re-run replication with new instructions, bounded by this cap. "
+            "When unset, falls back to VERITAS_MAX_ITERS if set in .env, else 1."
+        ),
+    ),
     restart: bool = typer.Option(
         False,
         "--restart",
@@ -157,8 +168,20 @@ def replicate(
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
 
+    # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
+    # (only when explicitly set in the environment) -> 1 (single-pass default for
+    # `replicate`, so the benchmark stays single-pass and behavior is identical
+    # to before). The loop only engages when the resolved value is > 1.
+    import os as _os
+    if max_iters is not None:
+        resolved_max_iters = max_iters
+    elif _os.environ.get("VERITAS_MAX_ITERS", "").strip():
+        resolved_max_iters = None  # let Config read VERITAS_MAX_ITERS itself
+    else:
+        resolved_max_iters = 1
+
     try:
-        config = Config(
+        config_kwargs = dict(
             paper_path=paper,
             repo_path=repo,
             output_dir=output_dir,
@@ -175,11 +198,18 @@ def replicate(
             claims_path=claims,
             data_path=data,
         )
+        if resolved_max_iters is not None:
+            config_kwargs["max_iters"] = resolved_max_iters
+        config = Config(**config_kwargs)
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
     console.print(f"[blue]Mode:[/blue] {config.mode}")
+    if config.max_iters > 1:
+        console.print(
+            f"[blue]Manager retry loop:[/blue] ON (max {config.max_iters} iterations)"
+        )
 
     runner = ReplicationRunner(config)
 

@@ -23,6 +23,7 @@ from veritas.core.config import (
     ANALYZE_SUBDIR,
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
+    WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
@@ -262,6 +263,12 @@ class ReportGenerator:
         if score is not None and score.flags:
             report += self._render_flags(score.flags)
 
+        # Manager retry-loop trajectory (only when the loop ran, i.e. >1
+        # iteration or a hand-off). The Replication Score above is unaffected by
+        # the iteration count; this section records what each re-run changed.
+        if output_dir is not None:
+            report += self._render_iterations(output_dir)
+
         if evidence is not None:
             report += self._render_replication_section(evidence)
 
@@ -452,6 +459,69 @@ class ReportGenerator:
         s = "## Flags\n\n"
         for f in flags:
             s += f"- {f}\n"
+        return s + "\n"
+
+    def _render_iterations(self, output_dir: Path) -> str:
+        """Render the manager retry-loop trajectory from the workflow log.
+
+        Reads ``<output>/.veritas/workflow.jsonl``. Returns an empty string when
+        the loop did not run (no log, or only a single replicate pass with no
+        manager review), so single-pass runs stay uncluttered. The Replication
+        Score is unaffected by iteration count; this only notes what changed.
+        """
+        log_path = Path(output_dir) / ".veritas" / WORKFLOW_LOG_FILE
+        if not log_path.exists():
+            return ""
+        records = []
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        reviews = [r for r in records if r.get("phase") == "manager_review"]
+        handoff = next(
+            (r.get("handoff") for r in reversed(records) if r.get("phase") == "handoff"),
+            None,
+        )
+        # No manager involvement -> loop effectively off; don't render.
+        if not reviews and handoff is None:
+            return ""
+
+        n_iters = max(
+            (r.get("iteration", 1) for r in records if r.get("iteration")),
+            default=1,
+        )
+        s = "## Replication Iterations\n\n"
+        s += (
+            f"The manager-controlled retry loop ran. **Iterations: {n_iters}.** "
+            "The Replication Score is computed deterministically and is "
+            "unaffected by the iteration count; this section records the "
+            "manager's review decisions and what each re-run changed.\n\n"
+        )
+        for r in reviews:
+            verdict = r.get("manager_verdict") or {}
+            it = r.get("iteration")
+            decision = (verdict.get("decision") or "?").upper()
+            s += f"- **Iteration {it} review:** {decision}"
+            genuine = verdict.get("deficiency_is_genuine")
+            if genuine:
+                s += f" ({genuine})"
+            s += "\n"
+            if verdict.get("reason"):
+                s += f"  - Reason: {verdict['reason']}\n"
+            if decision == "REVISE" and verdict.get("directive"):
+                s += f"  - New directive: {verdict['directive']}\n"
+        if handoff is not None:
+            s += (
+                "\n**Unresolved hand-off (manager did not accept within the cap):** "
+                f"{handoff.get('where_it_falls_short', '')}\n"
+            )
+            if handoff.get("what_to_try_next"):
+                s += f"  - What to try next: {handoff['what_to_try_next']}\n"
         return s + "\n"
 
     def _render_replication_section(self, evidence) -> str:

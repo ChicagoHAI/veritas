@@ -72,6 +72,15 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
+# Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
+# the post-replicate control gate; its structured verdict lands in the
+# replication subdir, its transcript alongside, and the workflow/decision log
+# in the .veritas state dir.
+MANAGER_REVIEW_FILE = "manager_review.json"
+MANAGER_REVIEW_TRANSCRIPT_FILE = "manager_review_transcript.jsonl"
+WORKFLOW_LOG_FILE = "workflow.jsonl"
+WORKFLOW_MD_FILE = "workflow.md"
+
 
 @dataclass
 class Config:
@@ -346,6 +355,24 @@ class Config:
     @property
     def diligence_signals_path(self) -> Path:
         return self.replication_dir / DILIGENCE_SIGNALS_FILE
+
+    # -- Manager retry-loop artifacts ---------------------------------------
+
+    @property
+    def veritas_state_dir(self) -> Path:
+        return self.output_dir / ".veritas"
+
+    @property
+    def manager_review_path(self) -> Path:
+        return self.replication_dir / MANAGER_REVIEW_FILE
+
+    @property
+    def manager_review_transcript_path(self) -> Path:
+        return self.replication_dir / MANAGER_REVIEW_TRANSCRIPT_FILE
+
+    @property
+    def workflow_log_path(self) -> Path:
+        return self.veritas_state_dir / WORKFLOW_LOG_FILE
 
     def verify_path(self, claim_id: str) -> Path:
         """Path to the per-claim verdict JSON, e.g. ``verify/C1.json``."""
