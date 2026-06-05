@@ -1,4 +1,4 @@
-"""Tier-weighted Replication Score contract after setup-tier removal."""
+"""Tier-weighted Replication Score: the two-tier (headline / supporting) contract."""
 
 from veritas.core.models.paper_claims import (
     PaperClaim, PaperClaims, ClaimVerdict, TIER_WEIGHTS,
@@ -6,8 +6,10 @@ from veritas.core.models.paper_claims import (
 from veritas.core.verify import compute_replication_score
 
 
-def test_tier_weights_has_no_setup():
-    assert set(TIER_WEIGHTS) == {"headline", "supporting"}
+def test_tier_weights_match_claim_tiers():
+    from veritas.core.models.paper_claims import ClaimTier
+    assert set(TIER_WEIGHTS) == set(ClaimTier.__args__) == {"headline", "supporting"}
+    assert TIER_WEIGHTS == {"headline": 3.0, "supporting": 2.0}
 
 
 def test_score_dict_has_no_setup_key():
