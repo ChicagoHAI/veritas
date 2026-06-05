@@ -57,6 +57,7 @@ Output a JSON object with this top-level shape:
         "year": <int if visible, else null>,
         "authors": ["<lastname>", ...]
     },
+    "extraction_mode": "main",
     "claims": [ /* claim objects, see below */ ]
 }
 ```
@@ -68,7 +69,7 @@ Each claim object has these fields:
 | `id` | yes | Short identifier, e.g. `"C1"`, `"C2"`. Sequential. |
 | `description` | yes | One sentence: what the claim asserts. Use the paper's own terminology. |
 | `type` | yes | One of: `scalar`, `scalar_range`, `table`, `qualitative`, `figure`. |
-| `tier` | yes | One of: `headline`, `supporting`, `setup`. |
+| `tier` | yes | One of: `headline`, `supporting`. |
 | `paper_value` | optional | The value(s) the paper reports. Shape varies by type (see below). Omit for `qualitative` and `figure` claims where no numeric value is stated. |
 | `units` | optional | Physical / statistical units of `paper_value`, where meaningful. |
 | `expected_output_file` | optional | For `figure` and `table` claims when the paper's code is expected to produce a specific file. Path relative to the repo root. |
@@ -95,17 +96,7 @@ Each claim object has these fields:
 
 - **`headline`** — the paper's central reproducible result. Usually 1-3 per paper, drawn from the abstract or the marquee figure. The lab cares most about getting these right.
 - **`supporting`** — intermediate measurements, secondary figures, qualitative observations that build toward the headline.
-- **`setup`** — claims that border on configuration (e.g., "the model uses 12 layers"). These are scored but down-weighted. Use sparingly — most setup info belongs in the replication plan, not in claims.
-
-When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result.
-
-## Scope
-
-{% if claim_scope == "main" %}
-This run is in **main scope** — extract only claims whose tier is `headline` or `supporting`. Do not produce `setup`-tier claims; setup configuration goes into the replication plan downstream.
-{% else %}
-Extract all tiers, including `setup`.
-{% endif %}
+When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result. Extract only `headline` and `supporting` claims. Setup-level configuration (e.g., "the model uses 12 layers") belongs in the replication plan, not in claims.
 
 ## Verification Field — Concrete Examples
 
