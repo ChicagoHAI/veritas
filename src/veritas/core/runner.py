@@ -99,7 +99,6 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     # Config
     'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
 }
@@ -324,10 +323,9 @@ class ReplicationRunner:
 
         n_h = len(claims.by_tier("headline"))
         n_s = len(claims.by_tier("supporting"))
-        n_se = len(claims.by_tier("setup"))
         print(
             f"  Loaded {len(claims.claims)} claims "
-            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
+            f"({n_h} headline, {n_s} supporting)"
         )
         return claims
 
@@ -373,7 +371,6 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             readme_path=readme_path,
-            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
@@ -436,10 +433,9 @@ class ReplicationRunner:
 
         n_h = len(claims.by_tier("headline"))
         n_s = len(claims.by_tier("supporting"))
-        n_se = len(claims.by_tier("setup"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_h} headline, {n_s} supporting, {n_se} setup)"
+            f"({n_h} headline, {n_s} supporting)"
         )
         return claims
 
@@ -532,7 +528,6 @@ class ReplicationRunner:
             claims=claims,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             mode=self.config.mode,
-            claim_scope=self.config.claim_scope,
             data_path=self.config.data_path,
             manager_guidance=manager_guidance,
         )
@@ -1735,7 +1730,6 @@ class ReplicationRunner:
         """
         return {
             'provider': self.config.provider,
-            'claim_scope': self.config.claim_scope,
             'mode': self.config.mode,
             'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
         }

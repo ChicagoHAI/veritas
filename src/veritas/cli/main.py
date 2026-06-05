@@ -74,14 +74,6 @@ def replicate(
         exists=True,
         file_okay=False,
     ),
-    scope: str = typer.Option(
-        "main",
-        "--scope",
-        help=(
-            "Claim-extraction scope. 'main' targets headline+supporting (default); "
-            "'full' (not yet implemented) includes setup tier."
-        ),
-    ),
     generate_pdf: bool = typer.Option(
         True,
         "--pdf/--no-pdf",
@@ -193,7 +185,6 @@ def replicate(
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
             run_evaluation=evaluate,
-            claim_scope=scope,
             mode=mode,
             claims_path=claims,
             data_path=data,
