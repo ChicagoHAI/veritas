@@ -110,7 +110,6 @@ class PaperClaim:
 class PaperClaims:
     """The set of claims extracted from a paper plus light metadata."""
     paper: Dict[str, Any] = field(default_factory=dict)
-    extraction_mode: str = "main"
     claims: List[PaperClaim] = field(default_factory=list)
 
     def claim_ids(self) -> "set[str]":
@@ -131,7 +130,6 @@ class PaperClaims:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "paper": self.paper,
-            "extraction_mode": self.extraction_mode,
             "claims": [c.to_dict() for c in self.claims],
         }
 
@@ -139,7 +137,6 @@ class PaperClaims:
     def from_dict(cls, data: Dict[str, Any]) -> "PaperClaims":
         return cls(
             paper=data.get("paper", {}),
-            extraction_mode=data.get("extraction_mode", "main"),
             claims=[PaperClaim.from_dict(c) for c in data.get("claims", [])],
         )
 

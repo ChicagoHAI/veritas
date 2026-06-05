@@ -57,7 +57,6 @@ Output a JSON object with this top-level shape:
         "year": <int if visible, else null>,
         "authors": ["<lastname>", ...]
     },
-    "extraction_mode": "{{ claim_scope }}",
     "claims": [ /* claim objects, see below */ ]
 }
 ```
