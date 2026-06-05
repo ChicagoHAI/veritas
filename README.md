@@ -26,6 +26,7 @@ Input (Paper PDF and/or Repository)
         |         rather than reimplementing it.
   4. REPLICATE    Run the plan on a writable copy of the code. Fix issues to keep
         |         going. Report what was produced, never tune toward paper values.
+        |         Optionally retried under a manager loop (--max-iters).
   5. ASSESS       Rate each applied fix (minor / major / critical).
         |
   6. VERIFY       Per claim: an LLM comparator extracts the produced value; a
@@ -53,6 +54,27 @@ produced, and a deterministic **grader** decides the verdict from that value
 against the paper value and a declared tolerance. Each verdict records how it was
 graded. Qualitative and figure claims, which have no number to compute on, keep
 the comparator's judgment.
+
+### Iterative replication (opt-in)
+
+By default the replicate phase runs once. Pass `--max-iters N` (or set
+`VERITAS_MAX_ITERS`) to turn on a manager-controlled retry loop. After each
+attempt an independent manager reviews the execution facts (which steps ran, what
+they produced, where it got stuck) and the trajectory, then either **accepts** the
+run or **sends it back to revise** with specific guidance, up to N attempts. The
+manager runs with a fresh context and no API keys, so it cannot run the paper's
+code or see reported values — it only reviews and directs.
+
+A faithful-but-divergent result is accepted, not retried; only a real deficiency
+(a step that never ran, a missing artifact, a premature stop) triggers a revise.
+On a revise the manager can dispatch narrow research sub-agents to find a missing
+dataset, script, or underspecified method; their findings are stripped of any
+reported values and tagged with their source before feeding the next attempt.
+Each attempt is archived under `replication.attempt-N/`, every decision is logged
+to `.veritas/workflow.{jsonl,md}` and shown in the report, and the Replication
+Score stays deterministic no matter how many attempts ran.
+
+`replicate` with no `--max-iters` (the benchmark path) stays a single pass.
 
 ## Commands
 
@@ -152,6 +174,18 @@ $EDITOR .env
 Keys are passed into the container only on the replicate phase, which runs the
 paper's code. Every other phase gets a stripped environment.
 
+## Configuration
+
+Most defaults are overridable per run through `VERITAS_*` variables in the same
+`.env`, with no code edits. Resolution, highest wins: a CLI flag (where one
+exists) → the `VERITAS_*` env var → the built-in default. `.env.example` lists
+them all.
+
+- **Grading tolerances** — `VERITAS_GRADE_MATCH_REL` (0.05), `VERITAS_GRADE_PARTIAL_REL` (0.30), the σ bands, range overlap.
+- **Tier weights** — `VERITAS_TIER_WEIGHT_HEADLINE` (3), `_SUPPORTING` (2), `_SETUP` (1).
+- **Retry loop** — `VERITAS_MAX_ITERS` (1), `VERITAS_RESEARCH_MAX_CALLS` (2; `0` disables research).
+- **Per-phase timeouts** — `VERITAS_ANALYZE_TIMEOUT`, `VERITAS_REPLICATE_TIMEOUT`, `VERITAS_VERIFY_TIMEOUT`, and the rest (unset = no timeout).
+
 ## Claim types and tiers
 
 Five shape-typed claim categories; each claim carries a tier that sets its weight.
@@ -175,13 +209,16 @@ Five shape-typed claim categories; each claim carries a tier that sets its weigh
 ```
 replicate/
 ├── analyze/        paper_claims.json, replication_plan.json (+ transcripts)
-├── replication/    codebase/ (patched copy), codebase.diff, replication_log.json, evidence_summary.json
+├── replication/    codebase/ (patched copy), codebase.diff, replication_log.json,
+│                   evidence_summary.json, diligence_signals.json,
+│                   replication.attempt-N/ (archived attempts; iterative runs only)
 ├── assess/         fix_severity.json
 ├── verify/         <claim_id>.json (per claim, with the grading rule), verdicts.json, replication_score.json
 ├── evaluation/     contextual_evaluation.json  (the manager's notes; product runs only)
 ├── report/         replication_report.{html,pdf,md}
 ├── prompts/        rendered prompts (debug)
-└── .veritas/       pipeline_state.json (resume checkpoint)
+└── .veritas/       pipeline_state.json (resume checkpoint),
+                    workflow.{jsonl,md} (manager decisions; iterative runs only)
 ```
 
 ## Resuming runs
