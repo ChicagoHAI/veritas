@@ -95,6 +95,7 @@ Each claim object has these fields:
 
 - **`headline`** — the paper's central reproducible result. Usually 1-3 per paper, drawn from the abstract or the marquee figure. The lab cares most about getting these right.
 - **`supporting`** — intermediate measurements, secondary figures, qualitative observations that build toward the headline.
+
 When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result. Extract only `headline` and `supporting` claims. Setup-level configuration (e.g., "the model uses 12 layers") belongs in the replication plan, not in claims.
 
 ## Verification Field — Concrete Examples
