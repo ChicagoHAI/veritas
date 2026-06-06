@@ -1202,45 +1202,6 @@ cmd_replicate() {
 }
 
 # -----------------------------------------------------------------------------
-# Extract plan from a paper
-# -----------------------------------------------------------------------------
-cmd_extract_plan() {
-    ensure_image
-
-    # extract-plan currently uses the default provider (claude) internally.
-    # Pre-flight that credential so the LLM call doesn't hang mid-run.
-    check_provider_credentials claude
-
-    # extract-plan takes a positional paper argument — rewrite it like --paper
-    local paper="$1"; shift
-    local host_paper
-    host_paper=$(realpath "$paper" 2>/dev/null || echo "$paper")
-    if [ ! -f "$host_paper" ]; then
-        echo -e "${RED}Paper not found:${NC} $paper" >&2
-        exit 1
-    fi
-    local basename=$(basename "$host_paper")
-    local container_paper="/workspace/inputs/$basename"
-
-    local tty_flag=$(get_tty_flag)
-    local platform_flag=$(get_platform_flags)
-    local credential_mounts=$(get_cli_credential_mounts)
-    ensure_credential_perms
-
-    # Handle --output specially (other args pass through)
-    rewrite_paths "$@"
-
-    eval "docker run $tty_flag --rm \
-        $platform_flag \
-        $credential_mounts \
-        -v \"$host_paper:$container_paper:ro\" \
-        $MOUNTS \
-        -w /workspace \
-        \"$IMAGE_NAME\" \
-        veritas extract-plan \"$container_paper\" $ARGS"
-}
-
-# -----------------------------------------------------------------------------
 # Regenerate report from existing replication output dir
 # -----------------------------------------------------------------------------
 cmd_report() {
@@ -1315,7 +1276,6 @@ show_help() {
     echo "  evaluate      Run the evaluation manager + report on an existing"
     echo "                  replication dir (replicate once, evaluate later)"
     echo "                  e.g. ./veritas evaluate ./myrepo/replicate"
-    echo "  extract-plan  Extract a structured plan from a paper PDF"
     echo "  report        Regenerate a report from an existing replication output dir"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
     echo "  config        Edit replication API keys (.env) interactively"
@@ -1349,7 +1309,6 @@ main() {
         full)          cmd_replicate --evaluate "$@" ;;
         replicate)     cmd_replicate "$@" ;;
         evaluate)      cmd_evaluate "$@" ;;
-        extract-plan)  cmd_extract_plan "$@" ;;
         report)        cmd_report "$@" ;;
         shell)         cmd_shell "$@" ;;
         setup)         cmd_setup "$@" ;;
