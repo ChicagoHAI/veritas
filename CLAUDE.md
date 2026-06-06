@@ -14,7 +14,7 @@ The basic claim-verification pipeline is in place: paper claims extraction in an
 - **Replication Score is a tier-weighted fraction**: `score = Σ(tier_weight × verdict_value) / Σ(tier_weight)` with tier weights `3 / 2` for headline / supporting, verdict values `match=1.0, partial=0.5, no_match=0.0, not_attempted=0.0`, and `not_applicable` excluded from both sums.
 - **The replicate agent never sees `paper_claims.json`.** The replication plan references claim IDs in a `verifies` field but doesn't embed paper-reported result values. Plan steps' `expected_outcome` is shape-prescriptive (file path, JSON field names, figure layout), not value-prescriptive. This is veritas's structural defense against ground-truth leakage to the replication agent.
 - **The final codebase used during replication is preserved as output**: `replication/codebase/` holds the patched copy and `replication/codebase.diff` shows the unified diff vs. the original repo.
-- **Veritas is being modularized** — components (execution environment, LLM provider, PDF extractor, scoring formula, output format) are progressively being split into swappable modules.
+- **Veritas is being modularized** — components (execution environment, LLM provider, scoring formula, output format) are progressively being split into swappable modules.
 
 ## Commands
 
@@ -40,9 +40,6 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 # Per-phase timeouts (default: no timeout)
 ./veritas replicate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
-
-# Extract a plan-only sketch from a paper
-./veritas extract-plan paper.pdf
 
 # Regenerate the report from existing outputs
 ./veritas report ./replicate-dir
@@ -89,12 +86,10 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` JSON-repair logic.
 - `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 3` raises a clear error directing the user to `--restart`.
 - `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep` with `verifies: List[str]`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `paper_claims.py` (`PaperClaim`, `PaperClaims`, `ClaimVerdict`, `ReplicationScore`, `Provenance`, `TIER_WEIGHTS`, `VERDICT_VALUES`).
-- `plan_extractor.py` — PDF → plan extraction (used by the standalone `extract-plan` subcommand; separate from the pipeline's analyze phase).
 - `report_generator.py` — markdown + PDF report generation (Replication Score headline, tier breakdown, per-claim verdict table, flags, replication evidence, fixes-applied section, environment summary).
 
 ### Utilities (`src/veritas/utils/`)
 
-- `pdf.py` — PDF text extraction (pdfplumber primary, pypdf fallback).
 - `security.py` — API key redaction via regex patterns; recursive log sanitization across the output tree.
 
 ### Templates (`templates/`)
