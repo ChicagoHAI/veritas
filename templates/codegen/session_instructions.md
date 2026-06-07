@@ -188,6 +188,55 @@ value) and that the assumption was a reasonable best-guess given the
 paper. If, during implementation, you encountered an underspecification
 you didn't record, add it now. Future phases rely on this list.
 
+#### g. Intermediate-anchor & selection-sanity audit
+
+Most methodologies have an **upstream step** — a selection, grouping,
+coordinate cut, unit/zero-point correction, or fit — whose output silently
+feeds every downstream result. A wrong choice here is the single largest
+source of cascade failures: one mis-selected sample corrupts every claim
+that depends on it. For each such upstream step, confirm:
+
+- **Apply every documented transformation, even "optional"-sounding ones.**
+  If the methodology says "apply K-corrections", "deredden", "convert to
+  rest-frame", "subtract the zero-point", etc., apply it in the code — do
+  NOT assume the input already has it on the basis of a prose phrase
+  ("K-corrected photometry"). If the data ships the term as a column
+  (e.g. `kcorr_*`), that is a strong signal the correction is yours to apply.
+
+- **Handle periodic coordinates with wrap-aware masks.** A cut near 0/360 on
+  a periodic angle (Galactic l, RA, azimuth, phase) must match BOTH ends —
+  `(l < 10) | (l > 350)`, never `abs(l) < 10`.
+
+- **Disambiguate multiple-choice inputs by methodological fidelity.** When a
+  step could use one of several plausible columns/parameters (e.g. `haloID`
+  vs `fofID` vs `subHaloID`; which instrument port; "central = the halo's
+  primary/most-massive subhalo" vs "the most-massive object among the
+  *selected* galaxies"), do NOT silently pick one. Pick the option the
+  methodology actually specifies; record the alternatives in
+  `codegen_plan.json["ambiguities"]`.
+
+- **Validate intermediates against documented METHOD anchors — never against
+  reported results.** If the methodology states an intermediate quantity the
+  step should reproduce *as part of the procedure* (e.g. "the cut leaves
+  N=27056 galaxies", a normalization, a fit coefficient, a member count),
+  have the code assert/log its own intermediate against that anchor, and if
+  it is off, prefer the documented alternative. **Critical anti-leakage
+  rule:** an anchor is only usable here if it is a *method input* visible in
+  the methodology, NOT a value reported as a result/claim and NOT a masked
+  `[NUMERICAL_RESULT]`. Never tune a selection or parameter to hit a
+  reported result; if the only nearby number is a result, leave the choice
+  methodologically-faithful and record the ambiguity instead.
+
+- **Sanity-check the step's output before using it downstream.** If a
+  selection yields implausibly few objects (e.g. one sub-sample far smaller
+  than its sibling), a fit's coefficients land far from a stable solution, or
+  a "stable range" collapses to a single point, treat the result as suspect:
+  re-derive it robustly (e.g. seed a ridge fit from the data rather than from
+  a hardcoded anchor), or record the fragility in
+  `codegen_plan.json["ambiguities"]`. Write these checks as assertions or
+  warnings **in the code** so the replicate phase surfaces a corrupted
+  intermediate instead of silently propagating it into every claim.
+
 ## Hard constraints
 
 - Write into `{{ codebase_dir }}/`, nowhere else.
