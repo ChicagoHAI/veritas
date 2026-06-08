@@ -188,6 +188,62 @@ value) and that the assumption was a reasonable best-guess given the
 paper. If, during implementation, you encountered an underspecification
 you didn't record, add it now. Future phases rely on this list.
 
+#### g. Intermediate-anchor & selection-sanity audit
+
+Most methodologies have an **upstream step** — a selection, grouping,
+coordinate cut, unit/zero-point correction, or fit — whose output silently
+feeds every downstream result. A wrong choice here is the single largest
+source of cascade failures: one mis-selected sample corrupts every claim
+that depends on it. For each such upstream step, confirm:
+
+- **Apply every documented transformation, even "optional"-sounding ones.**
+  If the methodology prescribes a transform — a normalization/standardization,
+  a baseline or zero-point subtraction, a unit/frame conversion, or a domain
+  correction (e.g. a batch-effect correction in genomics; deflation to real
+  terms in economics; a K-correction or dereddening in astronomy) — apply it
+  in the code. Do NOT assume the input already has it on the basis of a prose
+  phrase ("normalized counts", "deflated GDP", "K-corrected photometry"). If
+  the data ships the term as a column (e.g. a `*_norm` / `_real` / `kcorr_*`
+  field), that is a strong signal the correction is yours to apply.
+
+- **Handle periodic / wrapped quantities with wrap-aware masks.** A cut near
+  the wrap point of a periodic variable (a phase, a compass azimuth,
+  time-of-day/day-of-year, or an angle/longitude such as RA or Galactic `l`)
+  must match BOTH ends — e.g. `(x < 10) | (x > 350)`, never `abs(x) < 10`.
+
+- **Disambiguate multiple-choice inputs by methodological fidelity.** When a
+  step could use one of several plausible columns/keys/parameters — e.g. which
+  data split (train vs validation vs test), which ID namespace groups records
+  (gene symbol vs accession ID; customer vs household; `haloID` vs `fofID`),
+  which grouping unit for a fixed-effect or clustered-error term, which
+  instrument channel — do NOT silently pick one. Pick the option the
+  methodology actually specifies; record the alternatives in
+  `codegen_plan.json["ambiguities"]`.
+
+- **Validate intermediates against documented METHOD anchors — never against
+  reported results.** If the methodology states an intermediate the step
+  should reproduce *as part of the procedure* (e.g. "features are scaled to
+  unit variance", "the cut leaves N=27056 records", a fold count, a member
+  count, a fit coefficient), have the code assert/log its own intermediate
+  against that anchor, and if it is off, prefer the documented alternative.
+  **Critical anti-leakage rule:** an anchor is usable here only if it is a
+  *method input* visible in the methodology — NOT a value the paper reports as
+  a result/claim, and NOT a masked placeholder (e.g. `[NUMERICAL_RESULT]`).
+  Never tune a selection or parameter to hit a reported result; if the only
+  nearby number is a result, keep the methodologically-faithful choice and
+  record the ambiguity instead.
+
+- **Sanity-check the step's output before using it downstream.** If a
+  selection yields an implausible count (e.g. one sub-group far smaller than
+  its sibling, or a cut that removes almost everything), a fit's coefficients
+  land far from a stable solution, or a "stable range" collapses to a single
+  point, treat the result as suspect: re-derive it robustly (e.g. seed an
+  iterative fit or clustering from the data rather than from a hardcoded
+  anchor), or record the fragility in `codegen_plan.json["ambiguities"]`.
+  Write these checks as assertions or warnings **in the code** so the
+  replicate phase surfaces a corrupted intermediate instead of silently
+  propagating it into every claim.
+
 ## Hard constraints
 
 - Write into `{{ codebase_dir }}/`, nowhere else.

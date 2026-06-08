@@ -136,6 +136,16 @@ Run each step at the **scale the plan/methodology specifies** — the full grid,
 
 **When to stop trying:** Only after you have tried several genuinely different approaches (see the strategies above) and the problem is fundamental — core algorithm wrong, essential data paywalled with no alternative, hardware genuinely unavailable. Document what you tried, the distinct approaches, and why each failed, then move on.
 
+### Sanity-check intermediate results before building on them
+
+A wrong **upstream** result (a sample selection, grouping, coordinate cut, unit/zero-point correction, or fit) silently corrupts every downstream step that consumes it — the most common cause of a whole replication coming out wrong while every step "succeeds". Before you treat an intermediate output as correct and move on:
+
+- If a selection/cut leaves an **implausible count** (e.g. one sub-group far smaller than its sibling, or a cut that removes almost everything), stop and check the obvious culprits: a missing documented transform (a normalization, a domain correction such as a genomics batch-effect adjustment, economic deflation, or an astro K-correction/dereddening — which the data may ship as a column), a non-wrap-aware cut on a periodic variable (a phase/azimuth/time, or an angle/longitude near its wrap point), or the wrong identifier/grouping key (e.g. the wrong data split, gene symbol vs accession, or `haloID` vs `fofID`).
+- If the methodology states an **intermediate anchor as part of the procedure** (a post-cut sample size, a normalization, a fit coefficient), compare your intermediate to it; if it's off, prefer the documented alternative. Use only such *method* anchors — never adjust a selection or parameter to chase a value the paper reports as a *result*.
+- If a fit's coefficients land far from a stable solution, or a "stable range" collapses to a single point, treat the downstream number as low-confidence: re-derive robustly where you can, and **say so in that step's `notes`** rather than silently propagating it.
+
+Surfacing a corrupted intermediate as a logged finding is far more useful than letting it cascade into every claim.
+
 {% if replication_plan.steps | length > 0 %}
 {% set has_gpu_step = [] %}
 {% for step in replication_plan.steps %}
