@@ -85,7 +85,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 
 ### Key modules (`src/veritas/core/`)
 
-- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`).
+- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`).
 - `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, output-structure constants (`*_SUBDIR`, `*_FILE`), per-phase timeout fields (`analyze_timeout`, `replicate_timeout`, `verify_timeout`).
 - `paper_claims.py` — `parse_paper_claims_response()` reading the analyze-phase LLM output.
 - `verify.py` — `compute_replication_score()`: pure-function tier-weighted aggregation over a list of `ClaimVerdict`s, returning a `ReplicationScore` with per-tier breakdown, missing-verdict list, and edge-case flags.

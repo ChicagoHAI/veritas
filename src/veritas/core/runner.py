@@ -81,8 +81,24 @@ TRANSCRIPT_FLAGS: Dict[str, Tuple[str, ...]] = {
 
 PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
     "claude": ("--dangerously-skip-permissions",),
-    "codex":  ("--full-auto",),
+    # codex: --full-auto is deprecated and keeps the network-blocking
+    # sandbox, which would break replicate-phase pip installs and data
+    # downloads. Full bypass matches the trust already granted to claude;
+    # the container is the isolation boundary. --skip-git-repo-check:
+    # phase working dirs are not git repos and codex refuses to start
+    # there without it.
+    "codex":  ("--dangerously-bypass-approvals-and-sandbox",
+               "--skip-git-repo-check"),
     "gemini": ("--yolo", "--skip-trust"),
+}
+
+# Trailing positional args appended after all flags. codex exec only reads
+# the prompt from stdin when given the `-` sentinel; claude (-p) and gemini
+# read piped stdin natively.
+PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
+    "claude": (),
+    "codex":  ("-",),
+    "gemini": (),
 }
 
 
@@ -1874,6 +1890,7 @@ class ReplicationRunner:
             *CLI_COMMANDS[provider][1:],
             *TRANSCRIPT_FLAGS[provider],
             *PERMISSION_FLAGS[provider],
+            *PROMPT_STDIN_ARGS[provider],
         ]
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
