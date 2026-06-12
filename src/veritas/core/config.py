@@ -55,6 +55,7 @@ REPORT_HTML_FILE = "replication_report.html"
 PAPER_CLAIMS_FILE = "paper_claims.json"
 VERDICTS_FILE = "verdicts.json"
 REPLICATION_SCORE_FILE = "replication_score.json"
+RESOURCE_USAGE_FILE = "resource_usage.json"
 VERIFY_FILE_SUFFIX = ".json"  # per-claim files: ``verify/<claim_id>.json``
 
 PAPER_CLAIMS_TRANSCRIPT_FILE = "paper_claims_transcript.jsonl"
@@ -365,6 +366,10 @@ class Config:
     @property
     def diligence_signals_path(self) -> Path:
         return self.replication_dir / DILIGENCE_SIGNALS_FILE
+    
+    @property
+    def resource_usage_path(self) -> Path:
+        return self.output_dir / RESOURCE_USAGE_FILE
 
     # -- Manager retry-loop artifacts ---------------------------------------
 
