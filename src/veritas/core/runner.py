@@ -257,6 +257,8 @@ class ReplicationRunner:
             if self.config.run_evaluation:
                 self._evaluate()
 
+            self._collect_resource_usage(state)
+            
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
             )
@@ -1706,6 +1708,92 @@ class ReplicationRunner:
             print(f"  Flag: {flag}")
 
         return score
+    
+    def _collect_resource_usage(self, state: PipelineState) -> None:
+        """Combine time per phase, token counts, and disk usage into resource_usage.json."""
+        import json
+        from datetime import datetime
+        from veritas.core.models.resource_usage import ResourceUsage, PhaseUsage
+        from veritas.core.config import RESOURCE_USAGE_FILE
+        from veritas.utils.transcripts import sum_tokens_from_transcript
+
+        phase_transcripts = {
+            "analyze":      self.config.analyze_dir / "paper_claims_transcript.jsonl",
+            "plan":         self.config.analyze_dir / "replication_plan_transcript.jsonl",
+            "replicate":    self.config.replication_dir / "replication_transcript.jsonl",
+            "assess_fixes": self.config.assess_dir / "fix_severity_transcript.jsonl",
+        }
+        # verify transcripts: one per claim
+        verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))
+
+        usage = ResourceUsage()
+
+        for phase, transcript_path in phase_transcripts.items():
+            stage = state.state.get("stages", {}).get(phase, {})
+            started = stage.get("started_at")
+            completed = stage.get("completed_at")
+            wall = None
+            if started and completed:
+                wall = (datetime.fromisoformat(completed) - datetime.fromisoformat(started)).total_seconds()
+            inp, out = sum_tokens_from_transcript(transcript_path)
+            usage.phases[phase] = PhaseUsage(wall_seconds=wall, input_tokens=inp, output_tokens=out)
+
+        # verify: sum across all claim transcripts
+        verify_stage = state.state.get("stages", {}).get("verify", {})
+        v_started = verify_stage.get("started_at")
+        v_completed = verify_stage.get("completed_at")
+        v_wall = None
+        if v_started and v_completed:
+            v_wall = (datetime.fromisoformat(v_completed) - datetime.fromisoformat(v_started)).total_seconds()
+        v_inp, v_out = 0, 0
+        for t in verify_transcripts:
+            i, o = sum_tokens_from_transcript(t)
+            v_inp += i
+            v_out += o
+        usage.phases["verify"] = PhaseUsage(wall_seconds=v_wall, input_tokens=v_inp, output_tokens=v_out)
+
+        # totals
+        all_phases = list(usage.phases.values())
+        walls = [p.wall_seconds for p in all_phases if p.wall_seconds is not None]
+        usage.total_wall_seconds = sum(walls) if walls else None
+        usage.total_input_tokens = sum(p.input_tokens for p in all_phases)
+        usage.total_output_tokens = sum(p.output_tokens for p in all_phases)
+
+        # disk footprint
+        try:
+            result = subprocess.run(
+                ["du", "-sb", str(self.config.output_dir)],
+                capture_output=True, text=True
+            )
+            usage.disk_bytes = int(result.stdout.split()[0])
+        except Exception:
+            usage.disk_bytes = None
+
+        # cost estimate (Claude Sonnet 4.6 pricing)
+        INPUT_COST_PER_M = 3.00
+        OUTPUT_COST_PER_M = 15.00
+        estimated_cost_usd = round(
+            usage.total_input_tokens / 1_000_000 * INPUT_COST_PER_M +
+            usage.total_output_tokens / 1_000_000 * OUTPUT_COST_PER_M,
+            4,
+        )
+
+        # write
+        out_dict = {
+            "phases": {
+                name: {"wall_seconds": p.wall_seconds, "input_tokens": p.input_tokens, "output_tokens": p.output_tokens}
+                for name, p in usage.phases.items()
+            },
+            "totals": {
+                "wall_seconds": usage.total_wall_seconds,
+                "input_tokens": usage.total_input_tokens,
+                "output_tokens": usage.total_output_tokens,
+                "disk_bytes": usage.disk_bytes,
+                "estimated_cost_usd": estimated_cost_usd,
+            }
+        }
+        with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
+            json.dump(out_dict, f, indent=2)
 
     # -- Report ------------------------------------------------------------
 
