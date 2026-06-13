@@ -104,7 +104,7 @@ def test_normalize_arxiv_id_strips_prefix_and_version():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: best_match and classify
+# --- record matching + verdict classification ---
 # ---------------------------------------------------------------------------
 
 def _rec(**kw):
@@ -199,7 +199,7 @@ def test_classify_doi_prefix_forms_are_not_a_mismatch():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: source-specific API response adapters
+# --- source adapters ---
 # ---------------------------------------------------------------------------
 
 def test_parse_crossref_extracts_record():
@@ -286,7 +286,7 @@ def test_parse_arxiv_atom_extracts_record():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: resolve_references orchestrator and build_summary
+# --- orchestrator + summary ---
 # ---------------------------------------------------------------------------
 
 def _fake_lookup_factory(records_by_key):
@@ -321,7 +321,7 @@ def test_build_summary_counts_each_status():
 
 
 # ---------------------------------------------------------------------------
-# Task 6: Config integration — run_citation_check flag, paths, validation
+# --- config integration ---
 # ---------------------------------------------------------------------------
 
 def test_check_citations_requires_paper(tmp_path):
@@ -353,7 +353,7 @@ def test_citation_timeout_env_fallback(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Task 8: citation-check subagent prompt template + prompt generator
+# --- citation-check prompt generation ---
 # ---------------------------------------------------------------------------
 
 from unittest.mock import patch
@@ -381,7 +381,7 @@ def test_citation_check_prompt_renders_key_instructions(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 9: Runner dispatch — _check_citations + _stage_resolver_script
+# --- runner dispatch ---
 # ---------------------------------------------------------------------------
 
 
@@ -435,7 +435,7 @@ def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 10: ReportGenerator._render_citation_check / _load_citation_check
+# --- report rendering ---
 # ---------------------------------------------------------------------------
 
 from veritas.core.report_generator import ReportGenerator

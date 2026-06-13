@@ -1542,8 +1542,7 @@ class ReplicationRunner:
         Replication Score. Idempotent (skips if already produced) and never
         raises into the pipeline.
 
-        Built as a self-contained method so a later manager request-kind can call
-        it without restructuring.
+        A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
         if output_path.exists() and output_path.read_text(encoding="utf-8").strip():

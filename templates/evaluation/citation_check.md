@@ -103,7 +103,7 @@ Write `{{ citation_check_path }}` as a single JSON object:
     }
   ],
   "checked_support": false,
-  "notes": "Citation support (whether each source backs the attributed claim) was not checked in this version."
+  "notes": "Citation support (whether each source backs the attributed claim) is not checked."
 }
 ```
 

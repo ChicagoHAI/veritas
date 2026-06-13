@@ -101,7 +101,7 @@ fabricated references and metadata errors such as a published paper cited as an
 arXiv preprint. It is advisory and does not change the Replication Score, and it
 requires `--paper`. The method is adapted from the
 [refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
-Citation support (whether a cited paper backs the claim) is not yet checked.
+Citation support (whether a cited paper backs the claim) is not checked.
 
 ## The report
 

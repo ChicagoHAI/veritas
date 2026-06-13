@@ -80,9 +80,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   that verifies existence/metadata against Crossref/OpenAlex/Semantic
   Scholar/DBLP/arXiv (keyless); the agent web-search-escalates only unresolved
   references. Output: `evaluation/citation_check.json`. Advisory: never changes
-  the Replication Score. Citation support/faithfulness is a planned follow-up.
+  the Replication Score. Citation support/faithfulness is out of scope here.
   Method adapted from refchecker (MIT). The dispatch is a self-contained method
-  so the manager can call it later.
+  that mirrors the research sub-agent pattern.
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 
