@@ -402,11 +402,6 @@ def evaluate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    # run() resume-skips the already-completed analyze/plan/replicate/verify
-    # phases (via .veritas/pipeline_state.json) and runs only the evaluation
-    # manager pass (gated on run_evaluation) plus the report render. There is
-    # no separate evaluate-only entry point; the pipeline's resume is the
-    # "without re-running" mechanism the docstring promises.
     result = ReplicationRunner(config).run()
     if result.success:
         console.print("[bold green]Evaluation + report complete.[/bold green]")

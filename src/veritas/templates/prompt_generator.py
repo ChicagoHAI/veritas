@@ -275,11 +275,9 @@ class PromptGenerator:
         These are separate provider invocations with web-search/fetch access;
         they return findings + provenance, never the paper's reported values.
 
-        ``out_path`` is the exact file the sub-agent must write to; it is
-        index-suffixed for the second honored request of the same kind in one
-        iteration, so the template must use it verbatim rather than hardcoding
-        a base filename (otherwise the index-1 finding lands at the wrong path
-        and the runner reads back nothing).
+        ``out_path`` is the exact file the sub-agent must write to; the template
+        must emit it verbatim rather than hardcoding a filename, since it carries
+        an index suffix for a second same-kind request.
         """
         template = self.env.get_template(template_name)
         context = {
