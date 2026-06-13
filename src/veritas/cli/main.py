@@ -119,6 +119,19 @@ def replicate(
         "--evaluate-timeout",
         help="Timeout in seconds for the contextual-evaluation phase. Default: no timeout.",
     ),
+    check_citations: bool = typer.Option(
+        False,
+        "--check-citations/--no-check-citations",
+        help="Run the opt-in citation-check submodule (verifies the paper's "
+             "references exist and carry correct metadata via free scholarly "
+             "APIs). Advisory; does not change the Replication Score. Requires "
+             "--paper. Default: off.",
+    ),
+    citation_timeout: Optional[int] = typer.Option(
+        None,
+        "--citation-timeout",
+        help="Timeout in seconds for the citation-check phase. Default: no timeout.",
+    ),
     max_iters: Optional[int] = typer.Option(
         None,
         "--max-iters",
@@ -193,6 +206,8 @@ def replicate(
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
             run_evaluation=evaluate,
+            run_citation_check=check_citations,
+            citation_timeout=citation_timeout,
             claim_scope=scope,
             mode=mode,
             claims_path=claims,
