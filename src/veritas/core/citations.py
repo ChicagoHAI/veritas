@@ -17,11 +17,15 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field, asdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 STATUS_VERIFIED = "verified"
 STATUS_METADATA_MISMATCH = "metadata_mismatch"
 STATUS_UNRESOLVED = "unresolved"
+
+# The three verdicts the deterministic resolver can emit. (The citation-check
+# agent later adds escalation outcomes; those are not produced here.)
+ResolverStatus = Literal["verified", "metadata_mismatch", "unresolved"]
 
 
 @dataclass
@@ -76,14 +80,16 @@ class SourceRecord:
 
 @dataclass
 class CitationVerdict:
+    """Verdict for one reference: resolved (with the matched record) or unresolved."""
     key: str
     title: str
-    status: str
+    status: ResolverStatus
     matched_record: Optional[SourceRecord] = None
     mismatches: List[str] = field(default_factory=list)
     sources_queried: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        # Hand-rolled rather than asdict() because nested matched_record needs its own to_dict()/None handling.
         return {
             "key": self.key,
             "title": self.title,
@@ -110,7 +116,9 @@ def parse_references(raw: str) -> List[Reference]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        if not (str(item.get("raw", "") or "").strip() or str(item.get("title", "") or "").strip()):
+        raw_text = str(item.get("raw", "") or "").strip()
+        title_text = str(item.get("title", "") or "").strip()
+        if not (raw_text or title_text):
             continue
         out.append(Reference.from_dict(item))
     return out
