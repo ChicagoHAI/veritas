@@ -225,6 +225,8 @@ class ReportGenerator:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            # Citation data is structured (keys, urls, counts), not free narrative,
+            # so it is not run through _scrub_prose like the evaluation output.
             return data if isinstance(data, dict) else None
         except (OSError, json.JSONDecodeError):
             return None
@@ -361,7 +363,7 @@ class ReportGenerator:
             "metadata correct). This does not affect the Replication Score._\n\n"
         )
         section += (
-            f"**{total} references checked** — "
+            f"**{total} references checked.** "
             f"{s.get('verified', 0)} verified, "
             f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
             f"{s.get('likely_fabricated', 0)} likely fabricated, "
@@ -380,16 +382,19 @@ class ReportGenerator:
                 "unresolved": "unresolved",
             }
             for f in flagged:
+                if not isinstance(f, dict):
+                    continue
                 status = label.get(f.get("status", ""), f.get("status", ""))
-                key = (f.get("key") or "").strip() or "?"
+                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
                 detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
                 rec = f.get("matched_record") or {}
                 evidence = f.get("evidence") or []
                 src = ""
                 if isinstance(rec, dict) and rec.get("url"):
                     src = f"[{rec.get('source', 'record')}]({rec['url']})"
-                elif evidence:
+                elif evidence and isinstance(evidence[0], str):
                     src = f"[evidence]({evidence[0]})"
+                src = src.replace("|", "\\|")
                 section += f"| {status} | `{key}` | {detail} | {src} |\n"
             section += "\n"
         if citation.get("checked_support") is False:

@@ -484,3 +484,18 @@ def test_render_citation_check_clean_bill(tmp_path):
     section = gen._render_citation_check(gen._load_citation_check(out))
     assert "## Citation Check" in section
     assert "all 5" in section.lower() or "no reference issues" in section.lower()
+
+
+def test_render_citation_check_skips_malformed_flagged_entry(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 2, "verified": 1, "metadata_mismatch": 0,
+                    "likely_fabricated": 1, "inconclusive": 0},
+        "flagged": ["not a dict", {"key": "a2024", "status": "likely_fabricated",
+                                   "detail": "missing", "matched_record": None, "evidence": []}],
+        "checked_support": False,
+    }), encoding="utf-8")
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out))  # must not raise
+    assert "a2024" in section
