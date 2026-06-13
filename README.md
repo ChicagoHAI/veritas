@@ -103,7 +103,7 @@ fabricated references and metadata errors such as a published paper cited as an
 arXiv preprint. It is advisory and does not change the Replication Score, and it
 requires `--paper`. The method is adapted from the
 [refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
-The check also verifies, for the paper's main claims, whether the cited source supports what the paper attributes to it. Verdicts are `supported`, `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a verbatim quote. An independent audit pass re-checks flagged verdicts and lists any disagreements for human review. Use `--check-citations-faithfulness all` to check every claim-bearing citation instead of only the main ones. The check runs inline during `replicate --check-citations`, or standalone on a finished run via `check-citations <replicate-dir>` (which recovers the paper path from the run's saved config).
+The check also verifies, for the paper's main claims, whether the cited source supports what the paper attributes to it. Verdicts are `supported`, `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a verbatim quote. An independent audit pass re-checks flagged verdicts and can only soften a flag it cannot confirm (it never escalates), so the report shows the final reconciled verdicts. Use `--check-citations-faithfulness all` to check every claim-bearing citation instead of only the main ones. The check runs inline during `replicate --check-citations`, or standalone on a finished run via `check-citations <replicate-dir>` (which recovers the paper path from the run's saved config).
 
 ## The report
 

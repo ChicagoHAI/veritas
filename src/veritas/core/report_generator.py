@@ -414,6 +414,11 @@ class ReportGenerator:
             f"{s.get('likely_fabricated', 0)} likely fabricated, "
             f"{s.get('inconclusive', 0)} inconclusive.\n\n"
         )
+        if audit_lookup:
+            section += (
+                "_Counts above are the first-pass result; the independent audit may "
+                "have softened some verdicts, shown below._\n\n"
+            )
         flagged = citation.get("flagged") or []
         if not flagged:
             section += f"No reference issues flagged across {total} references.\n\n"

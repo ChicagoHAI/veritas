@@ -1660,8 +1660,8 @@ class ReplicationRunner:
             return
         try:
             data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
-            n = len(data.get("human_review") or [])
-            print(f"  Citation audit written; {n} item(s) flagged for human review")
+            n = len(data.get("items") or [])
+            print(f"  Citation audit written; {n} item(s) re-checked")
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
 

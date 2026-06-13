@@ -87,8 +87,10 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a
   verbatim quote from the source. `--check-citations-faithfulness main` (default)
   limits this to the paper's central attributed claims; `all` extends it to every
-  claim-bearing citation. An independent audit pass re-checks flagged verdicts and
-  records any disagreements in `evaluation/citation_audit.json` for human review.
+  claim-bearing citation. An independent audit pass writes its own verdicts to
+  `evaluation/citation_audit.json`; a deterministic reconciliation softens any flagged
+  verdict toward the audit only when the audit is less severe (never escalates).
+  No human-review step.
   The `check-citations <replicate-dir>` subcommand runs the full citation check
   (including faithfulness and audit) on an already-completed run; it recovers the
   paper path from the run's saved config, with `--paper` as an override.

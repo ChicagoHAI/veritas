@@ -20,8 +20,8 @@ Read both the `flagged` array and the `faithfulness` array from
   `inconclusive`), and
 - every `faithfulness` entry whose `verdict` is `contradicted` or `partially_supported`.
 
-Ignore `verified` references and `supported` / `not_mentioned` faithfulness entries.
-They are not worth re-checking.
+Do not re-check `verified` references, or `supported` / `not_mentioned` faithfulness
+entries. They are not worth re-checking.
 
 For each item:
 1. Independently retrieve the relevant record or cited source yourself. Do not rely

@@ -674,7 +674,7 @@ def test_audit_citations_runs_and_writes(tmp_path):
 
     def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
         cfg.citation_audit_path.write_text(
-            '{"audited_count": 1, "human_review": []}', encoding="utf-8")
+            '{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
 
     with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
@@ -699,7 +699,7 @@ def test_audit_citations_audits_contradicted_faithfulness(tmp_path):
         '{"summary": {}, "flagged": [], "faithfulness": '
         '[{"key": "c", "verdict": "contradicted"}]}', encoding="utf-8")
     def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
-        cfg.citation_audit_path.write_text('{"audited_count": 1, "human_review": []}', encoding="utf-8")
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
     with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
         runner._audit_citations()
@@ -718,7 +718,7 @@ def test_audit_citations_idempotent_skip(tmp_path):
     cfg.citation_check_path.write_text(
         '{"summary": {}, "flagged": [{"key": "a", "status": "likely_fabricated"}], '
         '"faithfulness": []}', encoding="utf-8")
-    cfg.citation_audit_path.write_text('{"audited_count": 0, "human_review": []}', encoding="utf-8")
+    cfg.citation_audit_path.write_text('{"audited_count": 0, "items": []}', encoding="utf-8")
     with patch.object(ReplicationRunner, "_invoke_provider") as m:
         runner._audit_citations()
     m.assert_not_called()  # audit already produced -> skip
@@ -757,7 +757,7 @@ def test_render_faithfulness_section_lists_checked_claims(tmp_path):
     assert "A is associated with B" in section  # the quote is shown
 
 
-def test_render_citation_check_no_human_review_section(tmp_path):
+def test_render_citation_check_omits_review_section(tmp_path):
     out = tmp_path / "out"
     _write_check(out, [])
     gen = ReportGenerator()
