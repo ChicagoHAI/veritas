@@ -588,3 +588,42 @@ def test_faithfulness_scope_env_fallback(tmp_path, monkeypatch):
     paper = tmp_path / "p.pdf"; paper.write_text("x")
     cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
     assert cfg.faithfulness_scope == "all"
+
+
+# ---------------------------------------------------------------------------
+# --- prompt generation (faithfulness + audit) ---
+# ---------------------------------------------------------------------------
+
+def test_citation_check_prompt_includes_faithfulness_main(tmp_path):
+    gen = PromptGenerator()
+    prompt = gen.generate_citation_check_prompt(
+        output_dir=tmp_path / "out", paper_path=tmp_path / "paper.pdf",
+        resolver_script_path=tmp_path / "out" / "evaluation" / "resolve_references.py",
+        faithfulness_scope="main",
+    )
+    assert "faithfulness" in prompt.lower()
+    assert "supported" in prompt and "partially_supported" in prompt
+    assert "contradicted" in prompt and "not_mentioned" in prompt
+    assert "verbatim quote" in prompt.lower()
+    assert "central" in prompt.lower() or "main" in prompt.lower()
+
+
+def test_citation_check_prompt_all_scope_changes_instruction(tmp_path):
+    gen = PromptGenerator()
+    p_all = gen.generate_citation_check_prompt(
+        output_dir=tmp_path / "o", paper_path=tmp_path / "p.pdf",
+        resolver_script_path=tmp_path / "o" / "evaluation" / "r.py",
+        faithfulness_scope="all",
+    )
+    assert "every claim-bearing" in p_all.lower() or "all claim-bearing" in p_all.lower()
+
+
+def test_citation_audit_prompt_renders(tmp_path):
+    gen = PromptGenerator()
+    prompt = gen.generate_citation_audit_prompt(
+        output_dir=tmp_path / "out", paper_path=tmp_path / "paper.pdf",
+    )
+    assert "citation_check.json" in prompt
+    assert "citation_audit.json" in prompt
+    assert "independently" in prompt.lower() or "fresh" in prompt.lower()
+    assert "human_review" in prompt

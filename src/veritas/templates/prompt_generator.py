@@ -246,6 +246,7 @@ class PromptGenerator:
         output_dir: Path,
         paper_path: Path,
         resolver_script_path: Path,
+        faithfulness_scope: str = "main",
     ) -> str:
         """Render the citation-check subagent prompt.
 
@@ -253,6 +254,11 @@ class PromptGenerator:
         list, run the deterministic resolver script (authoritative for
         existence/metadata), then web-search-escalate only the unresolved
         references. Does not alter the Replication Score.
+
+        ``faithfulness_scope`` controls how many claim-bearing citations are
+        checked for faithfulness: ``"main"`` checks only the citations central
+        to the paper's core argument; ``"all"`` checks every claim-bearing
+        citation.
         """
         eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
         template = self.env.get_template("evaluation/citation_check.md")
@@ -263,6 +269,28 @@ class PromptGenerator:
             "references_path": str(eval_dir / CITATION_REFERENCES_FILE),
             "resolver_verdicts_path": str(eval_dir / CITATION_RESOLVER_VERDICTS_FILE),
             "citation_check_path": str(eval_dir / CITATION_CHECK_FILE),
+            "faithfulness_scope": faithfulness_scope,
+        }
+        return template.render(**context)
+
+    def generate_citation_audit_prompt(
+        self,
+        output_dir: Path,
+        paper_path: Path,
+    ) -> str:
+        """Render the citation-audit prompt (independent re-check of flagged verdicts)."""
+        from veritas.core.config import (
+            CITATION_CHECK_FILE,
+            CITATION_AUDIT_FILE,
+            EVALUATION_SUBDIR,
+        )
+        eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
+        template = self.env.get_template("evaluation/citation_audit.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "paper_path": str(Path(paper_path).absolute()),
+            "citation_check_path": str(eval_dir / CITATION_CHECK_FILE),
+            "citation_audit_path": str(eval_dir / CITATION_AUDIT_FILE),
         }
         return template.render(**context)
 

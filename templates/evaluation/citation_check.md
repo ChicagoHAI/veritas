@@ -101,8 +101,8 @@ its core argument depends on (its central motivation, the provenance of its meth
 its key baselines/comparisons). Skip generic "see also" / background cites.
 
 {% if faithfulness_scope == "all" %}
-**Scope: ALL.** Check every citation where the paper attributes a specific factual
-claim to the source, not only the central ones.
+**Scope: ALL.** Check every claim-bearing citation — every citation where the paper
+attributes a specific factual claim to the source, not only the central ones.
 {% else %}
 **Scope: MAIN.** Check only the citations central to the paper's argument. When in
 doubt about whether a citation is central, skip it.
