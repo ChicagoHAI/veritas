@@ -44,6 +44,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 # Per-phase timeouts (default: no timeout)
 ./veritas replicate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
 
+# Opt-in citation check (verify the paper's references exist + metadata is correct)
+./veritas replicate --paper paper.pdf --repo ./my-project --check-citations
+
 # Extract a plan-only sketch from a paper
 ./veritas extract-plan paper.pdf
 
@@ -70,6 +73,16 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 4. **Replicate** (`_replicate`) — runs the plan inside a writable copy of the codebase via an AI agent that actively fixes issues; collects execution evidence and fix records. The agent never sees `paper_claims.json`.
 5. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical) via a separate LLM pass. Output: `assess/fix_severity.json`.
 6. **Verify** (`_verify_with_resume`) — one provider invocation per claim. Each verifier reads the relevant evidence files and produces a structured verdict at `verify/<claim_id>.json` (status `match | partial | no_match | not_attempted | not_applicable`, type-specific `structured` field, free-text `rationale`, `evidence_refs`). Per-claim resume primitive: file-exists check. Final aggregation writes `verify/verdicts.json` and `verify/replication_score.json`.
+- **Citation check** (`_check_citations`, opt-in via `--check-citations`) — a
+  post-verify advisory submodule under the evaluate phase. A single web-enabled
+  subagent extracts the paper's reference list and runs a deterministic,
+  LLM-free resolver (`core/citations.py`, staged into the workspace as a script)
+  that verifies existence/metadata against Crossref/OpenAlex/Semantic
+  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates only unresolved
+  references. Output: `evaluation/citation_check.json`. Advisory: never changes
+  the Replication Score. Citation support/faithfulness is a planned follow-up.
+  Method adapted from refchecker (MIT). The dispatch is a self-contained method
+  so the manager can call it later.
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 

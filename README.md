@@ -60,6 +60,7 @@ the comparator's judgment.
 ./veritas --paper p.pdf --repo ./myrepo     # full pipeline (the default)
 ./veritas full --paper p.pdf --repo ./myrepo  # same thing, named
 ./veritas replicate --repo ./myrepo         # replication only, for benchmarking
+./veritas replicate --paper p.pdf --repo ./myrepo --check-citations  # opt-in citation check
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
 ./veritas extract-plan paper.pdf            # plan-only sketch
@@ -89,6 +90,18 @@ Run `./veritas replicate --help` for the full option list.
 Other inputs: `--claims path.json` supplies hand-authored claims and skips
 extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
 so the agent uses local files instead of fetching from the network.
+
+### Citation check (opt-in)
+
+`--check-citations` runs an advisory reference check after verification: it
+extracts the paper's reference list and confirms each cited work exists and is
+described correctly (authors, venue, year, identifiers) against free scholarly
+databases (Crossref, OpenAlex, Semantic Scholar, DBLP, arXiv). It flags
+fabricated references and metadata errors such as a published paper cited as an
+arXiv preprint. It is advisory and does not change the Replication Score, and it
+requires `--paper`. The method is adapted from the
+[refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
+Citation support (whether a cited paper backs the claim) is not yet checked.
 
 ## The report
 
