@@ -1239,6 +1239,7 @@ class ReplicationRunner:
         prompt = self.prompt_generator.generate_research_prompt(
             template_name=template_name,
             output_dir=self.config.output_dir,
+            out_path=out_path,
             need=request.need,
             rationale=request.rationale,
         )

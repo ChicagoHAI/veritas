@@ -42,7 +42,7 @@ methodology/resource ground.
 ## Output
 
 Write **only** a single JSON object to
-`{{ output_dir }}/replication/research_resource.json` (no prose, no fence):
+`{{ out_path }}` (no prose, no fence):
 
 ```json
 {
