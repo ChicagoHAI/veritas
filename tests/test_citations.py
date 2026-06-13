@@ -555,3 +555,36 @@ def test_classify_no_false_year_mismatch_from_metadata_poor_record():
     v = classify(ref, recs, sources_queried=["openalex", "dblp"])
     assert v.status == STATUS_VERIFIED
     assert v.matched_record.source == "dblp"
+
+
+# ---------------------------------------------------------------------------
+# --- faithfulness scope + audit paths ---
+# ---------------------------------------------------------------------------
+
+def test_faithfulness_scope_default_is_main(tmp_path):
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
+    assert cfg.faithfulness_scope == "main"
+    assert cfg.citation_audit_path.name == "citation_audit.json"
+    assert cfg.citation_audit_path.parent.name == "evaluation"
+
+
+def test_faithfulness_scope_explicit_all(tmp_path):
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope="all")
+    assert cfg.faithfulness_scope == "all"
+
+
+def test_faithfulness_scope_invalid_rejected(tmp_path):
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    with pytest.raises(ValueError, match="faithfulness"):
+        Config(paper_path=paper, output_dir=tmp_path / "out",
+               run_citation_check=True, faithfulness_scope="bogus")
+
+
+def test_faithfulness_scope_env_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERITAS_CITATION_FAITHFULNESS_SCOPE", "all")
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
+    assert cfg.faithfulness_scope == "all"

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
-from veritas.core.config_env import _env_int, _env_opt_int
+from veritas.core.config_env import _env_int, _env_opt_int, _env_str
 
 
 # All valid AI providers
@@ -79,6 +79,11 @@ CITATION_REFERENCES_FILE = "references.json"
 CITATION_RESOLVER_VERDICTS_FILE = "resolver_verdicts.json"
 CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
 
+CITATION_AUDIT_FILE = "citation_audit.json"
+CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
+
+VALID_FAITHFULNESS_SCOPES = ("main", "all")
+
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
@@ -143,6 +148,12 @@ class Config:
 
     # Timeout (seconds) for the citation-check phase; None disables it.
     citation_timeout: Optional[int] = None
+
+    # Citation faithfulness scope: "main" (central attributed claims only) or
+    # "all" (every claim-bearing citation). Default "main".
+    faithfulness_scope: str = field(
+        default_factory=lambda: _env_str("VERITAS_CITATION_FAITHFULNESS_SCOPE", "main")
+    )
 
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
@@ -237,6 +248,14 @@ class Config:
                 "--check-citations requires --paper (it reads the paper's "
                 "reference list); no paper was provided"
             )
+
+        scope = (self.faithfulness_scope or "main").strip().lower()
+        if scope not in VALID_FAITHFULNESS_SCOPES:
+            raise ValueError(
+                f"--check-citations-faithfulness must be one of "
+                f"{VALID_FAITHFULNESS_SCOPES}; got '{self.faithfulness_scope}'"
+            )
+        self.faithfulness_scope = scope
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
@@ -377,6 +396,14 @@ class Config:
     @property
     def citation_check_transcript_path(self) -> Path:
         return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
+
+    @property
+    def citation_audit_path(self) -> Path:
+        return self.evaluation_dir / CITATION_AUDIT_FILE
+
+    @property
+    def citation_audit_transcript_path(self) -> Path:
+        return self.evaluation_dir / CITATION_AUDIT_TRANSCRIPT_FILE
 
     @property
     def references_path(self) -> Path:
