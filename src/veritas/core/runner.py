@@ -1561,6 +1561,7 @@ class ReplicationRunner:
                 output_dir=self.config.output_dir,
                 paper_path=self.config.paper_path,
                 resolver_script_path=script_path,
+                faithfulness_scope=self.config.faithfulness_scope,
             )
             prompt_path = self.config.prompts_dir / "citation_check_prompt.txt"
             prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1583,14 +1584,83 @@ class ReplicationRunner:
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
             s = data.get("summary") or {}
+            f = s.get("faithfulness") or {}
             print(
-                f"  Citation check written; {s.get('total', '?')} refs: "
-                f"{s.get('likely_fabricated', 0)} likely fabricated, "
+                f"  Citation check written; {s.get('total', '?')} refs "
+                f"({s.get('likely_fabricated', 0)} likely fabricated, "
                 f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
-                f"{s.get('inconclusive', 0)} inconclusive"
+                f"{s.get('inconclusive', 0)} inconclusive); "
+                f"faithfulness checked {f.get('checked', 0)} "
+                f"({f.get('contradicted', 0)} contradicted, "
+                f"{f.get('partially_supported', 0)} partial)"
             )
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
+
+        # Independent audit pass over the flagged verdicts (advisory; never raises).
+        self._audit_citations()
+
+    @staticmethod
+    def _has_auditable_findings(check_data: dict) -> bool:
+        """True if the verify output has any flagged integrity item or a
+        contradicted/partially_supported faithfulness verdict worth re-checking."""
+        if (check_data.get("flagged") or []):
+            return True
+        for f in check_data.get("faithfulness") or []:
+            if isinstance(f, dict) and f.get("verdict") in ("contradicted", "partially_supported"):
+                return True
+        return False
+
+    def _audit_citations(self) -> None:
+        """Independent re-check of the verify pass's flagged verdicts.
+
+        Reads ``evaluation/citation_check.json``; if it has any non-trivial
+        finding, runs a separate provider invocation (fresh context, API keys
+        stripped) that writes disagreements to ``evaluation/citation_audit.json``.
+        Advisory; idempotent; never raises.
+        """
+        check_path = self.config.citation_check_path
+        audit_path = self.config.citation_audit_path
+        if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
+            print("[OK] citation-audit: skipped (already produced)")
+            return
+        if not (check_path.exists() and check_path.read_text(encoding="utf-8").strip()):
+            return
+        try:
+            check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
+        except (ValueError, json.JSONDecodeError):
+            return
+        if not self._has_auditable_findings(check_data):
+            return
+        if not self.config.has_paper:
+            return
+        print("Running citation-audit (independent re-check of flagged verdicts)...")
+        try:
+            prompt = self.prompt_generator.generate_citation_audit_prompt(
+                output_dir=self.config.output_dir,
+                paper_path=self.config.paper_path,
+            )
+            prompt_path = self.config.prompts_dir / "citation_audit_prompt.txt"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            success = self._invoke_provider(
+                prompt=prompt,
+                working_dir=self.config.output_dir,
+                log_path=self.config.citation_audit_transcript_path,
+                timeout=self.config.citation_timeout,
+            )
+        except Exception as e:
+            print(f"  Warning: citation-audit could not run ({e}); skipped")
+            return
+        if not success or not audit_path.exists():
+            print("  Warning: citation-audit produced no output; skipped")
+            return
+        try:
+            data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
+            n = len(data.get("human_review") or [])
+            print(f"  Citation audit written; {n} item(s) flagged for human review")
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
 
     # -- Phase 4: Verify ---------------------------------------------------
 

@@ -627,3 +627,87 @@ def test_citation_audit_prompt_renders(tmp_path):
     assert "citation_audit.json" in prompt
     assert "independently" in prompt.lower() or "fresh" in prompt.lower()
     assert "human_review" in prompt
+
+
+# --- runner: scope passing + audit dispatch ---
+
+def _citation_runner_scope(tmp_path, scope="main"):
+    paper = tmp_path / "paper.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope=scope)
+    runner = ReplicationRunner(cfg)
+    cfg.evaluation_dir.mkdir(parents=True, exist_ok=True)
+    return runner, cfg
+
+
+def test_check_citations_passes_scope_to_prompt(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path, scope="all")
+    seen = {}
+
+    def fake_gen(output_dir, paper_path, resolver_script_path, faithfulness_scope="main"):
+        seen["scope"] = faithfulness_scope
+        return "PROMPT"
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+        cfg.citation_check_path.write_text(
+            '{"summary": {"total": 0, "verified": 0, "metadata_mismatch": 0, '
+            '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0, '
+            '"faithfulness": {"checked": 0, "supported": 0, "partially_supported": 0, '
+            '"contradicted": 0, "not_mentioned": 0, "inaccessible": 0}, '
+            '"faithfulness_scope": "all"}, "flagged": [], "faithfulness": [], '
+            '"checked_support": true, "notes": ""}', encoding="utf-8")
+        return True
+
+    runner.prompt_generator.generate_citation_check_prompt = fake_gen
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke), \
+         patch.object(ReplicationRunner, "_audit_citations") as audit:
+        runner._check_citations()
+    assert seen["scope"] == "all"
+    audit.assert_called_once()
+
+
+def test_audit_citations_runs_and_writes(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path)
+    cfg.citation_check_path.write_text(
+        '{"summary": {}, "flagged": [{"key": "a", "status": "likely_fabricated"}], '
+        '"faithfulness": []}', encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+        cfg.citation_audit_path.write_text(
+            '{"audited_count": 1, "human_review": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._audit_citations()
+    assert cfg.citation_audit_path.exists()
+    assert "expose_api_keys" not in m.call_args.kwargs
+
+
+def test_audit_citations_skips_when_nothing_flagged(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path)
+    cfg.citation_check_path.write_text(
+        '{"summary": {}, "flagged": [], "faithfulness": '
+        '[{"key": "b", "verdict": "supported"}]}', encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._audit_citations()
+    m.assert_not_called()
+
+
+def test_audit_citations_audits_contradicted_faithfulness(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path)
+    cfg.citation_check_path.write_text(
+        '{"summary": {}, "flagged": [], "faithfulness": '
+        '[{"key": "c", "verdict": "contradicted"}]}', encoding="utf-8")
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "human_review": []}', encoding="utf-8")
+        return True
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._audit_citations()
+    m.assert_called_once()  # contradicted faithfulness is auditable
+
+
+def test_audit_citations_never_raises_on_missing_check(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path)
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._audit_citations()  # must not raise
+    m.assert_not_called()
