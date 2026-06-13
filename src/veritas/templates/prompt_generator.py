@@ -235,6 +235,38 @@ class PromptGenerator:
             context["paper_path"] = str(Path(paper_path).absolute())
         return template.render(**context)
 
+    def generate_citation_check_prompt(
+        self,
+        output_dir: Path,
+        paper_path: Path,
+        resolver_script_path: Path,
+    ) -> str:
+        """Render the citation-check subagent prompt.
+
+        A single web-enabled provider invocation: extract the paper's reference
+        list, run the deterministic resolver script (authoritative for
+        existence/metadata), then web-search-escalate only the unresolved
+        references. Adapted from the refchecker project (MIT). Does not alter the
+        Replication Score.
+        """
+        from veritas.core.config import (
+            CITATION_CHECK_FILE,
+            CITATION_REFERENCES_FILE,
+            CITATION_RESOLVER_VERDICTS_FILE,
+            EVALUATION_SUBDIR,
+        )
+        eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
+        template = self.env.get_template("evaluation/citation_check.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "paper_path": str(Path(paper_path).absolute()),
+            "resolver_script_path": str(Path(resolver_script_path).absolute()),
+            "references_path": str(eval_dir / CITATION_REFERENCES_FILE),
+            "resolver_verdicts_path": str(eval_dir / CITATION_RESOLVER_VERDICTS_FILE),
+            "citation_check_path": str(eval_dir / CITATION_CHECK_FILE),
+        }
+        return template.render(**context)
+
     def generate_manager_review_prompt(
         self,
         output_dir: Path,

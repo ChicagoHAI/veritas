@@ -350,3 +350,28 @@ def test_citation_timeout_env_fallback(tmp_path, monkeypatch):
     paper.write_text("x")
     cfg = Config(paper_path=paper, output_dir=tmp_path / "out")
     assert cfg.citation_timeout == 300
+
+
+# ---------------------------------------------------------------------------
+# Task 8: citation-check subagent prompt template + prompt generator
+# ---------------------------------------------------------------------------
+
+from veritas.templates.prompt_generator import PromptGenerator
+
+
+def test_citation_check_prompt_renders_key_instructions(tmp_path):
+    gen = PromptGenerator()
+    prompt = gen.generate_citation_check_prompt(
+        output_dir=tmp_path / "out",
+        paper_path=tmp_path / "paper.pdf",
+        resolver_script_path=tmp_path / "out" / "evaluation" / "resolve_references.py",
+    )
+    # Reads the paper, writes references, runs the resolver, escalates unresolved,
+    # writes the final JSON, and is forbidden from overriding resolver verdicts.
+    assert "references.json" in prompt
+    assert "resolve_references.py" in prompt
+    assert "citation_check.json" in prompt
+    assert "unresolved" in prompt
+    assert "checked_support" in prompt
+    # Anti-override discipline must be present.
+    assert "do not override" in prompt.lower() or "authoritative" in prompt.lower()
