@@ -1,37 +1,37 @@
-﻿# Citation Audit (independent re-check of flagged verdicts)
+# Citation Audit (independent re-check of flagged verdicts)
 
 A first pass already checked this paper's citations and wrote its findings to
 `{{ citation_check_path }}`. You are an **independent auditor**. Re-examine ONLY the
-**flagged** findings, from scratch, without trusting the first pass's reasoning. Your
-job is to catch mistakes the first pass made. Look for both false alarms and missed problems.
+**flagged** findings, from scratch, without trusting the first pass's reasoning. Give
+your own verdict for each. A separate automatic step reconciles your verdicts with
+the first pass; your job is just to judge each item independently and honestly.
 
 ## Source of truth
 
-- **Paper:** `{{ paper_path }}`. For the citing sentences and reference list.
+- **Paper:** `{{ paper_path }}` for the citing sentences and reference list.
 - **First-pass findings:** `{{ citation_check_path }}`. Read it.
 
 ## What to re-check
 
-Read both the `flagged` array and the `faithfulness` array from `{{ citation_check_path }}`.
+Read both the `flagged` array and the `faithfulness` array from
+`{{ citation_check_path }}`. Re-check:
 
-Re-check every entry in the first pass's `flagged` array (integrity issues:
-`metadata_mismatch`, `likely_fabricated`, `inconclusive`) and every `faithfulness`
-entry whose `verdict` is `contradicted` or `partially_supported`. Ignore
-`verified` references and `supported` / `not_mentioned` faithfulness entries. Those
-are not worth the re-check.
+- every entry in `flagged` (integrity issues: `metadata_mismatch`, `likely_fabricated`,
+  `inconclusive`), and
+- every `faithfulness` entry whose `verdict` is `contradicted` or `partially_supported`.
 
-For each re-checked item:
-1. Independently retrieve the relevant record or cited source yourself (do not rely
-   on the first pass's quote or links. Find it again).
-2. Form your own verdict using the same vocabulary (integrity:
-   `verified | metadata_mismatch | likely_fabricated | inconclusive`; faithfulness:
+Ignore `verified` references and `supported` / `not_mentioned` faithfulness entries.
+They are not worth re-checking.
+
+For each item:
+1. Independently retrieve the relevant record or cited source yourself. Do not rely
+   on the first pass's quote or links. Find it again.
+2. Form your own verdict using the same vocabulary. Integrity:
+   `verified | metadata_mismatch | likely_fabricated | inconclusive`. Faithfulness:
    `supported | partially_supported | contradicted | not_mentioned`, or
-   `inaccessible` if you cannot retrieve the source).
-3. Compare to the first pass's verdict.
-
-When your verdict differs from the first pass's, that item goes to **human review**.
-Do NOT try to decide who is right. When you genuinely cannot retrieve a source to
-re-check, do not record a disagreement (an inability to re-check is not a dispute).
+   `inaccessible` if you cannot retrieve the source to re-check.
+3. Be honest and calibrated. If the first pass's accusation does not hold up under
+   your independent re-read, say so with the milder verdict your evidence supports.
 
 ## Output
 
@@ -40,22 +40,20 @@ Write `{{ citation_audit_path }}` as a single JSON object:
 ```json
 {
   "audited_count": 0,
-  "human_review": [
+  "items": [
     {
-      "key": "<ref key>",
+      "key": "<ref key, matching the first-pass entry>",
       "kind": "integrity | faithfulness",
-      "first_verdict": "<the first pass's status/verdict>",
-      "audit_verdict": "<your independent verdict>",
-      "note": "<one plain sentence on the disagreement, with a verbatim quote if relevant>"
+      "audit_verdict": "<your independent verdict from the vocabulary above>",
+      "note": "<one plain sentence on your judgment, with a verbatim quote if relevant>"
     }
   ]
 }
 ```
 
 - `audited_count` is how many flagged items you re-checked.
-- `human_review` lists only the items where your verdict differs from the first
-  pass's. If you agree with everything (or could not re-check), `human_review` is `[]`.
-- For integrity items, `first_verdict` is the `status` from the `flagged` entry; for faithfulness items, it is the `verdict` from the `faithfulness` entry.
+- `items` has one entry per re-checked item, with your independent verdict. Do not
+  reconcile or decide which pass is right. The automatic step does that.
 - Print the JSON to stdout as well.
 
 Begin now.
