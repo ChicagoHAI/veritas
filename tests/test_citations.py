@@ -223,6 +223,7 @@ def test_parse_openalex_extracts_record():
     recs = parse_openalex(payload)
     assert recs[0].source == "openalex" and recs[0].venue == "ICLR"
     assert recs[0].year == 2024 and recs[0].authors == ["Jane Roe"]
+    assert recs[0].doi == "10.1/x"
 
 
 def test_parse_semantic_scholar_extracts_record():
@@ -247,6 +248,20 @@ def test_parse_dblp_extracts_record():
     recs = parse_dblp(payload)
     assert recs[0].source == "dblp" and recs[0].venue == "ICLR" and recs[0].year == 2024
     assert recs[0].authors == ["First Author", "Second Author"]
+
+
+def test_parse_dblp_single_author_dict_and_list_venue():
+    payload = {"result": {"hits": {"hit": [{"info": {
+        "title": "Single Author Paper.",
+        "year": "2024",
+        "venue": ["ICLR", "ICLR Workshop"],
+        "authors": {"author": {"text": "Solo Researcher"}},
+        "url": "https://dblp.org/rec/2",
+    }}]}}}
+    recs = parse_dblp(payload)
+    assert recs[0].authors == ["Solo Researcher"]          # single-author dict path
+    assert recs[0].venue == "ICLR"                          # first of list, not stringified list
+    assert recs[0].title == "Single Author Paper"           # trailing period stripped
 
 
 def test_parse_arxiv_atom_extracts_record():

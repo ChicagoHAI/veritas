@@ -311,7 +311,7 @@ def parse_crossref(payload: Dict[str, Any]) -> List[SourceRecord]:
     out: List[SourceRecord] = []
     for item in (payload.get("message", {}) or {}).get("items", []) or []:
         authors = [
-            f"{a.get('given', '')} {a.get('family', '')}".strip()
+            (a.get("name") or f"{a.get('given', '')} {a.get('family', '')}".strip())
             for a in item.get("author", []) or []
         ]
         year = None
@@ -342,7 +342,7 @@ def parse_openalex(payload: Dict[str, Any]) -> List[SourceRecord]:
             for a in item.get("authorships", []) or []
         ]
         venue = (((item.get("primary_location") or {}).get("source") or {}).get("display_name") or "")
-        doi = str(item.get("doi", "") or "").replace("https://doi.org/", "")
+        doi = normalize_doi(item.get("doi", "") or "")
         out.append(SourceRecord(
             source="openalex",
             title=str(item.get("title", "") or ""),
@@ -388,12 +388,14 @@ def parse_dblp(payload: Dict[str, Any]) -> List[SourceRecord]:
             year = int(info.get("year")) if info.get("year") else None
         except (TypeError, ValueError):
             year = None
+        venue_field = info.get("venue", "")
+        venue = str(_first(venue_field) or "") if isinstance(venue_field, list) else str(venue_field or "")
         out.append(SourceRecord(
             source="dblp",
             title=str(info.get("title", "") or "").rstrip("."),
             authors=authors,
             year=year,
-            venue=str(info.get("venue", "") or ""),
+            venue=venue,
             doi=str(info.get("doi", "") or ""),
             url=str(info.get("url", "") or ""),
         ))
