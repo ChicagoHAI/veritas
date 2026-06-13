@@ -413,8 +413,7 @@ def test_check_citations_stages_script_and_dispatches(tmp_path):
     assert cfg.resolver_script_path.exists()
     assert "def classify" in cfg.resolver_script_path.read_text(encoding="utf-8")
     # Dispatched with default (key-stripped) env — never expose_api_keys.
-    _, kwargs = m.call_args
-    assert kwargs.get("expose_api_keys", False) is False
+    assert "expose_api_keys" not in m.call_args.kwargs  # never opt into keys for the citation agent
     assert cfg.citation_check_path.exists()
 
 
@@ -424,3 +423,12 @@ def test_check_citations_idempotent_skip(tmp_path):
     with patch.object(ReplicationRunner, "_invoke_provider") as m:
         runner._check_citations()
     m.assert_not_called()  # already produced -> skip
+
+
+def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    with patch.object(ReplicationRunner, "_stage_resolver_script", side_effect=OSError("disk full")), \
+         patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()  # must NOT raise
+    m.assert_not_called()
+    assert not cfg.citation_check_path.exists()

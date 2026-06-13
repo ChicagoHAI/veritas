@@ -1519,14 +1519,17 @@ class ReplicationRunner:
         ``core/citations.py`` imports only the stdlib, so the copied file runs as
         a self-contained script the citation-check agent invokes. Copying (rather
         than relying on veritas being importable from the agent's shell) keeps it
-        runtime-agnostic across docker and host modes.
+        runtime-agnostic across docker and host modes. The source is located via
+        ``importlib`` so a ``.py`` path is used even on compiled installs.
         """
-        import shutil
-        import veritas.core.citations as _citations_mod
+        import importlib.util
 
+        spec = importlib.util.find_spec("veritas.core.citations")
+        if spec is None or not spec.origin:
+            raise RuntimeError("cannot locate the veritas.core.citations source file")
         dest = self.config.resolver_script_path
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(_citations_mod.__file__, dest)
+        shutil.copyfile(spec.origin, dest)
         return dest
 
     def _check_citations(self) -> None:
@@ -1552,24 +1555,26 @@ class ReplicationRunner:
             return
 
         print("Running citation-check submodule (reference verification)...")
-        self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
-        script_path = self._stage_resolver_script()
-
-        prompt = self.prompt_generator.generate_citation_check_prompt(
-            output_dir=self.config.output_dir,
-            paper_path=self.config.paper_path,
-            resolver_script_path=script_path,
-        )
-        prompt_path = self.config.prompts_dir / "citation_check_prompt.txt"
-        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        prompt_path.write_text(prompt, encoding="utf-8")
-
-        success = self._invoke_provider(
-            prompt=prompt,
-            working_dir=self.config.output_dir,
-            log_path=self.config.citation_check_transcript_path,
-            timeout=self.config.citation_timeout,
-        )
+        try:
+            self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+            script_path = self._stage_resolver_script()
+            prompt = self.prompt_generator.generate_citation_check_prompt(
+                output_dir=self.config.output_dir,
+                paper_path=self.config.paper_path,
+                resolver_script_path=script_path,
+            )
+            prompt_path = self.config.prompts_dir / "citation_check_prompt.txt"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            success = self._invoke_provider(
+                prompt=prompt,
+                working_dir=self.config.output_dir,
+                log_path=self.config.citation_check_transcript_path,
+                timeout=self.config.citation_timeout,
+            )
+        except Exception as e:
+            print(f"  Warning: citation-check could not run ({e}); skipped")
+            return
         if not success:
             print(f"  Warning: citation-check did not succeed (transcript: {self.config.citation_check_transcript_path})")
             return
