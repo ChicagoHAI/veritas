@@ -730,10 +730,13 @@ def test_audit_citations_idempotent_skip(tmp_path):
 
 def _write_check(out, faithfulness, summary_extra=None):
     (out / "evaluation").mkdir(parents=True, exist_ok=True)
+    fsum = summary_extra or {
+        "checked": len(faithfulness), "supported": 0, "partially_supported": 0,
+        "contradicted": 0, "not_mentioned": 0, "inaccessible": 0,
+    }
     base = {"summary": {"total": 3, "verified": 3, "metadata_mismatch": 0,
                         "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
-                        "faithfulness": summary_extra or {"checked": len(faithfulness)},
-                        "faithfulness_scope": "main"},
+                        "faithfulness": fsum, "faithfulness_scope": "main"},
             "flagged": [], "faithfulness": faithfulness, "checked_support": True, "notes": ""}
     (out / "evaluation" / "citation_check.json").write_text(json.dumps(base), encoding="utf-8")
 
@@ -790,3 +793,26 @@ def test_render_citation_check_still_renders_without_faithfulness(tmp_path):
     gen = ReportGenerator()
     section = gen._render_citation_check(gen._load_citation_check(out), gen._load_citation_audit(out))
     assert "Citation Check" in section  # no crash, integrity still renders
+
+
+def test_render_human_review_empty_list_no_section(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [])
+    (out / "evaluation" / "citation_audit.json").write_text(
+        json.dumps({"audited_count": 2, "human_review": []}), encoding="utf-8")
+    gen = ReportGenerator()
+    section = gen._render_citation_check(
+        gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "human review" not in section.lower()  # empty list -> no section
+
+
+def test_render_faithfulness_skips_non_dict_entries(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, ["not a dict", {"key": "ok", "source_status": "retrieved",
+                                      "verdict": "supported", "quote": "q", "claim": "c",
+                                      "source": "https://s"}],
+                 summary_extra={"checked": 2, "supported": 1, "partially_supported": 0,
+                                "contradicted": 0, "not_mentioned": 0, "inaccessible": 0})
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out))  # must not raise
+    assert "ok" in section

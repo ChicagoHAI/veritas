@@ -241,9 +241,9 @@ class ReportGenerator:
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(_extract_json(path.read_text(encoding="utf-8")))
             return data if isinstance(data, dict) else None
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError):
             return None
 
     def _load_mode(self, replicate_dir: Path) -> Optional[str]:
@@ -365,11 +365,11 @@ class ReportGenerator:
         return intro + body
 
     def _render_citation_check(self, citation: Optional[dict], audit: Optional[dict] = None) -> str:
-        """Render the advisory citation-check section (existence/metadata only).
+        """Render the advisory citation-check section.
 
-        Headline counts plus a per-reference breakdown for every flagged item.
-        Advisory: stated to NOT affect the Replication Score. Honest that
-        citation support (faithfulness) was not checked.
+        Covers reference integrity (existence/metadata) and, when present, a
+        claim-support (faithfulness) summary plus a human-review list from the
+        independent audit pass. Advisory: does not affect the Replication Score.
         """
         if not citation:
             return ""
