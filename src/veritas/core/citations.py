@@ -15,8 +15,10 @@ script). It must never import from the ``veritas`` package.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field, asdict
+from difflib import SequenceMatcher
 from typing import Any, Callable, Dict, List, Literal, Optional
 
 STATUS_VERIFIED = "verified"
@@ -122,3 +124,56 @@ def parse_references(raw: str) -> List[Reference]:
             continue
         out.append(Reference.from_dict(item))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Title / author normalization and matching helpers
+# ---------------------------------------------------------------------------
+
+_PUNCT_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
+_WS_RE = re.compile(r"\s+")
+_ARXIV_RE = re.compile(r"(\d{4}\.\d{4,5})")
+
+
+def normalize_title(title: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace — for fuzzy matching."""
+    if not title:
+        return ""
+    t = _PUNCT_RE.sub(" ", title.lower())
+    return _WS_RE.sub(" ", t).strip()
+
+
+def title_similarity(a: str, b: str) -> float:
+    """Normalized-title similarity in [0, 1] (difflib ratio over normalized text)."""
+    na, nb = normalize_title(a), normalize_title(b)
+    if not na or not nb:
+        return 0.0
+    return SequenceMatcher(None, na, nb).ratio()
+
+
+def _last_name(author: str) -> str:
+    """Best-effort surname: last whitespace-separated token, normalized."""
+    parts = normalize_title(author).split()
+    return parts[-1] if parts else ""
+
+
+def author_overlap(cited: List[str], record: List[str]) -> float:
+    """Fraction of cited authors whose surname appears in the record's authors.
+
+    Returns 0.0 if either list is empty. Surname-based so initials vs full
+    given names ("A. Vaswani" vs "Ashish Vaswani") still match.
+    """
+    cited_names = {_last_name(a) for a in cited if _last_name(a)}
+    record_names = {_last_name(a) for a in record if _last_name(a)}
+    if not cited_names or not record_names:
+        return 0.0
+    hits = sum(1 for n in cited_names if n in record_names)
+    return hits / len(cited_names)
+
+
+def normalize_arxiv_id(value: str) -> str:
+    """Extract a bare arXiv id (no prefix, no version) from any arXiv string."""
+    if not value:
+        return ""
+    m = _ARXIV_RE.search(value)
+    return m.group(1) if m else ""
