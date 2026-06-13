@@ -229,8 +229,9 @@ class Config:
             if not any(self.data_path.iterdir()):
                 print(f"WARNING: --data directory is empty: {self.data_path}")
 
-        # Citation check needs the paper PDF (its reference list). Fail fast with
-        # a clear message rather than silently no-op in repo-only mode.
+        # Citation check needs the paper PDF (its reference list). Validate up
+        # front so the run fails with a clear message instead of failing deep in
+        # the citation phase.
         if self.run_citation_check and not self.has_paper:
             raise ValueError(
                 "--check-citations requires --paper (it reads the paper's "
@@ -366,6 +367,9 @@ class Config:
     def evaluation_transcript_path(self) -> Path:
         return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
 
+    # Citation-check submodule artifacts (under evaluation/). references_path and
+    # resolver_verdicts_path are produced by the agent; resolver_script_path is
+    # where the runner stages the standalone resolver for the agent to run.
     @property
     def citation_check_path(self) -> Path:
         return self.evaluation_dir / CITATION_CHECK_FILE
