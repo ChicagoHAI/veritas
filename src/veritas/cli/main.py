@@ -132,6 +132,13 @@ def replicate(
         "--citation-timeout",
         help="Timeout in seconds for the citation-check phase. Default: no timeout.",
     ),
+    check_citations_faithfulness: str = typer.Option(
+        "main",
+        "--check-citations-faithfulness",
+        help="Citation faithfulness scope when --check-citations is on: 'main' "
+             "(central attributed claims only, default) or 'all' (every "
+             "claim-bearing citation).",
+    ),
     max_iters: Optional[int] = typer.Option(
         None,
         "--max-iters",
@@ -208,6 +215,7 @@ def replicate(
             run_evaluation=evaluate,
             run_citation_check=check_citations,
             citation_timeout=citation_timeout,
+            faithfulness_scope=check_citations_faithfulness,
             claim_scope=scope,
             mode=mode,
             claims_path=claims,
