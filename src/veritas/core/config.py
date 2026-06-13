@@ -82,7 +82,7 @@ CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
 CITATION_AUDIT_FILE = "citation_audit.json"
 CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
 
-VALID_FAITHFULNESS_SCOPES = ("main", "all")
+VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
@@ -249,13 +249,14 @@ class Config:
                 "reference list); no paper was provided"
             )
 
-        scope = (self.faithfulness_scope or "main").strip().lower()
-        if scope not in VALID_FAITHFULNESS_SCOPES:
-            raise ValueError(
-                f"--check-citations-faithfulness must be one of "
-                f"{VALID_FAITHFULNESS_SCOPES}; got '{self.faithfulness_scope}'"
-            )
-        self.faithfulness_scope = scope
+        if self.run_citation_check:
+            scope = (self.faithfulness_scope or "main").strip().lower()
+            if scope not in VALID_FAITHFULNESS_SCOPES:
+                raise ValueError(
+                    f"faithfulness_scope must be one of "
+                    f"{VALID_FAITHFULNESS_SCOPES}; got '{self.faithfulness_scope}'"
+                )
+            self.faithfulness_scope = scope
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
