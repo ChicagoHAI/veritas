@@ -1890,6 +1890,27 @@ class ReplicationRunner:
             fix_assessment=fix_assessment,
         )
 
+    def check_citations_existing(self) -> RunResult:
+        """Run the citation check on an already-completed run, then refresh the report.
+
+        Assumes ``config.output_dir`` is a finished run directory and
+        ``config.paper_path`` was recovered by the caller. Runs the self-contained
+        citation check (verify + independent audit) and regenerates the report so
+        it includes the citation sections. Advisory; never touches the Replication
+        Score.
+        """
+        try:
+            self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+            self._check_citations()
+            report_path, pdf_path = self.report_generator.generate(
+                replicate_dir=self.config.output_dir,
+                generate_pdf=self.config.generate_pdf,
+                generate_md=True,
+            )
+            return RunResult(success=True, report_path=report_path, pdf_path=pdf_path)
+        except Exception as e:
+            return RunResult(success=False, error=str(e))
+
     # -- Resume helpers ----------------------------------------------------
 
     def _announce_resume(self, state: PipelineState) -> None:

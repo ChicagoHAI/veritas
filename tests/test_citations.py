@@ -816,3 +816,30 @@ def test_render_faithfulness_skips_non_dict_entries(tmp_path):
     gen = ReportGenerator()
     section = gen._render_citation_check(gen._load_citation_check(out))  # must not raise
     assert "ok" in section
+
+
+# ---------------------------------------------------------------------------
+# --- standalone check_citations_existing ---
+# ---------------------------------------------------------------------------
+
+
+def test_check_citations_existing_runs_check_and_report(tmp_path):
+    paper = tmp_path / "paper.pdf"; paper.write_text("x")
+    out = tmp_path / "out"
+    cfg = Config(paper_path=paper, output_dir=out, run_citation_check=True)
+    runner = ReplicationRunner(cfg)
+    calls = {"check": 0, "report": 0}
+
+    def fake_check():
+        calls["check"] += 1
+
+    def fake_generate(replicate_dir, output_path=None, generate_pdf=True, generate_md=True):
+        calls["report"] += 1
+        return (out / "report" / "r.md", None)
+
+    with patch.object(ReplicationRunner, "_check_citations", side_effect=fake_check):
+        runner.report_generator.generate = fake_generate
+        result = runner.check_citations_existing()
+    assert calls["check"] == 1 and calls["report"] == 1
+    assert result.success
+    assert result.report_path == out / "report" / "r.md"
