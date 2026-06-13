@@ -17,6 +17,13 @@ from veritas.core.citations import (
     title_similarity,
     author_overlap,
     normalize_arxiv_id,
+    best_match,
+    classify,
+    STATUS_VERIFIED,
+    STATUS_METADATA_MISMATCH,
+    STATUS_UNRESOLVED,
+    TITLE_MATCH_THRESHOLD,
+    AUTHOR_OVERLAP_THRESHOLD,
 )
 
 
@@ -82,3 +89,68 @@ def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("1706.03762") == "1706.03762"
     assert normalize_arxiv_id("https://arxiv.org/abs/2401.01234") == "2401.01234"
     assert normalize_arxiv_id("10.1145/3292500") == ""  # a DOI, not an arXiv id
+
+
+# ---------------------------------------------------------------------------
+# Task 3: best_match and classify
+# ---------------------------------------------------------------------------
+
+def _rec(**kw):
+    return SourceRecord(**{"source": "dblp", **kw})
+
+
+def test_best_match_picks_highest_title_similarity():
+    ref = Reference(title="Attention Is All You Need", authors=["Vaswani"])
+    recs = [
+        _rec(source="crossref", title="A survey of attention", authors=["X"]),
+        _rec(source="dblp", title="Attention is all you need", authors=["Vaswani"], venue="NeurIPS", year=2017),
+    ]
+    rec, sim = best_match(ref, recs)
+    assert rec.source == "dblp" and sim >= TITLE_MATCH_THRESHOLD
+
+
+def test_classify_verified_when_title_authors_and_venue_agree():
+    ref = Reference(title="Attention Is All You Need", authors=["Vaswani", "Shazeer"], year=2017, venue="NeurIPS")
+    recs = [_rec(title="Attention is all you need", authors=["Ashish Vaswani", "Noam Shazeer"], year=2017, venue="NeurIPS")]
+    v = classify(ref, recs, sources_queried=["dblp"])
+    assert v.status == STATUS_VERIFIED
+    assert v.mismatches == []
+
+
+def test_classify_unresolved_when_no_title_match():
+    ref = Reference(title="A totally fabricated nonexistent paper title 9zq", authors=["Nobody"])
+    recs = [_rec(title="Something entirely different about cells", authors=["Bio"])]
+    v = classify(ref, recs, sources_queried=["crossref", "dblp"])
+    assert v.status == STATUS_UNRESOLVED
+    assert v.matched_record is None
+
+
+def test_classify_metadata_mismatch_published_paper_cited_as_arxiv():
+    # The core bug: title+authors match a DBLP ICLR record, but the citation
+    # calls it an arXiv preprint. Must be metadata_mismatch (flagged with the
+    # authoritative record), never unresolved/fabricated.
+    ref = Reference(
+        title="Some Real Published Paper", authors=["A. Author", "B. Coauthor"],
+        venue="arXiv preprint arXiv:2401.01234", arxiv_id="2401.01234",
+    )
+    recs = [_rec(title="Some Real Published Paper", authors=["A. Author", "B. Coauthor"], venue="ICLR", year=2024)]
+    v = classify(ref, recs, sources_queried=["dblp", "crossref"])
+    assert v.status == STATUS_METADATA_MISMATCH
+    assert v.matched_record.venue == "ICLR"
+    assert any("venue" in m.lower() for m in v.mismatches)
+
+
+def test_classify_metadata_mismatch_on_author_disagreement():
+    ref = Reference(title="A Matching Title Here", authors=["Real", "Authors"])
+    recs = [_rec(title="A Matching Title Here", authors=["Totally", "Different", "People"])]
+    v = classify(ref, recs, sources_queried=["crossref"])
+    assert v.status == STATUS_METADATA_MISMATCH
+    assert any("author" in m.lower() for m in v.mismatches)
+
+
+def test_classify_metadata_mismatch_on_identifier_conflict():
+    ref = Reference(title="Paper With DOI", authors=["A"], doi="10.1/aaa")
+    recs = [_rec(title="Paper With DOI", authors=["A"], doi="10.2/bbb")]
+    v = classify(ref, recs, sources_queried=["crossref"])
+    assert v.status == STATUS_METADATA_MISMATCH
+    assert any("doi" in m.lower() or "identifier" in m.lower() for m in v.mismatches)

@@ -177,3 +177,92 @@ def normalize_arxiv_id(value: str) -> str:
         return ""
     m = _ARXIV_RE.search(value)
     return m.group(1) if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Record matching and verdict classification
+# ---------------------------------------------------------------------------
+
+# Thresholds adapted from refchecker's deterministic pre-filter.
+TITLE_MATCH_THRESHOLD = 0.90   # normalized-title similarity to call it the same work
+AUTHOR_OVERLAP_THRESHOLD = 0.60  # below this (with a title match) -> author mismatch
+
+
+def best_match(ref: Reference, records: List[SourceRecord]) -> tuple[Optional[SourceRecord], float]:
+    """Return the record with the highest title similarity to the reference."""
+    best: Optional[SourceRecord] = None
+    best_sim = 0.0
+    for rec in records:
+        sim = title_similarity(ref.title, rec.title)
+        if sim > best_sim:
+            best, best_sim = rec, sim
+    return best, best_sim
+
+
+def _venue_looks_like_preprint(venue: str) -> bool:
+    v = (venue or "").lower()
+    return "arxiv" in v or "preprint" in v
+
+
+def classify(
+    ref: Reference,
+    records: List[SourceRecord],
+    *,
+    sources_queried: List[str],
+) -> CitationVerdict:
+    """Classify one reference against the candidate records from all sources.
+
+    - No record with title similarity >= TITLE_MATCH_THRESHOLD -> ``unresolved``.
+    - A title match with an author/venue/identifier disagreement ->
+      ``metadata_mismatch`` (the authoritative record is attached).
+    - Otherwise -> ``verified``.
+
+    The verdict NEVER rewrites the citation; ``metadata_mismatch`` records the
+    specific disagreements so a human can decide. Publication-status drift
+    (cited as a preprint, but the record shows a published venue) is one such
+    mismatch.
+    """
+    rec, sim = best_match(ref, records)
+    if rec is None or sim < TITLE_MATCH_THRESHOLD:
+        return CitationVerdict(
+            key=ref.key, title=ref.title, status=STATUS_UNRESOLVED,
+            matched_record=None, mismatches=[], sources_queried=sources_queried,
+        )
+
+    mismatches: List[str] = []
+
+    # Author disagreement (only when both sides list authors).
+    if ref.authors and rec.authors:
+        ov = author_overlap(ref.authors, rec.authors)
+        if ov < AUTHOR_OVERLAP_THRESHOLD:
+            mismatches.append(
+                f"authors: only {ov:.0%} of the cited authors match the record "
+                f"({rec.source})"
+            )
+
+    # Identifier conflict (DOI / arXiv id present on both sides but differ).
+    if ref.doi and rec.doi and ref.doi.strip().lower() != rec.doi.strip().lower():
+        mismatches.append(f"doi: cited '{ref.doi}' but record has '{rec.doi}' ({rec.source})")
+    if ref.arxiv_id and rec.arxiv_id:
+        if normalize_arxiv_id(ref.arxiv_id) != normalize_arxiv_id(rec.arxiv_id):
+            mismatches.append(
+                f"identifier: cited arXiv '{ref.arxiv_id}' but record has "
+                f"'{rec.arxiv_id}' ({rec.source})"
+            )
+
+    # Publication-status drift: cited as a preprint, record shows a real venue.
+    if _venue_looks_like_preprint(ref.venue) and rec.venue and not _venue_looks_like_preprint(rec.venue):
+        mismatches.append(
+            f"venue: cited as '{ref.venue or 'preprint'}' but published at "
+            f"'{rec.venue}'{f' {rec.year}' if rec.year else ''} per {rec.source}"
+        )
+
+    # Year disagreement (>1 year apart, when both present).
+    if ref.year and rec.year and abs(int(ref.year) - int(rec.year)) > 1:
+        mismatches.append(f"year: cited {ref.year} but record says {rec.year} ({rec.source})")
+
+    status = STATUS_METADATA_MISMATCH if mismatches else STATUS_VERIFIED
+    return CitationVerdict(
+        key=ref.key, title=ref.title, status=status,
+        matched_record=rec, mismatches=mismatches, sources_queried=sources_queried,
+    )
