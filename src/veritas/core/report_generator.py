@@ -24,6 +24,7 @@ from veritas.core.config import (
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
     CITATION_CHECK_FILE,
+    CITATION_AUDIT_FILE,
     WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.paper_claims import (
@@ -232,6 +233,19 @@ class ReportGenerator:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
 
+    def _load_citation_audit(self, replicate_dir: Optional[Path]) -> Optional[dict]:
+        """Load the citation-audit output, if the audit pass ran. None if absent/malformed."""
+        if replicate_dir is None:
+            return None
+        path = Path(replicate_dir) / EVALUATION_SUBDIR / CITATION_AUDIT_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def _load_mode(self, replicate_dir: Path) -> Optional[str]:
         """Recover the input mode from pipeline_state.json, if available.
 
@@ -287,7 +301,10 @@ class ReportGenerator:
 
         # Advisory citation check (opt-in via --check-citations). Independent of
         # the score; rendered when present.
-        report += self._render_citation_check(self._load_citation_check(output_dir))
+        report += self._render_citation_check(
+            self._load_citation_check(output_dir),
+            self._load_citation_audit(output_dir),
+        )
 
         # Manager retry-loop trajectory (only when the loop ran, i.e. >1
         # iteration or a hand-off). The Replication Score above is unaffected by
@@ -347,7 +364,7 @@ class ReportGenerator:
         )
         return intro + body
 
-    def _render_citation_check(self, citation: Optional[dict]) -> str:
+    def _render_citation_check(self, citation: Optional[dict], audit: Optional[dict] = None) -> str:
         """Render the advisory citation-check section (existence/metadata only).
 
         Headline counts plus a per-reference breakdown for every flagged item.
@@ -404,6 +421,60 @@ class ReportGenerator:
                 "correctly. It does not check citation support (whether each "
                 "cited paper actually backs the claim it is cited for)._\n\n"
             )
+
+        fsum = (citation.get("summary") or {}).get("faithfulness") or {}
+        faith = citation.get("faithfulness") or []
+        if fsum.get("checked"):
+            scope = (citation.get("summary") or {}).get("faithfulness_scope", "main")
+            section += f"\n**Claim support ({scope} claims):** "
+            section += (
+                f"{fsum.get('checked', 0)} checked. "
+                f"{fsum.get('supported', 0)} supported, "
+                f"{fsum.get('partially_supported', 0)} partially supported, "
+                f"{fsum.get('contradicted', 0)} contradicted, "
+                f"{fsum.get('not_mentioned', 0)} not mentioned, "
+                f"{fsum.get('inaccessible', 0)} inaccessible.\n\n"
+            )
+            label_faith = {
+                "supported": "supported",
+                "partially_supported": "partially supported",
+                "contradicted": "contradicted",
+                "not_mentioned": "not mentioned",
+            }
+            for f in faith:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("source_status") == "inaccessible":
+                    verdict = "source inaccessible"
+                else:
+                    verdict = label_faith.get(f.get("verdict", ""), f.get("verdict", "") or "?")
+                key = (f.get("key") or "?").replace("|", "\\|")
+                claim = (f.get("claim") or "").replace("\n", " ").strip()
+                quote = (f.get("quote") or "").replace("\n", " ").strip()
+                src = f.get("source") or ""
+                section += f"- `{key}` ({verdict}): {claim}"
+                if quote:
+                    section += f'  \n  Source says: "{quote}"'
+                if src:
+                    section += f"  \n  [source]({src})"
+                section += "\n"
+            section += "\n"
+
+        review = (audit or {}).get("human_review") or []
+        if review:
+            section += "\n**Flagged for human review (verify and audit disagree):**\n\n"
+            for r in review:
+                if not isinstance(r, dict):
+                    continue
+                key = (r.get("key") or "?").replace("|", "\\|")
+                note = (r.get("note") or "").replace("\n", " ").strip()
+                section += (
+                    f"- `{key}` ({r.get('kind', '')}): first pass said "
+                    f"`{r.get('first_verdict', '')}`, audit said "
+                    f"`{r.get('audit_verdict', '')}`. {note}\n"
+                )
+            section += "\n"
+
         return section
 
     def _render_limitations(self, fix_assessment, report_block: dict) -> str:

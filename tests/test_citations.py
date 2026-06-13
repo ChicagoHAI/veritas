@@ -722,3 +722,71 @@ def test_audit_citations_idempotent_skip(tmp_path):
     with patch.object(ReplicationRunner, "_invoke_provider") as m:
         runner._audit_citations()
     m.assert_not_called()  # audit already produced -> skip
+
+
+# ---------------------------------------------------------------------------
+# --- report: faithfulness + human-review rendering ---
+# ---------------------------------------------------------------------------
+
+def _write_check(out, faithfulness, summary_extra=None):
+    (out / "evaluation").mkdir(parents=True, exist_ok=True)
+    base = {"summary": {"total": 3, "verified": 3, "metadata_mismatch": 0,
+                        "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                        "faithfulness": summary_extra or {"checked": len(faithfulness)},
+                        "faithfulness_scope": "main"},
+            "flagged": [], "faithfulness": faithfulness, "checked_support": True, "notes": ""}
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps(base), encoding="utf-8")
+
+
+def test_render_faithfulness_section_lists_checked_claims(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [
+        {"key": "a2023", "claim": "A causes B", "source_status": "retrieved",
+         "verdict": "partially_supported", "quote": "A is associated with B",
+         "evidence_basis": "fetched_full", "source": "https://x", "detail": "over-claimed"},
+    ], summary_extra={"checked": 1, "supported": 0, "partially_supported": 1,
+                      "contradicted": 0, "not_mentioned": 0, "inaccessible": 0})
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out))
+    assert "Citation Check" in section
+    assert "claim support" in section.lower() or "faithfulness" in section.lower()
+    assert "a2023" in section and "partially supported" in section.lower()
+    assert "A is associated with B" in section  # the quote is shown
+
+
+def test_render_human_review_from_audit(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [])
+    (out / "evaluation" / "citation_audit.json").write_text(json.dumps({
+        "audited_count": 1,
+        "human_review": [{"key": "z", "kind": "faithfulness",
+                          "first_verdict": "contradicted", "audit_verdict": "partially_supported",
+                          "note": "disagree on strength"}],
+    }), encoding="utf-8")
+    gen = ReportGenerator()
+    section = gen._render_citation_check(
+        gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "human review" in section.lower()
+    assert "z" in section and "contradicted" in section.lower()
+
+
+def test_render_no_audit_no_human_review_section(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [])
+    gen = ReportGenerator()
+    section = gen._render_citation_check(
+        gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "human review" not in section.lower()
+
+
+def test_render_citation_check_still_renders_without_faithfulness(tmp_path):
+    # backward-safe: an old-style file with no faithfulness still renders the integrity part
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 2, "verified": 2, "metadata_mismatch": 0, "unresolved": 0,
+                    "likely_fabricated": 0, "inconclusive": 0},
+        "flagged": [], "checked_support": False, "notes": "n"}), encoding="utf-8")
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "Citation Check" in section  # no crash, integrity still renders
