@@ -13,6 +13,10 @@ from veritas.core.citations import (
     SourceRecord,
     CitationVerdict,
     parse_references,
+    normalize_title,
+    title_similarity,
+    author_overlap,
+    normalize_arxiv_id,
 )
 
 
@@ -51,14 +55,6 @@ def test_verdict_to_dict_shape():
     assert d["mismatches"] == ["venue: cited 'arXiv' but record 'ICLR 2024'"]
 
 
-from veritas.core.citations import (
-    normalize_title,
-    title_similarity,
-    author_overlap,
-    normalize_arxiv_id,
-)
-
-
 def test_normalize_title_strips_punct_case_and_space():
     assert normalize_title("Attention Is All You Need!") == "attention is all you need"
     assert normalize_title("  Deep   Learning  ") == "deep learning"
@@ -85,3 +81,4 @@ def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("arXiv:1706.03762v5") == "1706.03762"
     assert normalize_arxiv_id("1706.03762") == "1706.03762"
     assert normalize_arxiv_id("https://arxiv.org/abs/2401.01234") == "2401.01234"
+    assert normalize_arxiv_id("10.1145/3292500") == ""  # a DOI, not an arXiv id

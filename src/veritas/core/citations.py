@@ -131,8 +131,8 @@ def parse_references(raw: str) -> List[Reference]:
 # ---------------------------------------------------------------------------
 
 _PUNCT_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
-_WS_RE = re.compile(r"\s+")
-_ARXIV_RE = re.compile(r"(\d{4}\.\d{4,5})")
+_WS_RE = re.compile(r"\s+", flags=re.UNICODE)
+_ARXIV_RE = re.compile(r"(\d{4}\.\d{4,5})(?:v\d+)?")
 
 
 def normalize_title(title: str) -> str:
@@ -163,8 +163,8 @@ def author_overlap(cited: List[str], record: List[str]) -> float:
     Returns 0.0 if either list is empty. Surname-based so initials vs full
     given names ("A. Vaswani" vs "Ashish Vaswani") still match.
     """
-    cited_names = {_last_name(a) for a in cited if _last_name(a)}
-    record_names = {_last_name(a) for a in record if _last_name(a)}
+    cited_names = {n for a in cited if (n := _last_name(a))}
+    record_names = {n for a in record if (n := _last_name(a))}
     if not cited_names or not record_names:
         return 0.0
     hits = sum(1 for n in cited_names if n in record_names)
