@@ -258,6 +258,11 @@ class ReplicationRunner:
             if self.config.run_evaluation:
                 self._evaluate()
 
+            # Optional, opt-in citation-check submodule (reference verification).
+            # Advisory only: does not feed the Replication Score. Idempotent.
+            if self.config.run_citation_check:
+                self._check_citations()
+
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
             )
@@ -1507,6 +1512,81 @@ class ReplicationRunner:
             print(f"  Contextual evaluation written; cheating-risk: {risk}")
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: evaluation output is not valid JSON ({e}); left as-is for audit")
+
+    def _stage_resolver_script(self) -> Path:
+        """Copy the standalone deterministic resolver into the agent workspace.
+
+        ``core/citations.py`` imports only the stdlib, so the copied file runs as
+        a self-contained script the citation-check agent invokes. Copying (rather
+        than relying on veritas being importable from the agent's shell) keeps it
+        runtime-agnostic across docker and host modes.
+        """
+        import shutil
+        import veritas.core.citations as _citations_mod
+
+        dest = self.config.resolver_script_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_citations_mod.__file__, dest)
+        return dest
+
+    def _check_citations(self) -> None:
+        """Opt-in citation-check submodule (post-verify; under evaluate).
+
+        A single web-enabled provider invocation extracts the paper's reference
+        list, runs the staged deterministic resolver (authoritative for
+        existence/metadata), and escalates only unresolved references. Advisory:
+        the output at ``evaluation/citation_check.json`` does NOT alter the
+        Replication Score. Idempotent (skips if already produced) and never
+        raises into the pipeline.
+
+        Built as a self-contained method so a later manager request-kind can call
+        it without restructuring.
+        """
+        output_path = self.config.citation_check_path
+        if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
+            print("[OK] citation-check: skipped (already produced)")
+            return
+
+        if not self.config.has_paper:  # defensive; config validation already enforces this
+            print("  citation-check: no paper available; skipping")
+            return
+
+        print("Running citation-check submodule (reference verification)...")
+        self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+        script_path = self._stage_resolver_script()
+
+        prompt = self.prompt_generator.generate_citation_check_prompt(
+            output_dir=self.config.output_dir,
+            paper_path=self.config.paper_path,
+            resolver_script_path=script_path,
+        )
+        prompt_path = self.config.prompts_dir / "citation_check_prompt.txt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=self.config.citation_check_transcript_path,
+            timeout=self.config.citation_timeout,
+        )
+        if not success:
+            print(f"  Warning: citation-check did not succeed (transcript: {self.config.citation_check_transcript_path})")
+            return
+        if not output_path.exists():
+            print(f"  Warning: citation-check agent did not write {output_path}")
+            return
+        try:
+            data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
+            s = data.get("summary") or {}
+            print(
+                f"  Citation check written; {s.get('total', '?')} refs: "
+                f"{s.get('likely_fabricated', 0)} likely fabricated, "
+                f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+                f"{s.get('inconclusive', 0)} inconclusive"
+            )
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
 
     # -- Phase 4: Verify ---------------------------------------------------
 

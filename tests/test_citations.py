@@ -356,6 +356,9 @@ def test_citation_timeout_env_fallback(tmp_path, monkeypatch):
 # Task 8: citation-check subagent prompt template + prompt generator
 # ---------------------------------------------------------------------------
 
+from unittest.mock import patch
+
+from veritas.core.runner import ReplicationRunner
 from veritas.templates.prompt_generator import PromptGenerator
 
 
@@ -375,3 +378,49 @@ def test_citation_check_prompt_renders_key_instructions(tmp_path):
     assert "checked_support" in prompt
     # Anti-override discipline must be present.
     assert "do not override" in prompt.lower() or "authoritative" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 9: Runner dispatch — _check_citations + _stage_resolver_script
+# ---------------------------------------------------------------------------
+
+
+def _citation_runner(tmp_path):
+    paper = tmp_path / "paper.pdf"
+    paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
+    runner = ReplicationRunner(cfg)
+    cfg.evaluation_dir.mkdir(parents=True, exist_ok=True)
+    return runner, cfg
+
+
+def test_check_citations_stages_script_and_dispatches(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+        cfg.citation_check_path.write_text(
+            '{"summary": {"total": 1, "verified": 1, "metadata_mismatch": 0, '
+            '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0}, '
+            '"flagged": [], "checked_support": false, "notes": "n"}',
+            encoding="utf-8",
+        )
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+
+    # The standalone resolver script was staged into the workspace.
+    assert cfg.resolver_script_path.exists()
+    assert "def classify" in cfg.resolver_script_path.read_text(encoding="utf-8")
+    # Dispatched with default (key-stripped) env — never expose_api_keys.
+    _, kwargs = m.call_args
+    assert kwargs.get("expose_api_keys", False) is False
+    assert cfg.citation_check_path.exists()
+
+
+def test_check_citations_idempotent_skip(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()  # already produced -> skip
