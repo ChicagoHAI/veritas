@@ -80,9 +80,18 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   that verifies existence/metadata against Crossref/OpenAlex/Semantic
   Scholar/DBLP/arXiv (keyless); the agent web-search-escalates only unresolved
   references. Output: `evaluation/citation_check.json`. Advisory: never changes
-  the Replication Score. Citation support/faithfulness is out of scope here.
-  Method adapted from refchecker (MIT). The dispatch is a self-contained method
-  that mirrors the research sub-agent pattern.
+  the Replication Score. Requires `--paper`. Method adapted from refchecker (MIT).
+  The dispatch is a self-contained method that mirrors the research sub-agent
+  pattern. The faithfulness sub-pass checks whether each cited source actually
+  supports what the paper attributes to it, with verdicts `supported`,
+  `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a
+  verbatim quote from the source. `--check-citations-faithfulness main` (default)
+  limits this to the paper's central attributed claims; `all` extends it to every
+  claim-bearing citation. An independent audit pass re-checks flagged verdicts and
+  records any disagreements in `evaluation/citation_audit.json` for human review.
+  The `check-citations <replicate-dir>` subcommand runs the full citation check
+  (including faithfulness and audit) on an already-completed run; it recovers the
+  paper path from the run's saved config, with `--paper` as an override.
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 

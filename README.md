@@ -61,6 +61,8 @@ the comparator's judgment.
 ./veritas full --paper p.pdf --repo ./myrepo  # same thing, named
 ./veritas replicate --repo ./myrepo         # replication only, for benchmarking
 ./veritas replicate --paper p.pdf --repo ./myrepo --check-citations  # opt-in citation check
+./veritas check-citations ./replicate-dir                            # standalone: run on a finished run
+./veritas replicate --paper p.pdf --check-citations --check-citations-faithfulness all  # widen faithfulness scope
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
 ./veritas extract-plan paper.pdf            # plan-only sketch
@@ -101,7 +103,7 @@ fabricated references and metadata errors such as a published paper cited as an
 arXiv preprint. It is advisory and does not change the Replication Score, and it
 requires `--paper`. The method is adapted from the
 [refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
-Citation support (whether a cited paper backs the claim) is not checked.
+The check also verifies, for the paper's main claims, whether the cited source supports what the paper attributes to it. Verdicts are `supported`, `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a verbatim quote. An independent audit pass re-checks flagged verdicts and lists any disagreements for human review. Use `--check-citations-faithfulness all` to check every claim-bearing citation instead of only the main ones. The check runs inline during `replicate --check-citations`, or standalone on a finished run via `check-citations <replicate-dir>` (which recovers the paper path from the run's saved config).
 
 ## The report
 
