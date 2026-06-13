@@ -474,10 +474,17 @@ def check_citations(
                     recovered_paper = Path(inp["paper_path"])
             except (OSError, ValueError):
                 pass
-    if recovered_paper is None or not recovered_paper.exists():
+    if recovered_paper is None:
         console.print(
-            "[bold red]Error:[/bold red] could not find the paper for this run. "
-            "Pass --paper <path> (the citation check reads the paper's references)."
+            "[bold red]Error:[/bold red] no paper path was found for this run "
+            "(none recorded in the run's saved config). Pass --paper <path> "
+            "(the citation check reads the paper's references)."
+        )
+        raise typer.Exit(1)
+    if not recovered_paper.exists():
+        console.print(
+            f"[bold red]Error:[/bold red] the paper path {recovered_paper} does not "
+            f"exist (the file may have moved). Pass --paper <path> with its current location."
         )
         raise typer.Exit(1)
 
@@ -501,6 +508,8 @@ def check_citations(
         console.print("[bold green]Citation check + report complete.[/bold green]")
         if result.report_path:
             console.print(f"Report: {result.report_path}")
+        if result.pdf_path:
+            console.print(f"PDF: {result.pdf_path}")
     else:
         console.print(f"[bold red]Citation check failed:[/bold red] {result.error}")
         raise typer.Exit(1)
