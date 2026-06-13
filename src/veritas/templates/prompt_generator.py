@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from veritas.core.config import (
+    CITATION_AUDIT_FILE,
     CITATION_CHECK_FILE,
     CITATION_REFERENCES_FILE,
     CITATION_RESOLVER_VERDICTS_FILE,
@@ -279,11 +280,6 @@ class PromptGenerator:
         paper_path: Path,
     ) -> str:
         """Render the citation-audit prompt (independent re-check of flagged verdicts)."""
-        from veritas.core.config import (
-            CITATION_CHECK_FILE,
-            CITATION_AUDIT_FILE,
-            EVALUATION_SUBDIR,
-        )
         eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
         template = self.env.get_template("evaluation/citation_audit.md")
         context = {
