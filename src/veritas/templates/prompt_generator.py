@@ -6,6 +6,12 @@ import os
 from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from veritas.core.config import (
+    CITATION_CHECK_FILE,
+    CITATION_REFERENCES_FILE,
+    CITATION_RESOLVER_VERDICTS_FILE,
+    EVALUATION_SUBDIR,
+)
 
 if TYPE_CHECKING:
     from veritas.core.models.replication import ReplicationPlan
@@ -246,15 +252,8 @@ class PromptGenerator:
         A single web-enabled provider invocation: extract the paper's reference
         list, run the deterministic resolver script (authoritative for
         existence/metadata), then web-search-escalate only the unresolved
-        references. Adapted from the refchecker project (MIT). Does not alter the
-        Replication Score.
+        references. Does not alter the Replication Score.
         """
-        from veritas.core.config import (
-            CITATION_CHECK_FILE,
-            CITATION_REFERENCES_FILE,
-            CITATION_RESOLVER_VERDICTS_FILE,
-            EVALUATION_SUBDIR,
-        )
         eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
         template = self.env.get_template("evaluation/citation_check.md")
         context = {

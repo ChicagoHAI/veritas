@@ -37,6 +37,11 @@ Transcribe faithfully. Do not invent or correct anything at this step — if the
 paper cites a work as an arXiv preprint, write `"arXiv preprint ..."` in `venue`
 even if you believe it was later published.
 
+If the paper has no reference section, or you cannot read it (for example a
+scanned, image-only PDF), write an empty list `[]` to `{{ references_path }}`
+and continue. The resolver handles an empty list and the result will report
+`total: 0`. Do not invent references.
+
 ## Step 2 — Run the deterministic resolver (authoritative)
 
 Run the verification script over your extracted references:
@@ -51,6 +56,10 @@ authoritative record it found. **These verdicts are authoritative. Do not
 override `verified` or `metadata_mismatch`.** They were produced by matching
 real database records, which is more reliable than a web search. Read
 `{{ resolver_verdicts_path }}`.
+
+Run the script once over the whole list (it processes every reference). If the
+script fails (non-zero exit), writes no file, or writes invalid JSON, do NOT
+invent verdicts: treat every reference as `unresolved` and proceed to Step 3.
 
 ## Step 3 — Escalate ONLY the `unresolved` references
 
@@ -69,6 +78,10 @@ fabricated:
 - **When in doubt, choose `inconclusive`.** A false accusation of fabrication is
   worse than a miss. Never auto-correct a reference; only flag and cite evidence.
 
+Aim to turn every `unresolved` reference into `inconclusive` or
+`likely_fabricated`. Leave a reference `unresolved` (and count it as such) only
+if you genuinely could not complete a web search for it.
+
 ## Step 4 — Write the result
 
 Write `{{ citation_check_path }}` as a single JSON object:
@@ -85,8 +98,8 @@ Write `{{ citation_check_path }}` as a single JSON object:
       "raw": "<verbatim reference line>",
       "status": "metadata_mismatch | likely_fabricated | inconclusive",
       "detail": "<one plain sentence: what is wrong, e.g. 'cited as arXiv preprint but published at ICLR 2024 per DBLP'>",
-      "matched_record": "<the resolver's matched_record object, or null>",
-      "evidence": ["<source URL you used, for escalated refs>"]
+      "matched_record": "<the resolver's matched_record object for this reference, copied verbatim from the resolver output; null for references you escalated by web search>",
+      "evidence": ["<source URL(s) you used for an escalated reference; use [] for resolver-set entries>"]
     }
   ],
   "checked_support": false,
@@ -101,6 +114,10 @@ Rules:
   could not escalate one, leave it `unresolved` and count it.
 - List in `flagged` every reference whose final status is NOT `verified`.
   `verified` references are counted only, not listed.
+- Copy `matched_record` verbatim from the resolver output for that reference's
+  key. For references you escalated by web search, set it to `null`.
+- `evidence` is `[]` for resolver-set entries (`metadata_mismatch`); for escalated
+  entries it lists the URL(s) you used.
 - Keep `checked_support` exactly `false`. Print the JSON to stdout as well.
 
 Begin now.
