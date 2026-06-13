@@ -432,3 +432,55 @@ def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
         runner._check_citations()  # must NOT raise
     m.assert_not_called()
     assert not cfg.citation_check_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Task 10: ReportGenerator._render_citation_check / _load_citation_check
+# ---------------------------------------------------------------------------
+
+from veritas.core.report_generator import ReportGenerator
+
+
+def test_render_citation_check_lists_flagged_and_summary(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 10, "verified": 7, "metadata_mismatch": 1, "unresolved": 0, "likely_fabricated": 1, "inconclusive": 1},
+        "flagged": [
+            {"key": "a2024", "raw": "A. Author. Fake paper. arXiv 2024.", "status": "likely_fabricated",
+             "detail": "No dedicated page found for this title.", "matched_record": None,
+             "evidence": ["https://www.google.com/search?q=..."]},
+            {"key": "b2024", "raw": "B. Auth. Real paper. arXiv preprint.", "status": "metadata_mismatch",
+             "detail": "cited as arXiv preprint but published at ICLR 2024 per DBLP",
+             "matched_record": {"source": "dblp", "url": "https://dblp.org/x"}, "evidence": []},
+        ],
+        "checked_support": False,
+        "notes": "support not checked",
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out))
+    assert "## Citation Check" in section
+    assert "likely fabricated" in section.lower()
+    assert "a2024" in section and "b2024" in section
+    assert "ICLR 2024" in section
+    # Honest about what was not checked.
+    assert "support" in section.lower()
+
+
+def test_render_citation_check_empty_when_absent(tmp_path):
+    gen = ReportGenerator()
+    assert gen._render_citation_check(gen._load_citation_check(tmp_path / "nope")) == ""
+
+
+def test_render_citation_check_clean_bill(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 5, "verified": 5, "metadata_mismatch": 0, "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0},
+        "flagged": [], "checked_support": False, "notes": "n",
+    }), encoding="utf-8")
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out))
+    assert "## Citation Check" in section
+    assert "all 5" in section.lower() or "no reference issues" in section.lower()

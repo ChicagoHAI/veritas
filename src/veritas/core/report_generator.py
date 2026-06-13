@@ -23,6 +23,7 @@ from veritas.core.config import (
     ANALYZE_SUBDIR,
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
+    CITATION_CHECK_FILE,
     WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.paper_claims import (
@@ -210,6 +211,24 @@ class ReportGenerator:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _load_citation_check(self, replicate_dir: Optional[Path]) -> Optional[dict]:
+        """Load the citation-check output, if the submodule ran.
+
+        Returns the parsed dict, or None when the submodule was not run (opt-in
+        via ``--check-citations``) or its output is absent/malformed. The report
+        degrades gracefully — the score and tables never depend on this.
+        """
+        if replicate_dir is None:
+            return None
+        path = Path(replicate_dir) / EVALUATION_SUBDIR / CITATION_CHECK_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def _load_mode(self, replicate_dir: Path) -> Optional[str]:
         """Recover the input mode from pipeline_state.json, if available.
 
@@ -262,6 +281,10 @@ class ReportGenerator:
 
         if score is not None and score.flags:
             report += self._render_flags(score.flags)
+
+        # Advisory citation check (opt-in via --check-citations). Independent of
+        # the score; rendered when present.
+        report += self._render_citation_check(self._load_citation_check(output_dir))
 
         # Manager retry-loop trajectory (only when the loop ran, i.e. >1
         # iteration or a hand-off). The Replication Score above is unaffected by
@@ -320,6 +343,62 @@ class ReportGenerator:
             "not part of the Replication Score.*\n\n"
         )
         return intro + body
+
+    def _render_citation_check(self, citation: Optional[dict]) -> str:
+        """Render the advisory citation-check section (existence/metadata only).
+
+        Headline counts plus a per-reference breakdown for every flagged item.
+        Advisory: stated to NOT affect the Replication Score. Honest that
+        citation support (faithfulness) was not checked.
+        """
+        if not citation:
+            return ""
+        s = citation.get("summary") or {}
+        total = s.get("total", 0)
+        section = "## Citation Check\n\n"
+        section += (
+            "_Advisory reference check (does each cited work exist and is its "
+            "metadata correct). This does not affect the Replication Score._\n\n"
+        )
+        section += (
+            f"**{total} references checked** — "
+            f"{s.get('verified', 0)} verified, "
+            f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
+            f"{s.get('likely_fabricated', 0)} likely fabricated, "
+            f"{s.get('inconclusive', 0)} inconclusive.\n\n"
+        )
+        flagged = citation.get("flagged") or []
+        if not flagged:
+            section += f"No reference issues found: all {total} references verified.\n\n"
+        else:
+            section += "| Status | Ref | Detail | Source |\n"
+            section += "|--------|-----|--------|--------|\n"
+            label = {
+                "likely_fabricated": "likely fabricated",
+                "metadata_mismatch": "metadata mismatch",
+                "inconclusive": "inconclusive",
+                "unresolved": "unresolved",
+            }
+            for f in flagged:
+                status = label.get(f.get("status", ""), f.get("status", ""))
+                key = (f.get("key") or "").strip() or "?"
+                detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
+                rec = f.get("matched_record") or {}
+                evidence = f.get("evidence") or []
+                src = ""
+                if isinstance(rec, dict) and rec.get("url"):
+                    src = f"[{rec.get('source', 'record')}]({rec['url']})"
+                elif evidence:
+                    src = f"[evidence]({evidence[0]})"
+                section += f"| {status} | `{key}` | {detail} | {src} |\n"
+            section += "\n"
+        if citation.get("checked_support") is False:
+            section += (
+                "_Note: this checks that references exist and are described "
+                "correctly. It does not check citation support (whether each "
+                "cited paper actually backs the claim it is cited for)._\n\n"
+            )
+        return section
 
     def _render_limitations(self, fix_assessment, report_block: dict) -> str:
         """Combine the deterministic fix-severity record with the manager's
