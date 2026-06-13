@@ -626,7 +626,7 @@ def test_citation_audit_prompt_renders(tmp_path):
     assert "citation_check.json" in prompt
     assert "citation_audit.json" in prompt
     assert "independently" in prompt.lower() or "fresh" in prompt.lower()
-    assert "human_review" in prompt
+    assert "items" in prompt and "audit_verdict" in prompt
 
 
 # --- runner: scope passing + audit dispatch ---
@@ -757,23 +757,7 @@ def test_render_faithfulness_section_lists_checked_claims(tmp_path):
     assert "A is associated with B" in section  # the quote is shown
 
 
-def test_render_human_review_from_audit(tmp_path):
-    out = tmp_path / "out"
-    _write_check(out, [])
-    (out / "evaluation" / "citation_audit.json").write_text(json.dumps({
-        "audited_count": 1,
-        "human_review": [{"key": "z", "kind": "faithfulness",
-                          "first_verdict": "contradicted", "audit_verdict": "partially_supported",
-                          "note": "disagree on strength"}],
-    }), encoding="utf-8")
-    gen = ReportGenerator()
-    section = gen._render_citation_check(
-        gen._load_citation_check(out), gen._load_citation_audit(out))
-    assert "human review" in section.lower()
-    assert "z" in section and "contradicted" in section.lower()
-
-
-def test_render_no_audit_no_human_review_section(tmp_path):
+def test_render_citation_check_no_human_review_section(tmp_path):
     out = tmp_path / "out"
     _write_check(out, [])
     gen = ReportGenerator()
@@ -795,15 +779,56 @@ def test_render_citation_check_still_renders_without_faithfulness(tmp_path):
     assert "Citation Check" in section  # no crash, integrity still renders
 
 
-def test_render_human_review_empty_list_no_section(tmp_path):
-    out = tmp_path / "out"
-    _write_check(out, [])
+def _write_audit(out, items):
+    (out / "evaluation").mkdir(parents=True, exist_ok=True)
     (out / "evaluation" / "citation_audit.json").write_text(
-        json.dumps({"audited_count": 2, "human_review": []}), encoding="utf-8")
+        json.dumps({"audited_count": len(items), "items": items}), encoding="utf-8")
+
+
+def test_soften_verdict_only_downgrades():
     gen = ReportGenerator()
-    section = gen._render_citation_check(
-        gen._load_citation_check(out), gen._load_citation_audit(out))
-    assert "human review" not in section.lower()  # empty list -> no section
+    # integrity: audit milder -> soften
+    assert gen._soften_verdict("likely_fabricated", "inconclusive", "integrity") == ("inconclusive", True)
+    assert gen._soften_verdict("metadata_mismatch", "verified", "integrity") == ("verified", True)
+    # never escalate
+    assert gen._soften_verdict("verified", "likely_fabricated", "integrity") == ("verified", False)
+    # agree -> no change
+    assert gen._soften_verdict("metadata_mismatch", "metadata_mismatch", "integrity") == ("metadata_mismatch", False)
+    # faithfulness: audit milder -> soften
+    assert gen._soften_verdict("contradicted", "partially_supported", "faithfulness") == ("partially_supported", True)
+    # no/unknown audit verdict -> keep first
+    assert gen._soften_verdict("contradicted", None, "faithfulness") == ("contradicted", False)
+    assert gen._soften_verdict("contradicted", "inaccessible", "faithfulness") == ("contradicted", False)
+
+
+def test_render_faithfulness_softened_by_audit(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [
+        {"key": "y2023", "claim": "A causes B", "source_status": "retrieved",
+         "verdict": "contradicted", "quote": "A is associated with B",
+         "evidence_basis": "fetched_full", "source": "https://x", "detail": "d"},
+    ], summary_extra={"checked": 1, "supported": 0, "partially_supported": 0,
+                      "contradicted": 1, "not_mentioned": 0, "inaccessible": 0})
+    _write_audit(out, [{"key": "y2023", "kind": "faithfulness",
+                        "audit_verdict": "partially_supported", "note": "partly backs it"}])
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "partially supported" in section.lower()
+    assert "softened" in section.lower()
+    assert "human review" not in section.lower()
+
+
+def test_render_no_audit_keeps_verify_verdict(tmp_path):
+    out = tmp_path / "out"
+    _write_check(out, [
+        {"key": "y2023", "claim": "c", "source_status": "retrieved", "verdict": "contradicted",
+         "quote": "q", "evidence_basis": "fetched_full", "source": "https://x", "detail": "d"},
+    ], summary_extra={"checked": 1, "supported": 0, "partially_supported": 0,
+                      "contradicted": 1, "not_mentioned": 0, "inaccessible": 0})
+    gen = ReportGenerator()
+    section = gen._render_citation_check(gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "contradicted" in section.lower()
+    assert "softened" not in section.lower()
 
 
 def test_render_faithfulness_skips_non_dict_entries(tmp_path):

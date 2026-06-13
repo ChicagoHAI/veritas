@@ -364,15 +364,42 @@ class ReportGenerator:
         )
         return intro + body
 
+    _INTEGRITY_SEVERITY = {"likely_fabricated": 3, "metadata_mismatch": 2, "inconclusive": 1, "verified": 0}
+    _FAITHFULNESS_SEVERITY = {"contradicted": 3, "not_mentioned": 2, "partially_supported": 1, "supported": 0}
+
+    @staticmethod
+    def _soften_verdict(first: str, audit, kind: str):
+        """Conservative reconciliation: the final verdict is the less severe of the
+        verify (``first``) and ``audit`` verdicts. The audit can only soften, never
+        escalate. Returns (final_verdict, softened_bool). If the audit has no usable
+        verdict for this item, keep ``first`` unchanged.
+        """
+        sev = (ReportGenerator._INTEGRITY_SEVERITY if kind == "integrity"
+               else ReportGenerator._FAITHFULNESS_SEVERITY)
+        if not audit or first not in sev or audit not in sev:
+            return first, False
+        if sev[audit] < sev[first]:
+            return audit, True
+        return first, False
+
     def _render_citation_check(self, citation: Optional[dict], audit: Optional[dict] = None) -> str:
         """Render the advisory citation-check section.
 
         Covers reference integrity (existence/metadata) and, when present, a
-        claim-support (faithfulness) summary plus a human-review list from the
-        independent audit pass. Advisory: does not affect the Replication Score.
+        claim-support (faithfulness) summary. The independent audit can only soften
+        verify verdicts, never escalate them. Advisory: does not affect the
+        Replication Score.
         """
         if not citation:
             return ""
+
+        audit_items = (audit or {}).get("items") or []
+        audit_lookup = {
+            (it.get("key"), it.get("kind")): it.get("audit_verdict")
+            for it in audit_items if isinstance(it, dict) and it.get("key")
+        }
+        softened_count = 0
+
         s = citation.get("summary") or {}
         total = s.get("total", 0)
         section = "## Citation Check\n\n"
@@ -398,11 +425,19 @@ class ReportGenerator:
                 "metadata_mismatch": "metadata mismatch",
                 "inconclusive": "inconclusive",
                 "unresolved": "unresolved",
+                "verified": "verified",
             }
             for f in flagged:
                 if not isinstance(f, dict):
                     continue
-                status = label.get(f.get("status", ""), f.get("status", ""))
+                first_status = f.get("status", "")
+                final_status, softened = self._soften_verdict(
+                    first_status, audit_lookup.get((f.get("key"), "integrity")), "integrity")
+                if softened:
+                    softened_count += 1
+                status_label = label.get(final_status, final_status)
+                if softened:
+                    status_label += f" (audit softened from {first_status})"
                 key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
                 detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
                 rec = f.get("matched_record") or {}
@@ -413,7 +448,7 @@ class ReportGenerator:
                 elif evidence and isinstance(evidence[0], str):
                     src = f"[evidence]({evidence[0]})"
                 src = src.replace("|", "\\|")
-                section += f"| {status} | `{key}` | {detail} | {src} |\n"
+                section += f"| {status_label} | `{key}` | {detail} | {src} |\n"
             section += "\n"
         if citation.get("checked_support") is False:
             section += (
@@ -445,14 +480,22 @@ class ReportGenerator:
                 if not isinstance(f, dict):
                     continue
                 if f.get("source_status") == "inaccessible":
-                    verdict = "source inaccessible"
+                    verdict_label = "source inaccessible"
+                    softened_faith = False
                 else:
-                    verdict = label_faith.get(f.get("verdict", ""), f.get("verdict", "") or "?")
+                    first_verdict = f.get("verdict", "")
+                    final_verdict, softened_faith = self._soften_verdict(
+                        first_verdict, audit_lookup.get((f.get("key"), "faithfulness")), "faithfulness")
+                    if softened_faith:
+                        softened_count += 1
+                    verdict_label = label_faith.get(final_verdict, final_verdict or "?")
+                    if softened_faith:
+                        verdict_label += f" (audit softened from {first_verdict})"
                 key = (f.get("key") or "?").replace("|", "\\|")
                 claim = (f.get("claim") or "").replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()
                 src = f.get("source") or ""
-                section += f"- `{key}` ({verdict}): {claim}"
+                section += f"- `{key}` ({verdict_label}): {claim}"
                 if quote:
                     section += f'  \n  Source says: "{quote}"'
                 if src:
@@ -460,20 +503,11 @@ class ReportGenerator:
                 section += "\n"
             section += "\n"
 
-        review = (audit or {}).get("human_review") or []
-        if review:
-            section += "\n**Flagged for human review (verify and audit disagree):**\n\n"
-            for r in review:
-                if not isinstance(r, dict):
-                    continue
-                key = (r.get("key") or "?").replace("|", "\\|")
-                note = (r.get("note") or "").replace("\n", " ").strip()
-                section += (
-                    f"- `{key}` ({r.get('kind', '')}): first pass said "
-                    f"`{r.get('first_verdict', '')}`, audit said "
-                    f"`{r.get('audit_verdict', '')}`. {note}\n"
-                )
-            section += "\n"
+        if softened_count:
+            section += (
+                f"\n_The independent audit softened {softened_count} flagged "
+                f"verdict(s) it could not confirm._\n\n"
+            )
 
         return section
 
