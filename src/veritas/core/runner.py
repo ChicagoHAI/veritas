@@ -1602,7 +1602,7 @@ class ReplicationRunner:
 
     @staticmethod
     def _has_auditable_findings(check_data: dict) -> bool:
-        """True if the verify output has any flagged integrity item or a
+        """True if the citation-check output has any flagged integrity item or a
         contradicted/partially_supported faithfulness verdict worth re-checking."""
         if (check_data.get("flagged") or []):
             return True
@@ -1626,13 +1626,13 @@ class ReplicationRunner:
             return
         if not (check_path.exists() and check_path.read_text(encoding="utf-8").strip()):
             return
+        if not self.config.has_paper:
+            return
         try:
             check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
         except (ValueError, json.JSONDecodeError):
             return
         if not self._has_auditable_findings(check_data):
-            return
-        if not self.config.has_paper:
             return
         print("Running citation-audit (independent re-check of flagged verdicts)...")
         try:
@@ -1652,8 +1652,11 @@ class ReplicationRunner:
         except Exception as e:
             print(f"  Warning: citation-audit could not run ({e}); skipped")
             return
-        if not success or not audit_path.exists():
-            print("  Warning: citation-audit produced no output; skipped")
+        if not success:
+            print(f"  Warning: citation-audit did not succeed (transcript: {self.config.citation_audit_transcript_path})")
+            return
+        if not audit_path.exists():
+            print(f"  Warning: citation-audit agent did not write {audit_path}")
             return
         try:
             data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))

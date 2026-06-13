@@ -680,7 +680,7 @@ def test_audit_citations_runs_and_writes(tmp_path):
     with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
         runner._audit_citations()
     assert cfg.citation_audit_path.exists()
-    assert "expose_api_keys" not in m.call_args.kwargs
+    assert "expose_api_keys" not in m.call_args.kwargs  # never opt into keys for the audit agent
 
 
 def test_audit_citations_skips_when_nothing_flagged(tmp_path):
@@ -711,3 +711,14 @@ def test_audit_citations_never_raises_on_missing_check(tmp_path):
     with patch.object(ReplicationRunner, "_invoke_provider") as m:
         runner._audit_citations()  # must not raise
     m.assert_not_called()
+
+
+def test_audit_citations_idempotent_skip(tmp_path):
+    runner, cfg = _citation_runner_scope(tmp_path)
+    cfg.citation_check_path.write_text(
+        '{"summary": {}, "flagged": [{"key": "a", "status": "likely_fabricated"}], '
+        '"faithfulness": []}', encoding="utf-8")
+    cfg.citation_audit_path.write_text('{"audited_count": 0, "human_review": []}', encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._audit_citations()
+    m.assert_not_called()  # audit already produced -> skip
