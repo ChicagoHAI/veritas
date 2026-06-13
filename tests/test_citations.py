@@ -499,3 +499,19 @@ def test_render_citation_check_skips_malformed_flagged_entry(tmp_path):
     gen = ReportGenerator()
     section = gen._render_citation_check(gen._load_citation_check(out))  # must not raise
     assert "a2024" in section
+
+
+def test_load_citation_check_tolerates_markdown_fences(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(
+        "```json\n" + json.dumps({
+            "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                        "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0},
+            "flagged": [], "checked_support": False, "notes": "n",
+        }) + "\n```\n",
+        encoding="utf-8",
+    )
+    gen = ReportGenerator()
+    data = gen._load_citation_check(out)
+    assert data is not None and data["summary"]["total"] == 1

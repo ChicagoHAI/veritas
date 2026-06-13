@@ -31,6 +31,7 @@ from veritas.core.models.paper_claims import (
     PaperClaims,
     ReplicationScore,
 )
+from veritas.core.replication import _extract_json
 
 
 # Header label for each tier in the report.
@@ -224,11 +225,11 @@ class ReportGenerator:
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(_extract_json(path.read_text(encoding="utf-8")))
             # Citation data is structured (keys, urls, counts), not free narrative,
             # so it is not run through _scrub_prose like the evaluation output.
             return data if isinstance(data, dict) else None
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError):
             return None
 
     def _load_mode(self, replicate_dir: Path) -> Optional[str]:
@@ -371,7 +372,7 @@ class ReportGenerator:
         )
         flagged = citation.get("flagged") or []
         if not flagged:
-            section += f"No reference issues found: all {total} references verified.\n\n"
+            section += f"No reference issues flagged across {total} references.\n\n"
         else:
             section += "| Status | Ref | Detail | Source |\n"
             section += "|--------|-----|--------|--------|\n"
