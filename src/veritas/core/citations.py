@@ -480,8 +480,11 @@ def lookup_reference(ref: Reference) -> tuple[List[SourceRecord], List[str]]:
     Title-based queries across Crossref, OpenAlex, Semantic Scholar, DBLP, plus
     an arXiv query when the citation carries an arXiv id. Keyless; failures in
     any one source are swallowed so a single outage never sinks the check.
+    A source that errors or rate-limits (HTTP 429) yields no records (the fetch
+    returns None), so the reference simply degrades toward 'unresolved' rather
+    than failing the run.
     """
-    title_q = urllib.parse.quote(ref.title) if ref.title else ""
+    title_q = urllib.parse.quote(ref.title, safe="") if ref.title else ""
     records: List[SourceRecord] = []
     queried: List[str] = []
 
@@ -512,7 +515,7 @@ def lookup_reference(ref: Reference) -> tuple[List[SourceRecord], List[str]]:
     if ref.arxiv_id:
         queried.append("arxiv")
         atom = fetch_text(
-            f"http://export.arxiv.org/api/query?id_list={urllib.parse.quote(normalize_arxiv_id(ref.arxiv_id))}"
+            f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(normalize_arxiv_id(ref.arxiv_id), safe='')}"
         )
         if atom:
             records.extend(parse_arxiv_atom(atom))
@@ -525,6 +528,7 @@ def lookup_reference(ref: Reference) -> tuple[List[SourceRecord], List[str]]:
 # ---------------------------------------------------------------------------
 
 def build_summary(verdicts: List[CitationVerdict]) -> Dict[str, int]:
+    """Count verdicts per status (plus total). Unknown statuses are ignored."""
     summary = {"total": len(verdicts), STATUS_VERIFIED: 0, STATUS_METADATA_MISMATCH: 0, STATUS_UNRESOLVED: 0}
     for v in verdicts:
         if v.status in summary:
@@ -568,11 +572,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("usage: resolve_references.py <references.json> <out.json>", file=sys.stderr)
         return 2
     in_path, out_path = argv
-    with open(in_path, encoding="utf-8") as f:
-        refs = parse_references(f.read())
+    try:
+        with open(in_path, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as exc:
+        print(f"error: cannot read {in_path}: {exc}", file=sys.stderr)
+        return 1
+    refs = parse_references(raw)
     result = resolve_references(refs)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
+    except OSError as exc:
+        print(f"error: cannot write {out_path}: {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(result["summary"]))
     return 0
 
