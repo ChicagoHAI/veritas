@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from difflib import SequenceMatcher
 from typing import Any, Callable, Dict, List, Literal, Optional
@@ -294,3 +295,137 @@ def classify(
         key=ref.key, title=ref.title, status=status,
         matched_record=rec, mismatches=mismatches, sources_queried=sources_queried,
     )
+
+
+# ---------------------------------------------------------------------------
+# Source-specific API response adapters
+# ---------------------------------------------------------------------------
+
+def _first(seq: Any, default: str = "") -> str:
+    """Return the first element of a list, or default if the list is empty/non-list."""
+    return seq[0] if isinstance(seq, list) and seq else default
+
+
+def parse_crossref(payload: Dict[str, Any]) -> List[SourceRecord]:
+    """Parse a Crossref works/query JSON payload into SourceRecords."""
+    out: List[SourceRecord] = []
+    for item in (payload.get("message", {}) or {}).get("items", []) or []:
+        authors = [
+            f"{a.get('given', '')} {a.get('family', '')}".strip()
+            for a in item.get("author", []) or []
+        ]
+        year = None
+        parts = ((item.get("issued") or {}).get("date-parts") or [])
+        if parts and parts[0]:
+            try:
+                year = int(parts[0][0])
+            except (TypeError, ValueError, IndexError):
+                year = None
+        out.append(SourceRecord(
+            source="crossref",
+            title=_first(item.get("title", [])),
+            authors=[a for a in authors if a],
+            year=year,
+            venue=_first(item.get("container-title", [])),
+            doi=str(item.get("DOI", "") or ""),
+            url=str(item.get("URL", "") or ""),
+        ))
+    return out
+
+
+def parse_openalex(payload: Dict[str, Any]) -> List[SourceRecord]:
+    """Parse an OpenAlex works search JSON payload into SourceRecords."""
+    out: List[SourceRecord] = []
+    for item in payload.get("results", []) or []:
+        authors = [
+            ((a.get("author") or {}).get("display_name") or "")
+            for a in item.get("authorships", []) or []
+        ]
+        venue = (((item.get("primary_location") or {}).get("source") or {}).get("display_name") or "")
+        doi = str(item.get("doi", "") or "").replace("https://doi.org/", "")
+        out.append(SourceRecord(
+            source="openalex",
+            title=str(item.get("title", "") or ""),
+            authors=[a for a in authors if a],
+            year=item.get("publication_year"),
+            venue=venue,
+            doi=doi,
+            url=str(item.get("id", "") or ""),
+        ))
+    return out
+
+
+def parse_semantic_scholar(payload: Dict[str, Any]) -> List[SourceRecord]:
+    """Parse a Semantic Scholar paper search JSON payload into SourceRecords."""
+    out: List[SourceRecord] = []
+    for item in payload.get("data", []) or []:
+        ext = item.get("externalIds") or {}
+        out.append(SourceRecord(
+            source="s2",
+            title=str(item.get("title", "") or ""),
+            authors=[a.get("name", "") for a in item.get("authors", []) or [] if a.get("name")],
+            year=item.get("year"),
+            venue=str(item.get("venue", "") or ""),
+            doi=str(ext.get("DOI", "") or ""),
+            arxiv_id=str(ext.get("ArXiv", "") or ""),
+            url=str(item.get("url", "") or ""),
+        ))
+    return out
+
+
+def parse_dblp(payload: Dict[str, Any]) -> List[SourceRecord]:
+    """Parse a DBLP search JSON payload into SourceRecords."""
+    out: List[SourceRecord] = []
+    hits = (((payload.get("result") or {}).get("hits") or {}).get("hit")) or []
+    for hit in hits:
+        info = hit.get("info", {}) or {}
+        author_field = (info.get("authors") or {}).get("author") or []
+        if isinstance(author_field, dict):
+            author_field = [author_field]
+        authors = [a.get("text", "") for a in author_field if a.get("text")]
+        year = None
+        try:
+            year = int(info.get("year")) if info.get("year") else None
+        except (TypeError, ValueError):
+            year = None
+        out.append(SourceRecord(
+            source="dblp",
+            title=str(info.get("title", "") or "").rstrip("."),
+            authors=authors,
+            year=year,
+            venue=str(info.get("venue", "") or ""),
+            doi=str(info.get("doi", "") or ""),
+            url=str(info.get("url", "") or ""),
+        ))
+    return out
+
+
+def parse_arxiv_atom(atom_xml: str) -> List[SourceRecord]:
+    """Parse an arXiv Atom feed XML string into SourceRecords."""
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    out: List[SourceRecord] = []
+    try:
+        root = ET.fromstring(atom_xml)
+    except ET.ParseError:
+        return out
+    for entry in root.findall("a:entry", ns):
+        title = (entry.findtext("a:title", default="", namespaces=ns) or "").strip()
+        authors = [
+            (n.text or "").strip()
+            for n in entry.findall("a:author/a:name", ns)
+        ]
+        published = entry.findtext("a:published", default="", namespaces=ns) or ""
+        year = None
+        if len(published) >= 4 and published[:4].isdigit():
+            year = int(published[:4])
+        id_url = entry.findtext("a:id", default="", namespaces=ns) or ""
+        out.append(SourceRecord(
+            source="arxiv",
+            title=title,
+            authors=[a for a in authors if a],
+            year=year,
+            venue="arXiv",
+            arxiv_id=normalize_arxiv_id(id_url),
+            url=id_url,
+        ))
+    return out

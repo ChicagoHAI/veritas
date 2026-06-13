@@ -24,6 +24,11 @@ from veritas.core.citations import (
     STATUS_UNRESOLVED,
     TITLE_MATCH_THRESHOLD,
     AUTHOR_OVERLAP_THRESHOLD,
+    parse_crossref,
+    parse_openalex,
+    parse_semantic_scholar,
+    parse_dblp,
+    parse_arxiv_atom,
 )
 
 
@@ -184,3 +189,75 @@ def test_classify_doi_prefix_forms_are_not_a_mismatch():
     recs = [_rec(title="Paper With Prefixed DOI", authors=["A"], doi="10.1145/3292500")]
     v = classify(ref, recs, sources_queried=["crossref"])
     assert v.status == STATUS_VERIFIED
+
+
+# ---------------------------------------------------------------------------
+# Task 4: source-specific API response adapters
+# ---------------------------------------------------------------------------
+
+def test_parse_crossref_extracts_record():
+    payload = {"message": {"items": [{
+        "title": ["Attention Is All You Need"],
+        "author": [{"given": "Ashish", "family": "Vaswani"}, {"given": "Noam", "family": "Shazeer"}],
+        "issued": {"date-parts": [[2017]]},
+        "container-title": ["NeurIPS"],
+        "DOI": "10.5555/abc",
+        "URL": "https://doi.org/10.5555/abc",
+    }]}}
+    recs = parse_crossref(payload)
+    assert recs and recs[0].source == "crossref"
+    assert recs[0].title == "Attention Is All You Need"
+    assert "Vaswani" in recs[0].authors[0]
+    assert recs[0].year == 2017 and recs[0].venue == "NeurIPS"
+
+
+def test_parse_openalex_extracts_record():
+    payload = {"results": [{
+        "title": "Some Paper",
+        "publication_year": 2024,
+        "authorships": [{"author": {"display_name": "Jane Roe"}}],
+        "primary_location": {"source": {"display_name": "ICLR"}},
+        "doi": "https://doi.org/10.1/x",
+        "id": "https://openalex.org/W1",
+    }]}
+    recs = parse_openalex(payload)
+    assert recs[0].source == "openalex" and recs[0].venue == "ICLR"
+    assert recs[0].year == 2024 and recs[0].authors == ["Jane Roe"]
+
+
+def test_parse_semantic_scholar_extracts_record():
+    payload = {"data": [{
+        "title": "S2 Paper", "year": 2023,
+        "authors": [{"name": "Al Pha"}, {"name": "Be Ta"}],
+        "venue": "ACL",
+        "externalIds": {"DOI": "10.9/z", "ArXiv": "2301.00001"},
+        "url": "https://www.semanticscholar.org/p/1",
+    }]}
+    recs = parse_semantic_scholar(payload)
+    assert recs[0].source == "s2" and recs[0].arxiv_id == "2301.00001"
+    assert recs[0].doi == "10.9/z" and recs[0].venue == "ACL"
+
+
+def test_parse_dblp_extracts_record():
+    payload = {"result": {"hits": {"hit": [{"info": {
+        "title": "DBLP Paper", "year": "2024", "venue": "ICLR",
+        "authors": {"author": [{"text": "First Author"}, {"text": "Second Author"}]},
+        "doi": "10.7/q", "url": "https://dblp.org/rec/1",
+    }}]}}}
+    recs = parse_dblp(payload)
+    assert recs[0].source == "dblp" and recs[0].venue == "ICLR" and recs[0].year == 2024
+    assert recs[0].authors == ["First Author", "Second Author"]
+
+
+def test_parse_arxiv_atom_extracts_record():
+    atom = '''<feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>ArXiv Paper Title</title>
+        <author><name>Aa Bb</name></author>
+        <author><name>Cc Dd</name></author>
+        <published>2024-01-15T00:00:00Z</published>
+        <id>http://arxiv.org/abs/2401.01234v2</id>
+      </entry></feed>'''
+    recs = parse_arxiv_atom(atom)
+    assert recs[0].source == "arxiv" and recs[0].arxiv_id == "2401.01234"
+    assert recs[0].year == 2024 and recs[0].authors == ["Aa Bb", "Cc Dd"]
