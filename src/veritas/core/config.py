@@ -72,6 +72,13 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
+# Citation-check submodule filenames (opt-in, advisory; under the evaluation dir).
+CITATION_CHECK_FILE = "citation_check.json"
+CITATION_CHECK_TRANSCRIPT_FILE = "citation_check_transcript.jsonl"
+CITATION_REFERENCES_FILE = "references.json"
+CITATION_RESOLVER_VERDICTS_FILE = "resolver_verdicts.json"
+CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
+
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
@@ -129,6 +136,14 @@ class Config:
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
 
+    # Opt-in citation-check submodule (post-verify; under the evaluate phase).
+    # Verifies the paper's references exist + carry correct metadata. Advisory:
+    # does not change the Replication Score. Requires --paper.
+    run_citation_check: bool = False
+
+    # Timeout (seconds) for the citation-check phase; None disables it.
+    citation_timeout: Optional[int] = None
+
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
     # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
@@ -147,6 +162,7 @@ class Config:
         "replicate_timeout": "VERITAS_REPLICATE_TIMEOUT",
         "verify_timeout": "VERITAS_VERIFY_TIMEOUT",
         "evaluate_timeout": "VERITAS_EVALUATE_TIMEOUT",
+        "citation_timeout": "VERITAS_CITATION_TIMEOUT",
     }
 
     def __post_init__(self):
@@ -212,6 +228,14 @@ class Config:
                 )
             if not any(self.data_path.iterdir()):
                 print(f"WARNING: --data directory is empty: {self.data_path}")
+
+        # Citation check needs the paper PDF (its reference list). Fail fast with
+        # a clear message rather than silently no-op in repo-only mode.
+        if self.run_citation_check and not self.has_paper:
+            raise ValueError(
+                "--check-citations requires --paper (it reads the paper's "
+                "reference list); no paper was provided"
+            )
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
@@ -341,6 +365,26 @@ class Config:
     @property
     def evaluation_transcript_path(self) -> Path:
         return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
+
+    @property
+    def citation_check_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_FILE
+
+    @property
+    def citation_check_transcript_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
+
+    @property
+    def references_path(self) -> Path:
+        return self.evaluation_dir / CITATION_REFERENCES_FILE
+
+    @property
+    def resolver_verdicts_path(self) -> Path:
+        return self.evaluation_dir / CITATION_RESOLVER_VERDICTS_FILE
+
+    @property
+    def resolver_script_path(self) -> Path:
+        return self.evaluation_dir / CITATION_RESOLVER_SCRIPT_FILE
 
     @property
     def report_md_path(self) -> Path:

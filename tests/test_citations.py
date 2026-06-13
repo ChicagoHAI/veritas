@@ -7,6 +7,11 @@ unit-tested directly, mirroring the pure-function test style of test_research.py
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
+
+from veritas.core.config import Config
 
 from veritas.core.citations import (
     Reference,
@@ -313,3 +318,35 @@ def test_build_summary_counts_each_status():
         CitationVerdict(key="d", title="", status=STATUS_VERIFIED),
     ]
     assert build_summary(verdicts) == {"total": 4, "verified": 2, "metadata_mismatch": 1, "unresolved": 1}
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Config integration — run_citation_check flag, paths, validation
+# ---------------------------------------------------------------------------
+
+def test_check_citations_requires_paper(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(ValueError, match="--check-citations requires --paper"):
+        Config(repo_path=repo, output_dir=tmp_path / "out", run_citation_check=True)
+
+
+def test_check_citations_paths_and_default_off(tmp_path):
+    paper = tmp_path / "p.pdf"
+    paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
+    assert cfg.run_citation_check is True
+    assert cfg.citation_check_path.name == "citation_check.json"
+    assert cfg.citation_check_path.parent.name == "evaluation"
+    assert cfg.references_path.name == "references.json"
+    # Default off when not requested.
+    cfg2 = Config(paper_path=paper, output_dir=tmp_path / "out2")
+    assert cfg2.run_citation_check is False
+
+
+def test_citation_timeout_env_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERITAS_CITATION_TIMEOUT", "300")
+    paper = tmp_path / "p.pdf"
+    paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out")
+    assert cfg.citation_timeout == 300
