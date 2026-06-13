@@ -154,3 +154,33 @@ def test_classify_metadata_mismatch_on_identifier_conflict():
     v = classify(ref, recs, sources_queried=["crossref"])
     assert v.status == STATUS_METADATA_MISMATCH
     assert any("doi" in m.lower() or "identifier" in m.lower() for m in v.mismatches)
+
+
+def test_classify_metadata_mismatch_on_year_disagreement():
+    ref = Reference(title="A Stable Title For Year Test", authors=["A"], year=2019)
+    recs = [_rec(title="A Stable Title For Year Test", authors=["A"], year=2024)]
+    v = classify(ref, recs, sources_queried=["crossref"])
+    assert v.status == STATUS_METADATA_MISMATCH
+    assert any("year" in m.lower() for m in v.mismatches)
+
+
+def test_classify_verified_when_year_within_tolerance():
+    ref = Reference(title="A Stable Title For Year Test", authors=["A"], year=2022)
+    recs = [_rec(title="A Stable Title For Year Test", authors=["A"], year=2023)]
+    v = classify(ref, recs, sources_queried=["crossref"])
+    assert v.status == STATUS_VERIFIED
+
+
+def test_classify_verified_when_both_are_preprints():
+    ref = Reference(title="A Preprint Only Work", authors=["A"],
+                    venue="arXiv preprint arXiv:2401.00002", arxiv_id="2401.00002")
+    recs = [_rec(title="A Preprint Only Work", authors=["A"], venue="arXiv", arxiv_id="2401.00002")]
+    v = classify(ref, recs, sources_queried=["arxiv"])
+    assert v.status == STATUS_VERIFIED
+
+
+def test_classify_doi_prefix_forms_are_not_a_mismatch():
+    ref = Reference(title="Paper With Prefixed DOI", authors=["A"], doi="doi:10.1145/3292500")
+    recs = [_rec(title="Paper With Prefixed DOI", authors=["A"], doi="10.1145/3292500")]
+    v = classify(ref, recs, sources_queried=["crossref"])
+    assert v.status == STATUS_VERIFIED

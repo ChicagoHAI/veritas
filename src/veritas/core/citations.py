@@ -179,6 +179,24 @@ def normalize_arxiv_id(value: str) -> str:
     return m.group(1) if m else ""
 
 
+_DOI_PREFIXES = (
+    "https://doi.org/", "http://doi.org/",
+    "https://dx.doi.org/", "http://dx.doi.org/", "doi:",
+)
+
+
+def normalize_doi(value: str) -> str:
+    """Normalize a DOI to bare lowercase form (strip URL / 'doi:' prefixes)."""
+    if not value:
+        return ""
+    s = value.strip().lower()
+    for prefix in _DOI_PREFIXES:
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    return s.strip()
+
+
 # ---------------------------------------------------------------------------
 # Record matching and verdict classification
 # ---------------------------------------------------------------------------
@@ -200,8 +218,12 @@ def best_match(ref: Reference, records: List[SourceRecord]) -> tuple[Optional[So
 
 
 def _venue_looks_like_preprint(venue: str) -> bool:
+    """True if the venue string names a known preprint server.
+
+    Covers arXiv, bioRxiv, medRxiv, SSRN, and the generic 'preprint' label.
+    """
     v = (venue or "").lower()
-    return "arxiv" in v or "preprint" in v
+    return any(k in v for k in ("arxiv", "biorxiv", "medrxiv", "ssrn", "preprint"))
 
 
 def classify(
@@ -241,24 +263,30 @@ def classify(
             )
 
     # Identifier conflict (DOI / arXiv id present on both sides but differ).
-    if ref.doi and rec.doi and ref.doi.strip().lower() != rec.doi.strip().lower():
+    ref_doi, rec_doi = normalize_doi(ref.doi), normalize_doi(rec.doi)
+    if ref_doi and rec_doi and ref_doi != rec_doi:
         mismatches.append(f"doi: cited '{ref.doi}' but record has '{rec.doi}' ({rec.source})")
-    if ref.arxiv_id and rec.arxiv_id:
-        if normalize_arxiv_id(ref.arxiv_id) != normalize_arxiv_id(rec.arxiv_id):
-            mismatches.append(
-                f"identifier: cited arXiv '{ref.arxiv_id}' but record has "
-                f"'{rec.arxiv_id}' ({rec.source})"
-            )
+    ref_arxiv, rec_arxiv = normalize_arxiv_id(ref.arxiv_id), normalize_arxiv_id(rec.arxiv_id)
+    if ref_arxiv and rec_arxiv and ref_arxiv != rec_arxiv:
+        mismatches.append(
+            f"identifier: cited arXiv '{ref.arxiv_id}' but record has "
+            f"'{rec.arxiv_id}' ({rec.source})"
+        )
 
-    # Publication-status drift: cited as a preprint, record shows a real venue.
+    # Publication-status drift, one direction only: cited as a preprint but the
+    # record shows a published venue. The reverse (cited as published, only a
+    # preprint record found) is deliberately NOT flagged — our lookup coverage
+    # is incomplete, so it would produce false positives.
     if _venue_looks_like_preprint(ref.venue) and rec.venue and not _venue_looks_like_preprint(rec.venue):
         mismatches.append(
-            f"venue: cited as '{ref.venue or 'preprint'}' but published at "
+            f"venue: cited as '{ref.venue}' but published at "
             f"'{rec.venue}'{f' {rec.year}' if rec.year else ''} per {rec.source}"
         )
 
-    # Year disagreement (>1 year apart, when both present).
-    if ref.year and rec.year and abs(int(ref.year) - int(rec.year)) > 1:
+    # Year disagreement (>1 year apart, when both present and positive).
+    if (ref.year is not None and rec.year is not None
+            and ref.year > 0 and rec.year > 0
+            and abs(int(ref.year) - int(rec.year)) > 1):
         mismatches.append(f"year: cited {ref.year} but record says {rec.year} ({rec.source})")
 
     status = STATUS_METADATA_MISMATCH if mismatches else STATUS_VERIFIED
