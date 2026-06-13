@@ -29,6 +29,8 @@ from veritas.core.citations import (
     parse_semantic_scholar,
     parse_dblp,
     parse_arxiv_atom,
+    resolve_references,
+    build_summary,
 )
 
 
@@ -276,3 +278,42 @@ def test_parse_arxiv_atom_extracts_record():
     recs = parse_arxiv_atom(atom)
     assert recs[0].source == "arxiv" and recs[0].arxiv_id == "2401.01234"
     assert recs[0].year == 2024 and recs[0].authors == ["Aa Bb", "Cc Dd"]
+
+
+# ---------------------------------------------------------------------------
+# Task 5: resolve_references orchestrator and build_summary
+# ---------------------------------------------------------------------------
+
+def _fake_lookup_factory(records_by_source):
+    """Return a lookup(ref) -> (records, sources_queried) using a static map."""
+    def _lookup(ref):
+        recs = []
+        for src, recs_for_src in records_by_source.items():
+            recs.extend(recs_for_src)
+        return recs, list(records_by_source.keys())
+    return _lookup
+
+
+def test_resolve_references_classifies_all_and_summarizes():
+    refs = [
+        Reference(key="ok", title="Attention Is All You Need", authors=["Vaswani", "Shazeer"], venue="NeurIPS", year=2017),
+        Reference(key="ghost", title="A Nonexistent Fabricated Title zzz9", authors=["Nobody"]),
+    ]
+    records_by_source = {
+        "dblp": [_rec(title="Attention is all you need", authors=["Ashish Vaswani", "Noam Shazeer"], venue="NeurIPS", year=2017)],
+    }
+    result = resolve_references(refs, lookup=_fake_lookup_factory(records_by_source))
+    statuses = {v["key"]: v["status"] for v in result["verdicts"]}
+    assert statuses["ok"] == STATUS_VERIFIED
+    assert statuses["ghost"] == STATUS_UNRESOLVED
+    assert result["summary"] == {"total": 2, "verified": 1, "metadata_mismatch": 0, "unresolved": 1}
+
+
+def test_build_summary_counts_each_status():
+    verdicts = [
+        CitationVerdict(key="a", title="", status=STATUS_VERIFIED),
+        CitationVerdict(key="b", title="", status=STATUS_METADATA_MISMATCH),
+        CitationVerdict(key="c", title="", status=STATUS_UNRESOLVED),
+        CitationVerdict(key="d", title="", status=STATUS_VERIFIED),
+    ]
+    assert build_summary(verdicts) == {"total": 4, "verified": 2, "metadata_mismatch": 1, "unresolved": 1}

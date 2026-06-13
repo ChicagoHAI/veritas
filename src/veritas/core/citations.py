@@ -15,8 +15,12 @@ script). It must never import from the ``veritas`` package.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from difflib import SequenceMatcher
@@ -431,3 +435,147 @@ def parse_arxiv_atom(atom_xml: str) -> List[SourceRecord]:
             url=id_url,
         ))
     return out
+
+
+# ---------------------------------------------------------------------------
+# HTTP fetchers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_UA = "veritas-citation-check (https://github.com/ChicagoHAI/veritas)"
+_TIMEOUT_S = 15
+
+
+def _user_agent() -> str:
+    email = os.environ.get("VERITAS_CONTACT_EMAIL", "").strip()
+    return f"{_DEFAULT_UA}; mailto:{email}" if email else _DEFAULT_UA
+
+
+def fetch_json(url: str) -> Optional[Dict[str, Any]]:
+    """GET a URL and parse JSON. Returns None on any network/parse error."""
+    req = urllib.request.Request(url, headers={"User-Agent": _user_agent(), "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError, OSError):
+        return None
+
+
+def fetch_text(url: str) -> Optional[str]:
+    """GET a URL and return text. Returns None on any network error."""
+    req = urllib.request.Request(url, headers={"User-Agent": _user_agent()})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-source lookup
+# ---------------------------------------------------------------------------
+
+def lookup_reference(ref: Reference) -> tuple[List[SourceRecord], List[str]]:
+    """Query all sources for one reference; return (records, sources_queried).
+
+    Title-based queries across Crossref, OpenAlex, Semantic Scholar, DBLP, plus
+    an arXiv query when the citation carries an arXiv id. Keyless; failures in
+    any one source are swallowed so a single outage never sinks the check.
+    """
+    title_q = urllib.parse.quote(ref.title) if ref.title else ""
+    records: List[SourceRecord] = []
+    queried: List[str] = []
+
+    if title_q:
+        queried.append("crossref")
+        cr = fetch_json(f"https://api.crossref.org/works?query.bibliographic={title_q}&rows=3")
+        if cr:
+            records.extend(parse_crossref(cr))
+
+        queried.append("openalex")
+        oa = fetch_json(f"https://api.openalex.org/works?search={title_q}&per_page=3")
+        if oa:
+            records.extend(parse_openalex(oa))
+
+        queried.append("s2")
+        fields = "title,year,authors,venue,externalIds,url"
+        s2 = fetch_json(
+            f"https://api.semanticscholar.org/graph/v1/paper/search?query={title_q}&limit=3&fields={fields}"
+        )
+        if s2:
+            records.extend(parse_semantic_scholar(s2))
+
+        queried.append("dblp")
+        dblp = fetch_json(f"https://dblp.org/search/publ/api?q={title_q}&format=json&h=3")
+        if dblp:
+            records.extend(parse_dblp(dblp))
+
+    if ref.arxiv_id:
+        queried.append("arxiv")
+        atom = fetch_text(
+            f"http://export.arxiv.org/api/query?id_list={urllib.parse.quote(normalize_arxiv_id(ref.arxiv_id))}"
+        )
+        if atom:
+            records.extend(parse_arxiv_atom(atom))
+
+    return records, queried
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator and summary
+# ---------------------------------------------------------------------------
+
+def build_summary(verdicts: List[CitationVerdict]) -> Dict[str, int]:
+    summary = {"total": len(verdicts), STATUS_VERIFIED: 0, STATUS_METADATA_MISMATCH: 0, STATUS_UNRESOLVED: 0}
+    for v in verdicts:
+        if v.status in summary:
+            summary[v.status] += 1
+    return summary
+
+
+def resolve_references(
+    refs: List[Reference],
+    *,
+    lookup: Callable[[Reference], tuple[List[SourceRecord], List[str]]] = lookup_reference,
+) -> Dict[str, Any]:
+    """Resolve every reference and return the serializable result dict.
+
+    ``lookup`` is injectable so tests pass a fake (no network). Production uses
+    :func:`lookup_reference`.
+    """
+    verdicts: List[CitationVerdict] = []
+    for ref in refs:
+        records, queried = lookup(ref)
+        verdicts.append(classify(ref, records, sources_queried=queried))
+    return {
+        "verdicts": [v.to_dict() for v in verdicts],
+        "summary": build_summary(verdicts),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Standalone CLI entrypoint
+# ---------------------------------------------------------------------------
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """CLI: read references JSON, write resolver verdicts JSON.
+
+    Usage: python resolve_references.py <references.json> <out.json>
+    The citation-check subagent invokes this; its output is authoritative for
+    the verified/metadata_mismatch/unresolved verdicts.
+    """
+    argv = argv if argv is not None else sys.argv[1:]
+    if len(argv) != 2:
+        print("usage: resolve_references.py <references.json> <out.json>", file=sys.stderr)
+        return 2
+    in_path, out_path = argv
+    with open(in_path, encoding="utf-8") as f:
+        refs = parse_references(f.read())
+    result = resolve_references(refs)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+    print(json.dumps(result["summary"]))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
