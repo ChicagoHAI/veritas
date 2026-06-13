@@ -1,8 +1,9 @@
 # Citation Check (reference/bibliographic verification)
 
 You verify whether this paper's **references actually exist and are described
-correctly** (title, authors, year, venue, identifiers). You do NOT judge whether
-a cited paper supports the claim it is cited for — that is out of scope here.
+correctly** (title, authors, year, venue, identifiers). You also judge, for the
+paper's main claims, whether the cited source supports what the paper attributes
+to it (Step 4).
 
 A deterministic verification script does the authoritative existence/metadata
 check against scholarly databases. Your job is to (1) extract the reference list
@@ -61,6 +62,16 @@ Run the script once over the whole list (it processes every reference). If the
 script fails (non-zero exit), writes no file, or writes invalid JSON, do NOT
 invent verdicts: treat every reference as `unresolved` and proceed to Step 3.
 
+For any reference the resolver marked `verified` but for which its `matched_record`
+has an empty `venue`, the resolver could not assess publication status. Do a quick
+web search for the work's canonical record (publisher page, DBLP, the venue site).
+If you find it was published at a real venue but the paper cites it as an arXiv
+preprint (or with no venue), record it as `metadata_mismatch` with a one-line
+`detail` ("published at <venue> <year> per <source>") and the source URL in
+`evidence` — quoting the venue line you saw. If you cannot confirm a published
+venue, leave the resolver's `verified` as-is. Never downgrade a confident
+`metadata_mismatch` the resolver already produced.
+
 ## Step 3 — Escalate ONLY the `unresolved` references
 
 For each reference the script marked `unresolved`, do a careful web search to
@@ -82,7 +93,45 @@ Aim to turn every `unresolved` reference into `inconclusive` or
 `likely_fabricated`. Leave a reference `unresolved` (and count it as such) only
 if you genuinely could not complete a web search for it.
 
-## Step 4 — Write the result
+## Step 4 — Check faithfulness for the main claims
+
+Faithfulness asks: does the cited source actually support what THIS paper attributes
+to it? Check this for the paper's **main claim-bearing citations** — the citations
+its core argument depends on (its central motivation, the provenance of its method,
+its key baselines/comparisons). Skip generic "see also" / background cites.
+
+{% if faithfulness_scope == "all" %}
+**Scope: ALL.** Check every citation where the paper attributes a specific factual
+claim to the source, not only the central ones.
+{% else %}
+**Scope: MAIN.** Check only the citations central to the paper's argument. When in
+doubt about whether a citation is central, skip it.
+{% endif %}
+
+For each selected (claim, citation) pair:
+1. Identify the exact claim the paper attributes to the source (quote the citing
+   sentence).
+2. Retrieve the cited source's text (open-access page, arXiv abstract/HTML, publisher
+   page). Read the relevant part.
+3. Decide the **content verdict** by comparing the source to the attributed claim:
+   - `supported` — the source substantively states the attributed claim.
+   - `partially_supported` — directionally correct but over-claimed: narrower scope,
+     weaker evidence type (e.g. the source shows correlation, the paper says it
+     "causes"), or dropped caveats.
+   - `contradicted` — the source states the opposite, reverses, or materially
+     misrepresents the claim.
+   - `not_mentioned` — the source is on-topic but contains no evidence bearing on
+     the claim.
+4. If you cannot retrieve the source, set `source_status` to `inaccessible` and give
+   no content verdict — do NOT guess. Otherwise `source_status` is `retrieved`.
+
+**Every `supported`, `partially_supported`, or `contradicted` verdict MUST include a
+verbatim `quote` from the cited source (<= 200 characters) that justifies it.** No
+quote, no such verdict. Tag how you obtained the source in `evidence_basis`
+(`provided | fetched_full | fetched_snippet | inaccessible`). When genuinely unsure
+between two content verdicts, prefer the less severe one and explain in `detail`.
+
+## Step 5 — Write the result
 
 Write `{{ citation_check_path }}` as a single JSON object:
 
@@ -90,34 +139,55 @@ Write `{{ citation_check_path }}` as a single JSON object:
 {
   "summary": {
     "total": 0, "verified": 0, "metadata_mismatch": 0,
-    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0
+    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+    "faithfulness": {
+      "checked": 0, "supported": 0, "partially_supported": 0,
+      "contradicted": 0, "not_mentioned": 0, "inaccessible": 0
+    },
+    "faithfulness_scope": "{{ faithfulness_scope }}"
   },
   "flagged": [
     {
       "key": "<ref key>",
       "raw": "<verbatim reference line>",
       "status": "metadata_mismatch | likely_fabricated | inconclusive",
-      "detail": "<one plain sentence: what is wrong, e.g. 'cited as arXiv preprint but published at ICLR 2024 per DBLP'>",
-      "matched_record": "<the resolver's matched_record object for this reference, copied verbatim from the resolver output; null for references you escalated by web search>",
-      "evidence": ["<source URL(s) you used for an escalated reference; use [] for resolver-set entries>"]
+      "detail": "<one plain sentence on what is wrong>",
+      "matched_record": "<the resolver's matched_record object, or null for web-escalated refs>",
+      "evidence_basis": "provided | fetched_full | fetched_snippet | inaccessible",
+      "evidence": ["<source URL(s); [] for resolver-set entries>"]
     }
   ],
-  "checked_support": false,
-  "notes": "Citation support (whether each source backs the attributed claim) is not checked."
+  "faithfulness": [
+    {
+      "key": "<ref key of the cited source>",
+      "claim": "<the claim the paper attributes to the source, quoted from the citing sentence>",
+      "source_status": "retrieved | inaccessible",
+      "verdict": "supported | partially_supported | contradicted | not_mentioned",
+      "quote": "<verbatim quote from the cited source (<= 200 chars); '' only if source_status is inaccessible>",
+      "evidence_basis": "provided | fetched_full | fetched_snippet | inaccessible",
+      "source": "<URL of the cited source you read>",
+      "detail": "<one plain sentence on the judgment>"
+    }
+  ],
+  "checked_support": true,
+  "notes": "<optional caveats>"
 }
 ```
 
 Rules:
-- `summary.total` is the number of references. The five status counts must sum
-  to `total`. `unresolved` in the summary should be 0 after escalation (each
-  unresolved reference becomes `likely_fabricated` or `inconclusive`); if you
-  could not escalate one, leave it `unresolved` and count it.
-- List in `flagged` every reference whose final status is NOT `verified`.
-  `verified` references are counted only, not listed.
+- The six integrity counts must sum to `total` (as before). List in `flagged` every
+  reference whose integrity status is NOT `verified`.
+- `faithfulness` lists every (claim, citation) pair you checked, including
+  `supported` ones. The `summary.faithfulness` counts must match: `checked` =
+  number of entries; the per-verdict counts sum over `retrieved` entries; `inaccessible`
+  counts entries with `source_status` = `inaccessible`.
+- Set `summary.faithfulness_scope` to `{{ faithfulness_scope }}`.
+- Keep `checked_support` exactly `true`. A `supported`/`partially_supported`/
+  `contradicted` entry without a `quote` is invalid — fix it or downgrade to
+  `not_mentioned`/`inaccessible`. Print the JSON to stdout as well.
 - Copy `matched_record` verbatim from the resolver output for that reference's
   key. For references you escalated by web search, set it to `null`.
 - `evidence` is `[]` for resolver-set entries (`metadata_mismatch`); for escalated
   entries it lists the URL(s) you used.
-- Keep `checked_support` exactly `false`. Print the JSON to stdout as well.
 
 Begin now.
