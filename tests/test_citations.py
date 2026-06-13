@@ -515,3 +515,43 @@ def test_load_citation_check_tolerates_markdown_fences(tmp_path):
     gen = ReportGenerator()
     data = gen._load_citation_check(out)
     assert data is not None and data["summary"]["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Rich-record selection: _preferred_record drives classify
+# ---------------------------------------------------------------------------
+
+def test_classify_prefers_rich_record_and_flags_preprint_drift():
+    # Same paper from two sources: a metadata-poor hit (openalex, empty venue)
+    # and a rich one (dblp, NeurIPS). Cited as an arXiv preprint. The richer
+    # record must win and the published-vs-preprint drift must be flagged.
+    ref = Reference(title="Attention Is All You Need", authors=["Vaswani", "Shazeer"],
+                    venue="arXiv preprint arXiv:1706.03762", arxiv_id="1706.03762")
+    recs = [
+        _rec(source="openalex", title="Attention Is All You Need",
+             authors=["Ashish Vaswani", "Noam Shazeer"], venue="", year=2025),
+        _rec(source="dblp", title="Attention is all you need",
+             authors=["Ashish Vaswani", "Noam Shazeer"], venue="NeurIPS", year=2017),
+    ]
+    v = classify(ref, recs, sources_queried=["openalex", "dblp"])
+    assert v.status == STATUS_METADATA_MISMATCH
+    assert v.matched_record.source == "dblp"
+    assert v.matched_record.venue == "NeurIPS"
+    assert any("venue" in m.lower() for m in v.mismatches)
+
+
+def test_classify_no_false_year_mismatch_from_metadata_poor_record():
+    # A junk record (openalex, wrong year 2025) and a correct one (dblp, 2017)
+    # for the same paper, citation correctly says 2017. The richer/correct record
+    # must win so no false year mismatch is raised.
+    ref = Reference(title="Attention Is All You Need", authors=["Vaswani", "Shazeer"],
+                    venue="NeurIPS", year=2017)
+    recs = [
+        _rec(source="openalex", title="Attention Is All You Need",
+             authors=["Ashish Vaswani", "Noam Shazeer"], venue="", year=2025),
+        _rec(source="dblp", title="Attention is all you need",
+             authors=["Ashish Vaswani", "Noam Shazeer"], venue="NeurIPS", year=2017),
+    ]
+    v = classify(ref, recs, sources_queried=["openalex", "dblp"])
+    assert v.status == STATUS_VERIFIED
+    assert v.matched_record.source == "dblp"

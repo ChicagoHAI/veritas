@@ -222,6 +222,12 @@ def best_match(ref: Reference, records: List[SourceRecord]) -> tuple[Optional[So
     return best, best_sim
 
 
+# Source preference for choosing which same-work record to compare against when
+# several sources return the same paper. Lower number = more preferred for the
+# fields that matter most here (venue/publication status).
+_SOURCE_PRIORITY = {"dblp": 0, "acl": 1, "crossref": 2, "openalex": 3, "s2": 4, "arxiv": 5}
+
+
 def _venue_looks_like_preprint(venue: str) -> bool:
     """True if the venue string names a known preprint server.
 
@@ -229,6 +235,22 @@ def _venue_looks_like_preprint(venue: str) -> bool:
     """
     v = (venue or "").lower()
     return any(k in v for k in ("arxiv", "biorxiv", "medrxiv", "ssrn", "preprint"))
+
+
+def _preferred_record(candidates: List[SourceRecord]) -> SourceRecord:
+    """Pick the richest record among same-work candidates to compare against.
+
+    Prefers a record with a real (non-preprint) venue, then a more authoritative
+    source, then one that carries a year, then more authors. This keeps a
+    metadata-poor record (e.g. an empty-venue hit) from hiding a
+    published-vs-preprint discrepancy that a richer source would reveal.
+    """
+    def _key(r: SourceRecord):
+        has_real_venue = bool(r.venue and not _venue_looks_like_preprint(r.venue))
+        source_rank = -_SOURCE_PRIORITY.get(r.source, 99)
+        return (has_real_venue, source_rank, bool(r.year), len(r.authors))
+
+    return max(candidates, key=_key)
 
 
 def classify(
@@ -249,12 +271,16 @@ def classify(
     (cited as a preprint, but the record shows a published venue) is one such
     mismatch.
     """
-    rec, sim = best_match(ref, records)
-    if rec is None or sim < TITLE_MATCH_THRESHOLD:
+    candidates = [
+        r for r in records
+        if title_similarity(ref.title, r.title) >= TITLE_MATCH_THRESHOLD
+    ]
+    if not candidates:
         return CitationVerdict(
             key=ref.key, title=ref.title, status=STATUS_UNRESOLVED,
             matched_record=None, mismatches=[], sources_queried=sources_queried,
         )
+    rec = _preferred_record(candidates)
 
     mismatches: List[str] = []
 
