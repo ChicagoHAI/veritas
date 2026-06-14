@@ -118,11 +118,9 @@ GOOD:
 
 This is a setup value, not a result.
 
-{% if claim_scope == "main" %}
 ## Scope
 
 Focus on the paper's **headline and supporting claims**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to a headline claim.
-{% endif %}
 
 ## Rules
 

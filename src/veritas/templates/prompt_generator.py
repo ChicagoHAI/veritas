@@ -69,7 +69,6 @@ class PromptGenerator:
         output_dir: Path,
         paper_path: Optional[Path] = None,
         readme_path: Optional[Path] = None,
-        claim_scope: str = "main",
     ) -> str:
         """Generate prompt for paper-claim extraction.
 
@@ -84,7 +83,6 @@ class PromptGenerator:
             "readme_path": str(readme_path) if readme_path else "",
             "has_paper": paper_path is not None,
             "has_repo": repo_path is not None,
-            "claim_scope": claim_scope,
         }
         return template.render(**context)
 
@@ -118,7 +116,6 @@ class PromptGenerator:
         claims: "PaperClaims",
         paper_path: Optional[Path] = None,
         mode: str = "full",
-        claim_scope: str = "main",
         data_path: Optional[Path] = None,
         manager_guidance: Optional[object] = None,
     ) -> str:
@@ -139,7 +136,6 @@ class PromptGenerator:
             "paper_path": str(paper_path) if paper_path else "",
             "claims": claims,
             "mode": mode,
-            "claim_scope": claim_scope,
             "has_data": data_path is not None,
             "manager_guidance": manager_guidance,
         }

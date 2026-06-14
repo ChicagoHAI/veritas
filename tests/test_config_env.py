@@ -124,18 +124,17 @@ def test_tier_weights_defaults_unchanged():
     # clean env to confirm the code defaults.
     import veritas.core.models.paper_claims as pc
     importlib.reload(pc)
-    assert pc.TIER_WEIGHTS == {"headline": 3.0, "supporting": 2.0, "setup": 1.0}
+    assert pc.TIER_WEIGHTS == {"headline": 3.0, "supporting": 2.0}
 
 
 def test_tier_weights_env_override(monkeypatch):
     monkeypatch.setattr(config_env, "_DOTENV_LOADED", True)
     monkeypatch.setenv("VERITAS_TIER_WEIGHT_HEADLINE", "5")
-    monkeypatch.setenv("VERITAS_TIER_WEIGHT_SETUP", "0.5")
+    monkeypatch.setenv("VERITAS_TIER_WEIGHT_SUPPORTING", "0.5")
     import veritas.core.models.paper_claims as pc
     importlib.reload(pc)
     assert pc.TIER_WEIGHTS["headline"] == 5.0
-    assert pc.TIER_WEIGHTS["setup"] == 0.5
-    assert pc.TIER_WEIGHTS["supporting"] == 2.0
+    assert pc.TIER_WEIGHTS["supporting"] == 0.5
     importlib.reload(pc)  # restore defaults for other tests
 
 
