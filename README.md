@@ -45,7 +45,7 @@ Input (Paper PDF and/or Repository)
 Veritas extracts each paper's own claims and checks them one at a time against
 the evidence the run produced. The **Replication Score** is a tier-weighted
 average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`,
-`not_attempted=0.0`) with tier weights `headline=3, supporting=2, setup=1`.
+`not_attempted=0.0`) with tier weights `headline=3, supporting=2`.
 `not_applicable` claims are excluded.
 
 The score is computed by code, not by a model. For numeric and table claims the
@@ -82,9 +82,10 @@ Score stays deterministic no matter how many attempts ran.
 ./veritas --paper p.pdf --repo ./myrepo     # full pipeline (the default)
 ./veritas full --paper p.pdf --repo ./myrepo  # same thing, named
 ./veritas replicate --repo ./myrepo         # replication only, for benchmarking
+./veritas replicate --paper p.pdf --repo ./myrepo --check-citations  # opt-in citation check
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
+./veritas check-citations ./myrepo/replicate  # standalone: citation-check a finished run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
-./veritas extract-plan paper.pdf            # plan-only sketch
 ./veritas shell                             # interactive container
 ./veritas setup                             # one-shot prereqs + image + login + .env
 ./veritas status                            # dashboard
@@ -111,6 +112,31 @@ Run `./veritas replicate --help` for the full option list.
 Other inputs: `--claims path.json` supplies hand-authored claims and skips
 extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
 so the agent uses local files instead of fetching from the network.
+
+### Citation check (opt-in)
+
+`--check-citations` (requires `--paper`) runs an advisory reference check after
+verification. It is advisory and never changes the Replication Score. Two parts:
+
+- **Reference integrity** — extracts the paper's reference list and confirms each
+  cited work exists and is described correctly (authors, venue, year,
+  identifiers) against free, keyless scholarly databases (Crossref, OpenAlex,
+  Semantic Scholar, DBLP, arXiv). Existence and metadata are decided by the
+  database records, not by an LLM, so the agent only escalates unresolved
+  references. It flags fabricated references and metadata errors such as a
+  published paper cited as an arXiv preprint. The method is adapted from the
+  [refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
+- **Faithfulness** — for the paper's main claims, reads each cited source and
+  judges whether it supports what the paper attributes to it
+  (`supported` / `partially_supported` / `contradicted` / `not_mentioned`), each
+  grounded in a verbatim quote. `--check-citations-faithfulness all` widens this
+  from the main claims to every claim-bearing citation.
+
+An independent audit pass re-checks flagged verdicts and can only soften a flag
+it cannot confirm (never escalate); the report shows the reconciled verdicts.
+There is no human-review step. Run it inline with `replicate --check-citations`,
+or standalone on a finished run via `check-citations <replicate-dir>` (which
+recovers the paper path from the run's saved config; `--paper` overrides).
 
 ## The report
 
@@ -182,9 +208,10 @@ exists) → the `VERITAS_*` env var → the built-in default. `.env.example` lis
 them all.
 
 - **Grading tolerances** — `VERITAS_GRADE_MATCH_REL` (0.05), `VERITAS_GRADE_PARTIAL_REL` (0.30), the σ bands, range overlap.
-- **Tier weights** — `VERITAS_TIER_WEIGHT_HEADLINE` (3), `_SUPPORTING` (2), `_SETUP` (1).
+- **Tier weights** — `VERITAS_TIER_WEIGHT_HEADLINE` (3), `_SUPPORTING` (2).
 - **Retry loop** — `VERITAS_MAX_ITERS` (1), `VERITAS_RESEARCH_MAX_CALLS` (2; `0` disables research).
 - **Per-phase timeouts** — `VERITAS_ANALYZE_TIMEOUT`, `VERITAS_REPLICATE_TIMEOUT`, `VERITAS_VERIFY_TIMEOUT`, and the rest (unset = no timeout).
+- **Citation check** — `VERITAS_CITATION_TIMEOUT`, `VERITAS_CITATION_FAITHFULNESS_SCOPE` (`main` / `all`); optional `SEMANTIC_SCHOLAR_API_KEY` only raises lookup rate limits (off by default).
 
 ## Claim types and tiers
 
@@ -202,7 +229,6 @@ Five shape-typed claim categories; each claim carries a tier that sets its weigh
 |------|--------|---------|
 | **headline** | 3 | The paper's central result (usually 1-3 per paper) |
 | **supporting** | 2 | Intermediate measurements, secondary figures |
-| **setup** | 1 | Borderline configuration assertions (rare) |
 
 ## Output structure
 
@@ -214,9 +240,11 @@ replicate/
 │                   replication.attempt-N/ (archived attempts; iterative runs only)
 ├── assess/         fix_severity.json
 ├── verify/         <claim_id>.json (per claim, with the grading rule), verdicts.json, replication_score.json
-├── evaluation/     contextual_evaluation.json  (the manager's notes; product runs only)
+├── evaluation/     contextual_evaluation.json (manager's notes; product runs only),
+│                   citation_check.json + citation_audit.json (when --check-citations ran)
 ├── report/         replication_report.{html,pdf,md}
 ├── prompts/        rendered prompts (debug)
+├── resource_usage.json   per-phase + total wall time, tokens, disk, est. cost
 └── .veritas/       pipeline_state.json (resume checkpoint),
                     workflow.{jsonl,md} (manager decisions; iterative runs only)
 ```
