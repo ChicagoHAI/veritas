@@ -46,7 +46,7 @@ do not rely on it — stay on methodology ground.
 ## Output
 
 Write **only** a single JSON object to
-`{{ output_dir }}/replication/research_literature.json` (no prose, no fence):
+`{{ out_path }}` (no prose, no fence):
 
 ```json
 {

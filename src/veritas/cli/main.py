@@ -348,7 +348,7 @@ def evaluate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    result = ReplicationRunner(config).evaluate_existing()
+    result = ReplicationRunner(config).run()
     if result.success:
         console.print("[bold green]Evaluation + report complete.[/bold green]")
         console.print(f"Report: {result.report_path}")

@@ -260,6 +260,7 @@ class PromptGenerator:
         self,
         template_name: str,
         output_dir: Path,
+        out_path: Path,
         need: str,
         rationale: str = "",
     ) -> str:
@@ -269,10 +270,15 @@ class PromptGenerator:
         (``research/resource_finder.md`` / ``research/literature_finder.md``).
         These are separate provider invocations with web-search/fetch access;
         they return findings + provenance, never the paper's reported values.
+
+        ``out_path`` is the exact file the sub-agent must write to; the template
+        must emit it verbatim rather than hardcoding a filename, since it carries
+        an index suffix for a second same-kind request.
         """
         template = self.env.get_template(template_name)
         context = {
             **self._runtime_paths_context(output_dir=output_dir),
+            "out_path": str(out_path),
             "need": need,
             "rationale": rationale,
         }
