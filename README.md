@@ -62,7 +62,6 @@ the comparator's judgment.
 ./veritas replicate --repo ./myrepo         # replication only, for benchmarking
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
-./veritas extract-plan paper.pdf            # plan-only sketch
 ./veritas shell                             # interactive container
 ./veritas setup                             # one-shot prereqs + image + login + .env
 ./veritas status                            # dashboard
