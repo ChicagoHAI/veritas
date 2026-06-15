@@ -77,6 +77,16 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 
 `--mode` is the input-mode selector. `--claims path/to/claims.json` is a universal override that skips automatic extraction. `--data path/to/data-dir` mounts a host directory read-only at `/workspace/data/`; the path is surfaced to codegen / plan / replicate prompts via `has_data` so the agent uses these files instead of procuring from the network.
 
+### Engagement depth and outputs (demo additions)
+
+`--depth` is a separate axis from `--mode` (which inputs) — it controls how hard veritas engages:
+
+- **`run`** (default) — the executing pipeline above (codegen/plan/replicate/assess/verify → Replication Score).
+- **`read`** — executes nothing. After the shared `analyze` phase, `ReplicationRunner._run_read_mode` runs a single `review` stage (`_static_review`, prompt `templates/review/static_review.md`) that reads the paper (and code/data when supplied) and writes `review/reproducibility_assessment.json` + `review/claim_assessments.json`. The headline is a qualitative **Reproducibility Assessment** (`core/models/review.py`: `ClaimAssessment`, `ReproducibilityAssessment`), not a Replication Score — nothing was run, so there is no produced value to grade. `read` requires `--paper`; `effective_repo_path` never points at codegen output in read mode. Rendered by `ReportGenerator.generate_review_report` (`templates/report/review_report.html.j2`).
+- **`--inline`** (either depth, needs `--paper`) — `core/inline.py` (`generate_inline_review`) emits anchored in-line comments: deterministic claim-anchored comments (from read-mode assessments or run-mode verdicts) plus an optional LLM reviewer pass (`templates/inline/reviewer_comments.md`). Comments are anchored to paper paragraphs by fuzzy quote matching (segmentation/anchoring ported from OpenAIReview, with attribution), then rendered into a self-contained viewer (`templates/inline/viewer.html.j2`) at `inline/inline_review.html`. Best-effort: failures never abort the run.
+
+Read/inline artifacts live in new output subdirs `review/` and `inline/`. `depth` is part of the config fingerprint (changing it invalidates the `review` stage). Tests: `tests/test_review.py`, `tests/test_inline.py`.
+
 ### Key modules (`src/veritas/core/`)
 
 - `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`).

@@ -89,6 +89,35 @@ Other inputs: `--claims path.json` supplies hand-authored claims and skips
 extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
 so the agent uses local files instead of fetching from the network.
 
+### Engagement depth (`--depth`)
+
+`--depth` controls how hard Veritas engages with the artifacts, independent of
+which inputs you give it:
+
+- `run` (default) — execute the (provided or generated) code and grade the
+  values it produces. This is the Replication Score path described above.
+- `read` — execute **nothing**. Veritas reads the paper (and the code/data when
+  supplied) and produces a qualitative **Reproducibility Assessment** instead of
+  a Replication Score: per-claim support level (`supported` / `partial` /
+  `unsupported` / `not_assessable`), a reproducibility-risk level, and an
+  overall read on specification, code coverage, and data availability. `read`
+  requires `--paper`.
+
+```bash
+./veritas --paper p.pdf --depth read                 # paper only, no code run
+./veritas --paper p.pdf --repo ./code --depth read   # read the code too, still no run
+./veritas --paper p.pdf --repo ./code                # depth run (full replication)
+```
+
+### In-line comments (`--inline`)
+
+`--inline` (works with either depth, needs `--paper`) additionally emits anchored
+in-line comments — each extracted claim plus its assessment/verdict, and
+LLM reviewer findings (reproducibility, technical, statistical), each anchored to
+where it appears in the paper. The output is a single self-contained
+side-by-side viewer at `<output>/inline/inline_review.html` (paper on the left,
+color-coded comments on the right; no server needed).
+
 ## The report
 
 Every run writes three files to `<output>/report/`:
