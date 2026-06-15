@@ -31,8 +31,8 @@
   .axes { margin-top: 8px; }
   .axis { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
   .axis .name { flex: 0 0 130px; font-size: 13px; color: var(--muted); }
-  .axis .track { flex: 1 1 auto; height: 10px; background: #eaeef2; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
-  .axis .fill { display: block; height: 100%; }
+  .axis .track { flex: 1 1 auto; display: flex; height: 12px; background: #eaeef2; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+  .axis .fill { display: block; align-self: stretch; min-height: 10px; }
   .axis .val { flex: 0 0 64px; text-align: right; font-size: 12px; font-weight: 600; }
 
   .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin: 6px 0 2px; }
