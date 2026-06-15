@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }} — Veritas in-line review</title>
+<style>
+  :root {
+    --bg:#f6f8fa; --surface:#fff; --ink:#1f2328; --muted:#57606a; --line:#d0d7de;
+    --major:#cf222e; --moderate:#9a6700; --minor:#57606a; --info:#0969da; --claim:#1a7f37;
+    --hl:#fff3bf;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+         color:var(--ink); background:var(--bg); font-size:15px; line-height:1.6; }
+  header { background:var(--surface); border-bottom:1px solid var(--line); padding:12px 20px;
+           position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  header .title { font-weight:700; font-size:15px; }
+  header .sub { color:var(--muted); font-size:12.5px; }
+  header .filters { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
+  .chipbtn { font-size:12px; border:1px solid var(--line); background:var(--surface); color:var(--muted);
+             border-radius:999px; padding:3px 10px; cursor:pointer; }
+  .chipbtn.off { opacity:.4; text-decoration:line-through; }
+  .layout { display:flex; gap:0; align-items:flex-start; }
+  .paper { flex:1 1 60%; max-width:60%; padding:22px 26px; }
+  .panel { flex:1 1 40%; max-width:40%; padding:18px 18px 60px; border-left:1px solid var(--line);
+           position:sticky; top:49px; max-height:calc(100vh - 49px); overflow:auto; }
+  .para { padding:6px 8px; border-radius:6px; margin:2px 0; white-space:pre-wrap; }
+  .para.has { cursor:pointer; }
+  .para.active { background:var(--hl); }
+  .para .marker { display:inline-block; font-size:10px; font-weight:700; color:#fff; border-radius:4px;
+                  padding:0 5px; margin-right:6px; vertical-align:1px; }
+  .cmt { border:1px solid var(--line); border-left-width:4px; border-radius:8px; background:var(--surface);
+         padding:9px 11px; margin:8px 0; cursor:pointer; }
+  .cmt:hover { box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .cmt.active { box-shadow:0 0 0 2px var(--info); }
+  .cmt .t { font-weight:600; font-size:13.5px; margin-bottom:3px; }
+  .cmt .meta { font-size:11px; color:var(--muted); margin-bottom:5px; }
+  .cmt .tag { display:inline-block; font-size:10px; font-weight:700; color:#fff; border-radius:4px;
+              padding:0 6px; margin-right:5px; }
+  .cmt .q { font-size:12px; color:var(--muted); font-style:italic; border-left:2px solid var(--line);
+            padding-left:7px; margin:5px 0; }
+  .cmt .e { font-size:13px; }
+  .sev-major{border-left-color:var(--major)} .sev-moderate{border-left-color:var(--moderate)}
+  .sev-minor{border-left-color:var(--minor)} .sev-info{border-left-color:var(--info)}
+  .bg-major{background:var(--major)} .bg-moderate{background:var(--moderate)}
+  .bg-minor{background:var(--minor)} .bg-info{background:var(--info)} .bg-claim{background:var(--claim)}
+  .unanchored { font-size:11.5px; color:var(--muted); margin-top:14px; }
+  @media (max-width:820px){ .layout{flex-direction:column} .paper,.panel{max-width:100%;}
+    .panel{position:static; border-left:none; border-top:1px solid var(--line); max-height:none;} }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="title">{{ page_title }}</div>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="filters" id="filters"></div>
+</header>
+<div class="layout">
+  <div class="paper" id="paper"></div>
+  <div class="panel" id="panel"></div>
+</div>
+
+<script id="data" type="application/json">{{ data_json }}</script>
+<script>
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const SEV_CLASS = { major:"sev-major", moderate:"sev-moderate", minor:"sev-minor", info:"sev-info" };
+const CAT_LABEL = { "claim-support":"claim", "reproducibility":"repro", "technical":"tech",
+                    "data-availability":"data", "statistical":"stat" };
+function catColor(cat){ return cat==="claim-support" ? "bg-claim" : "bg-info"; }
+
+document.getElementById("subtitle").textContent = DATA.subtitle || "";
+
+// Group comments by paragraph for markers.
+const byPara = {};
+DATA.comments.forEach((c,i)=>{ c._i=i;
+  if(c.paragraph_index!=null){ (byPara[c.paragraph_index]=byPara[c.paragraph_index]||[]).push(c); }});
+
+// Render paper paragraphs.
+const paperEl = document.getElementById("paper");
+DATA.paragraphs.forEach(p=>{
+  const div=document.createElement("div");
+  div.className="para"; div.id="para-"+p.index;
+  const cs=byPara[p.index]||[];
+  if(cs.length){ div.classList.add("has");
+    const worst = cs.some(c=>c.severity==="major")?"major":cs.some(c=>c.severity==="moderate")?"moderate":"minor";
+    const m=document.createElement("span"); m.className="marker "+("bg-"+worst); m.textContent=cs.length; div.appendChild(m);
+    div.onclick=()=>focusComment(cs[0]._i);
+  }
+  div.appendChild(document.createTextNode(p.text));
+  paperEl.appendChild(div);
+});
+if(!DATA.paragraphs.length){
+  paperEl.innerHTML='<p style="color:var(--muted)">Paper text could not be extracted for this view; comments are listed on the right.</p>';
+}
+
+// Render comment panel.
+const panelEl=document.getElementById("panel");
+let active=null;
+function render(filterCats){
+  panelEl.innerHTML="";
+  const anchored=[], unanchored=[];
+  DATA.comments.forEach(c=>{
+    if(filterCats && !filterCats.has(c.category)) return;
+    (c.paragraph_index!=null?anchored:unanchored).push(c);
+  });
+  anchored.sort((a,b)=>a.paragraph_index-b.paragraph_index);
+  anchored.concat(unanchored).forEach(c=>panelEl.appendChild(cmtEl(c)));
+  if(unanchored.length){
+    const n=document.createElement("div"); n.className="unanchored";
+    n.textContent=unanchored.length+" comment(s) could not be matched to a paper location (shown above, at the end).";
+    panelEl.appendChild(n);
+  }
+}
+function cmtEl(c){
+  const d=document.createElement("div");
+  d.className="cmt "+(SEV_CLASS[c.severity]||"sev-moderate"); d.id="cmt-"+c._i;
+  const cat=CAT_LABEL[c.category]||c.category;
+  d.innerHTML=`<div class="t">${esc(c.title)}</div>
+    <div class="meta"><span class="tag ${catColor(c.category)}">${cat}</span>
+      <span>${c.severity}</span>${c.paragraph_index!=null?` · ¶${c.paragraph_index}`:" · unanchored"}</div>
+    ${c.quote?`<div class="q">“${esc(c.quote)}”</div>`:""}
+    <div class="e">${esc(c.explanation).replace(/\n/g,"<br>")}</div>`;
+  d.onclick=()=>focusComment(c._i);
+  return d;
+}
+function focusComment(i){
+  const c=DATA.comments[i];
+  document.querySelectorAll(".cmt.active").forEach(e=>e.classList.remove("active"));
+  document.querySelectorAll(".para.active").forEach(e=>e.classList.remove("active"));
+  const ce=document.getElementById("cmt-"+i); if(ce){ce.classList.add("active"); ce.scrollIntoView({block:"nearest"});}
+  if(c.paragraph_index!=null){ const pe=document.getElementById("para-"+c.paragraph_index);
+    if(pe){pe.classList.add("active"); pe.scrollIntoView({behavior:"smooth",block:"center"});}}
+}
+function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// Category filters.
+const cats=[...new Set(DATA.comments.map(c=>c.category))];
+const active_cats=new Set(cats);
+const fEl=document.getElementById("filters");
+cats.forEach(cat=>{
+  const b=document.createElement("button"); b.className="chipbtn";
+  const n=DATA.comments.filter(c=>c.category===cat).length;
+  b.textContent=(CAT_LABEL[cat]||cat)+" "+n;
+  b.onclick=()=>{ if(active_cats.has(cat)){active_cats.delete(cat);b.classList.add("off");}
+    else{active_cats.add(cat);b.classList.remove("off");} render(active_cats); };
+  fEl.appendChild(b);
+});
+render(active_cats);
+</script>
+</body>
+</html>

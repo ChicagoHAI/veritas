@@ -270,6 +270,16 @@ class ReplicationRunner:
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
             )
+
+            # Optional in-line comments + viewer (anchored into the paper text).
+            if self.config.emit_inline:
+                try:
+                    self._generate_inline_comments(
+                        claims, assessments=None, verdicts=verdicts,
+                    )
+                except Exception as e:  # presentation extra; never fatal
+                    print(f"  Warning: inline-comment generation failed: {e}")
+
             state.mark_completed()
 
             return RunResult(

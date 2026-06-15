@@ -220,6 +220,29 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_inline_reviewer_prompt(
+        self,
+        paper_path: Path,
+        output_dir: Path,
+        repo_path: Optional[Path] = None,
+        depth: str = "read",
+    ) -> str:
+        """Generate the in-line reviewer-comment prompt (OpenAIReview-style).
+
+        The reviewer reads the paper (and code, when supplied) and emits a JSON
+        array of technical / reproducibility comments, each carrying a verbatim
+        quote so it can be anchored to a paper paragraph. ``depth`` tunes the
+        framing (read-only vs. post-replication).
+        """
+        template = self.env.get_template("inline/reviewer_comments.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir, repo_path=repo_path),
+            "paper_path": str(Path(paper_path).absolute()),
+            "has_repo": repo_path is not None,
+            "depth": depth,
+        }
+        return template.render(**context)
+
     def generate_fix_severity_prompt(
         self,
         fixes: List,
