@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reproducibility Assessment{% if paper_title %} — {{ paper_title }}{% endif %}</title>
+<style>
+  :root {
+    --good: #1a7f37; --partial: #9a6700; --poor: #cf222e;
+    --na: #57606a; --bg: #f6f8fa; --card: #ffffff; --ink: #1f2328;
+    --muted: #57606a; --line: #d0d7de; --accent: #0969da;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink); background: var(--bg); margin: 0; line-height: 1.55; font-size: 15px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 22px 60px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  h2 { font-size: 17px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 14px; margin: 16px 0 4px; }
+  p { margin: 6px 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-size: 12.5px; }
+  ul { margin: 6px 0; padding-left: 20px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-top: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .badge { display: inline-block; font-weight: 600; font-size: 12px; letter-spacing: .02em; padding: 3px 10px; border-radius: 999px; color: #fff; }
+  .bottomline { font-size: 16px; font-weight: 500; margin: 10px 0; }
+
+  .axes { margin-top: 8px; }
+  .axis { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+  .axis .name { flex: 0 0 130px; font-size: 13px; color: var(--muted); }
+  .axis .track { flex: 1 1 auto; height: 10px; background: #eaeef2; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+  .axis .fill { display: block; height: 100%; }
+  .axis .val { flex: 0 0 64px; text-align: right; font-size: 12px; font-weight: 600; }
+
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin: 6px 0 2px; }
+  .bar > span { display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; color: #fff; }
+  .issues { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  footer { margin-top: 34px; color: var(--muted); font-size: 12px; text-align: center; }
+  @media print { body { background: #fff; } .card { box-shadow: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Reproducibility Assessment</h1>
+  <div class="sub">
+    {% if paper_title %}{{ paper_title }} · {% endif %}Read-only review (no code executed) · Generated {{ generated }}
+  </div>
+
+  <!-- HEADLINE CARD -->
+  <div class="card">
+    <span class="badge" style="background: {{ risk_color }}">Reproducibility risk: {{ overall_risk | upper }}</span>
+    {% if summary %}<div class="bottomline">{{ summary }}</div>{% endif %}
+
+    <div class="axes">
+      {% for ax in axes %}
+      <div class="axis">
+        <span class="name">{{ ax.label }}</span>
+        <span class="track"><span class="fill" style="width: {{ ax.pct }}%; background: {{ ax.color }}"></span></span>
+        <span class="val" style="color: {{ ax.color }}">{{ ax.bucket }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h3 style="margin-top:16px">Claim support at a glance ({{ total_claims }} claims)</h3>
+    <div class="bar" aria-hidden="true">
+      {% if seg_supported %}<span style="width: {{ seg_supported }}%; background: var(--good)"></span>{% endif %}
+      {% if seg_partial %}<span style="width: {{ seg_partial }}%; background: var(--partial)"></span>{% endif %}
+      {% if seg_unsupported %}<span style="width: {{ seg_unsupported }}%; background: var(--poor)"></span>{% endif %}
+      {% if seg_not_assessable %}<span style="width: {{ seg_not_assessable }}%; background: var(--na)"></span>{% endif %}
+    </div>
+    <div class="legend">
+      <span><i style="background: var(--good)"></i>supported {{ n_supported }}</span>
+      <span><i style="background: var(--partial)"></i>partial {{ n_partial }}</span>
+      <span><i style="background: var(--poor)"></i>unsupported {{ n_unsupported }}</span>
+      <span><i style="background: var(--na)"></i>not assessable {{ n_not_assessable }}</span>
+    </div>
+  </div>
+
+  {% if strengths %}
+  <h2>Strengths</h2>
+  <ul>{% for s in strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if weaknesses %}
+  <h2>Obstacles to reproduction</h2>
+  <ul>{% for w in weaknesses %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if recommendation %}
+  <h2>Recommendation</h2>
+  <p>{{ recommendation }}</p>
+  {% endif %}
+
+  <h2>Per-claim assessment</h2>
+  <table>
+    <thead>
+      <tr><th>Claim</th><th>Tier</th><th>Support</th><th>Risk</th><th>Assessment</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><b>{{ r.id }}</b><br><span class="sub">{{ r.description }}</span></td>
+        <td>{{ r.tier }}</td>
+        <td><span class="pill" style="background: {{ r.color }}">{{ r.level_label }}</span></td>
+        <td>{{ r.risk }}</td>
+        <td>
+          {{ r.rationale }}
+          {% if r.code_location %}<div class="issues">Computed at: <code>{{ r.code_location }}</code></div>{% endif %}
+          {% if r.issues %}<div class="issues">Issues: {{ r.issues | join("; ") }}</div>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <footer>Generated by Veritas · read-only reproducibility review · no code was executed</footer>
+</div>
+</body>
+</html>

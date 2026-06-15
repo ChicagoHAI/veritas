@@ -14,7 +14,9 @@ from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
+from veritas.core.models.review import ClaimAssessment, ReproducibilityAssessment
 from veritas.core.paper_claims import parse_paper_claims_response
+from veritas.core.review import parse_review_response
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     parse_replication_plan_response,
@@ -109,14 +111,15 @@ PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
 # rules can be added later (e.g. a knob that only affects the verify phase).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
     # Config
-    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'depth':         ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
+    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify', 'review'),
 }
 
 
@@ -180,6 +183,13 @@ class ReplicationRunner:
                 except Exception:
                     state.complete_stage('analyze', success=False)
                     raise
+
+            # Read mode (--depth read): no codegen / plan / replicate / verify.
+            # A single static-review pass reads the paper (and code/data, when
+            # supplied) and produces the Reproducibility Assessment; then we
+            # report. Nothing is executed.
+            if self.config.depth == "read":
+                return self._run_read_mode(state, claims)
 
             # codegen (paper-only mode only)
             if self.config.mode == "paper-only":
@@ -454,6 +464,190 @@ class ReplicationRunner:
             f"({n_h} headline, {n_s} supporting)"
         )
         return claims
+
+    # -- Read mode: static review (no execution) ---------------------------
+
+    def _run_read_mode(
+        self, state: PipelineState, claims: PaperClaims
+    ) -> RunResult:
+        """Read-mode tail: static review -> (optional inline) -> review report.
+
+        Runs after the shared analyze phase when ``--depth read`` is set. No
+        code is generated or executed; the single review pass judges each claim's
+        reproducibility from reading the paper (and code/data, when supplied).
+        """
+        if state.is_stage_completed('review'):
+            print("[OK] review: skipped (already completed)")
+            aggregate, assessments = self._load_review_artifacts()
+        else:
+            state.start_stage('review')
+            try:
+                aggregate, assessments = self._static_review(claims)
+                state.complete_stage('review', success=True)
+            except Exception:
+                state.complete_stage('review', success=False)
+                raise
+
+        # Optional in-line comments + viewer (anchored into the paper text).
+        if self.config.emit_inline:
+            try:
+                self._generate_inline_comments(
+                    claims, assessments=assessments, verdicts=None,
+                )
+            except Exception as e:  # inline is a presentation extra; never fatal
+                print(f"  Warning: inline-comment generation failed: {e}")
+
+        report_path, pdf_path = self._review_report(claims, aggregate, assessments)
+        state.mark_completed()
+        return RunResult(
+            success=True, report_path=report_path, pdf_path=pdf_path,
+        )
+
+    def _static_review(
+        self, claims: PaperClaims
+    ) -> Tuple[ReproducibilityAssessment, List[ClaimAssessment]]:
+        """Single read-only review pass: judge each claim's reproducibility.
+
+        The agent reads the paper (and code/data, when present) but executes
+        nothing. It writes a combined assessment JSON; we parse it, recompute the
+        support breakdown deterministically, and persist the split artifacts.
+        """
+        print("Running static reproducibility review (read-only; no execution)...")
+        self.config.review_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt = self.prompt_generator.generate_static_review_prompt(
+            paper_path=self.config.paper_path,
+            output_dir=self.config.output_dir,
+            repo_path=self.config.repo_path if self.config.has_repo else None,
+            data_path=self.config.data_path if self.config.has_data else None,
+        )
+        prompt_path = self.config.prompts_dir / "static_review_prompt.txt"
+        prompt_path.write_text(prompt, encoding='utf-8')
+
+        output_path = self.config.reproducibility_assessment_path
+        log_path = self.config.review_transcript_path
+
+        # Read mode runs no paper code, so API keys stay stripped (default). The
+        # working dir is the output tree (the read-only repo must not be written).
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=log_path,
+            timeout=self.config.review_timeout,
+        )
+        if not success:
+            raise RuntimeError(
+                f"Static review failed: provider invocation did not succeed "
+                f"(transcript: {log_path})"
+            )
+        if not output_path.exists():
+            raise RuntimeError(
+                f"Static review failed: agent did not write {output_path}"
+            )
+
+        response_text = output_path.read_text(encoding='utf-8').strip()
+        if not response_text:
+            raise RuntimeError(f"Static review failed: {output_path} is empty")
+
+        try:
+            aggregate, assessments = parse_review_response(response_text)
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: could not parse static-review output: {e}")
+            print("  Retrying with repair prompt...")
+            repaired = self._repair_json_response(
+                original_prompt=prompt,
+                broken_output=response_text,
+                output_path=output_path,
+                log_path=log_path,
+                parser=lambda t: parse_review_response(t)[0],
+                timeout=self.config.review_timeout,
+                working_dir=self.config.output_dir,
+            )
+            if repaired is None:
+                raise RuntimeError(
+                    "Static review failed: could not parse output even after repair"
+                )
+            aggregate, assessments = parse_review_response(
+                output_path.read_text(encoding='utf-8')
+            )
+
+        # Persist the cleaned split artifacts (aggregate sans claims + the list).
+        output_path.write_text(
+            json.dumps(aggregate.to_dict(), indent=2), encoding='utf-8'
+        )
+        self.config.claim_assessments_path.write_text(
+            json.dumps([a.to_dict() for a in assessments], indent=2),
+            encoding='utf-8',
+        )
+
+        n = len(assessments)
+        br = aggregate.support_breakdown
+        print(
+            f"  Assessed {n} claim(s): "
+            f"{br.get('supported', 0)} supported, {br.get('partial', 0)} partial, "
+            f"{br.get('unsupported', 0)} unsupported, "
+            f"{br.get('not_assessable', 0)} not-assessable. "
+            f"Overall risk: {aggregate.overall_risk}."
+        )
+        return aggregate, assessments
+
+    def _load_review_artifacts(
+        self,
+    ) -> Tuple[ReproducibilityAssessment, List[ClaimAssessment]]:
+        """Load persisted review artifacts (used when the review stage resumes)."""
+        agg_path = self.config.reproducibility_assessment_path
+        claims_path = self.config.claim_assessments_path
+        if not agg_path.exists():
+            raise RuntimeError(f"reproducibility_assessment.json missing at {agg_path}")
+        aggregate = ReproducibilityAssessment.from_dict(
+            json.loads(agg_path.read_text(encoding='utf-8'))
+        )
+        assessments: List[ClaimAssessment] = []
+        if claims_path.exists():
+            assessments = [
+                ClaimAssessment.from_dict(d)
+                for d in json.loads(claims_path.read_text(encoding='utf-8'))
+            ]
+        return aggregate, assessments
+
+    def _review_report(
+        self,
+        claims: PaperClaims,
+        aggregate: ReproducibilityAssessment,
+        assessments: List[ClaimAssessment],
+    ):
+        """Render the read-mode Reproducibility Assessment report."""
+        return self.report_generator.generate_review_report(
+            claims=claims,
+            aggregate=aggregate,
+            assessments=assessments,
+            config=self.config,
+            output_dir=self.config.output_dir,
+            generate_pdf=self.config.generate_pdf,
+        )
+
+    def _generate_inline_comments(
+        self,
+        claims: PaperClaims,
+        assessments: Optional[List[ClaimAssessment]] = None,
+        verdicts: Optional[List[ClaimVerdict]] = None,
+    ) -> None:
+        """Generate anchored in-line comments + the side-by-side viewer.
+
+        Implemented in the inline-comment subsystem (Part B). Defined here as the
+        single call site shared by read mode and run mode; a no-op stub until the
+        subsystem lands so read mode works end-to-end first.
+        """
+        from veritas.core.inline import generate_inline_review
+
+        generate_inline_review(
+            config=self.config,
+            claims=claims,
+            assessments=assessments,
+            verdicts=verdicts,
+            prompt_generator=self.prompt_generator,
+            invoke_provider=self._invoke_provider,
+        )
 
     # -- Phase 1.5: Codegen (paper-only mode) ------------------------------
 
@@ -1748,6 +1942,7 @@ class ReplicationRunner:
         return {
             'provider': self.config.provider,
             'mode': self.config.mode,
+            'depth': self.config.depth,
             'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
         }
 

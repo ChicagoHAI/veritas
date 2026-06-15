@@ -167,6 +167,177 @@ class ReportGenerator:
 
         return md_path, pdf_path
 
+    # -- Read-mode (Reproducibility Assessment) report ----------------------
+
+    def generate_review_report(
+        self,
+        claims: PaperClaims,
+        aggregate,
+        assessments: List,
+        config: Config,
+        output_dir: Path,
+        generate_pdf: bool = True,
+    ) -> Tuple[Optional[Path], Optional[Path]]:
+        """Render the read-mode Reproducibility Assessment report (md + html + pdf).
+
+        ``aggregate`` is a ``ReproducibilityAssessment`` and ``assessments`` a
+        list of ``ClaimAssessment``. No Replication Score is shown — nothing was
+        executed; the headline is the qualitative reproducibility assessment.
+        """
+        ctx = self._build_review_html_context(claims, aggregate, assessments)
+        html_content = self._render_review_html(ctx)
+        md_content = self._render_review_md(claims, aggregate, assessments)
+
+        report_dir = config.report_dir
+        report_dir.mkdir(parents=True, exist_ok=True)
+        md_path = report_dir / REPORT_MD_FILE
+        md_path.write_text(md_content, encoding='utf-8')
+        (report_dir / REPORT_HTML_FILE).write_text(html_content, encoding='utf-8')
+
+        pdf_path: Optional[Path] = None
+        if generate_pdf:
+            pdf_path = report_dir / REPORT_PDF_FILE
+            if not self._generate_pdf_from_html(html_content, pdf_path):
+                self._generate_pdf(md_content, pdf_path, report_dir)
+
+        return md_path, pdf_path
+
+    # Qualitative-axis fill fraction + color for the headline bars.
+    _BUCKET_PCT = {"good": 90, "partial": 55, "poor": 20, "unknown": 0}
+    _BUCKET_COLOR = {"good": "#1a7f37", "partial": "#9a6700", "poor": "#cf222e", "unknown": "#57606a"}
+    _RISK_COLOR = {"low": "#1a7f37", "medium": "#9a6700", "high": "#cf222e"}
+    _SUPPORT_COLOR = {
+        "supported": "#1a7f37", "partial": "#9a6700",
+        "unsupported": "#cf222e", "not_assessable": "#57606a",
+    }
+    _SUPPORT_DISPLAY = {
+        "supported": "supported", "partial": "partial",
+        "unsupported": "unsupported", "not_assessable": "not assessable",
+    }
+
+    def _build_review_html_context(self, claims, aggregate, assessments) -> dict:
+        by_id = {a.claim_id: a for a in assessments}
+        claim_list = claims.claims if claims is not None else []
+        total = aggregate.total_claims or len(claim_list)
+
+        axes = []
+        for label, bucket in (
+            ("Specification", aggregate.specification),
+            ("Code coverage", aggregate.code_coverage),
+            ("Data availability", aggregate.data_availability),
+        ):
+            axes.append({
+                "label": label, "bucket": bucket,
+                "pct": self._BUCKET_PCT.get(bucket, 0),
+                "color": self._BUCKET_COLOR.get(bucket, "#57606a"),
+            })
+
+        br = aggregate.support_breakdown or {}
+
+        def seg(level: str) -> float:
+            return round(100 * br.get(level, 0) / total, 2) if total else 0
+
+        rows = []
+        for c in claim_list:
+            a = by_id.get(c.id)
+            level = a.support_level if a is not None else "not_assessable"
+            rat = ((a.rationale if a is not None else "") or "(no assessment produced)").replace("\n", " ")
+            if len(rat) > 280:
+                rat = rat[:277] + "..."
+            rows.append({
+                "id": c.id, "tier": c.tier, "type": c.type,
+                "description": c.description,
+                "level": level,
+                "level_label": self._SUPPORT_DISPLAY.get(level, level),
+                "color": self._SUPPORT_COLOR.get(level, "#57606a"),
+                "risk": (a.reproducibility_risk if a is not None else "—"),
+                "code_location": (a.code_location if a is not None else None),
+                "issues": (a.issues if a is not None else []),
+                "rationale": rat,
+            })
+
+        return {
+            "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "paper_title": (claims.paper.get("title") if claims and claims.paper else None),
+            "overall_risk": aggregate.overall_risk,
+            "risk_color": self._RISK_COLOR.get(aggregate.overall_risk, "#57606a"),
+            "summary": aggregate.summary,
+            "recommendation": aggregate.recommendation,
+            "strengths": aggregate.strengths,
+            "weaknesses": aggregate.weaknesses,
+            "axes": axes,
+            "total_claims": total,
+            "n_supported": br.get("supported", 0),
+            "n_partial": br.get("partial", 0),
+            "n_unsupported": br.get("unsupported", 0),
+            "n_not_assessable": br.get("not_assessable", 0),
+            "seg_supported": seg("supported"), "seg_partial": seg("partial"),
+            "seg_unsupported": seg("unsupported"), "seg_not_assessable": seg("not_assessable"),
+            "rows": rows,
+        }
+
+    def _render_review_html(self, ctx: dict) -> str:
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(str(self._templates_dir())),
+            autoescape=True,
+        )
+        return env.get_template("report/review_report.html.j2").render(**ctx)
+
+    def _render_review_md(self, claims, aggregate, assessments) -> str:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = claims.paper.get("title") if (claims and claims.paper) else None
+        by_id = {a.claim_id: a for a in assessments}
+        out = "# Reproducibility Assessment (read-only)\n\n"
+        if title:
+            out += f"**Paper:** {title}\n\n"
+        out += f"**Generated:** {now}\n\n"
+        out += (
+            "*No code was executed. This is a reading-based assessment of how "
+            "reproducible the paper's claims are, from the paper"
+            f"{' and the provided code/data' if any(a.code_location for a in assessments) else ''}.*\n\n---\n\n"
+        )
+        out += "## Bottom line\n\n"
+        out += f"**Overall reproducibility risk: {aggregate.overall_risk.upper()}**\n\n"
+        if aggregate.summary:
+            out += f"{aggregate.summary}\n\n"
+        out += (
+            f"- Specification: **{aggregate.specification}**\n"
+            f"- Code coverage: **{aggregate.code_coverage}**\n"
+            f"- Data availability: **{aggregate.data_availability}**\n\n"
+        )
+        br = aggregate.support_breakdown or {}
+        out += (
+            f"Claims assessed: **{aggregate.total_claims}** "
+            f"({br.get('supported', 0)} supported, {br.get('partial', 0)} partial, "
+            f"{br.get('unsupported', 0)} unsupported, "
+            f"{br.get('not_assessable', 0)} not assessable)\n\n"
+        )
+        if aggregate.strengths:
+            out += "## Strengths\n\n" + "".join(f"- {s}\n" for s in aggregate.strengths) + "\n"
+        if aggregate.weaknesses:
+            out += "## Obstacles to reproduction\n\n" + "".join(f"- {w}\n" for w in aggregate.weaknesses) + "\n"
+        if aggregate.recommendation:
+            out += f"## Recommendation\n\n{aggregate.recommendation}\n\n"
+
+        out += "## Per-claim assessment\n\n"
+        out += "| Claim | Tier | Support | Risk | Assessment |\n"
+        out += "|---|---|---|---|---|\n"
+        for c in (claims.claims if claims else []):
+            a = by_id.get(c.id)
+            level = a.support_level if a else "not_assessable"
+            risk = a.reproducibility_risk if a else "—"
+            rat = ((a.rationale if a else "") or "").replace("\n", " ").replace("|", "\\|")
+            if len(rat) > 220:
+                rat = rat[:217] + "..."
+            if a and a.code_location:
+                rat += f" (computed at `{a.code_location}`)"
+            if a and a.issues:
+                rat += " Issues: " + "; ".join(a.issues).replace("|", "\\|")
+            desc = c.description.replace("\n", " ").replace("|", "\\|")
+            out += f"| {c.id}: {desc} | {c.tier} | {level} | {risk} | {rat} |\n"
+        out += "\n---\n\n*Report generated by Veritas (read-only review)*\n"
+        return out
+
     # -- Loading helpers (used by the standalone ``generate``) --------------
 
     def _load_claims(self, replicate_dir: Path) -> Optional[PaperClaims]:

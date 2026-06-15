@@ -195,6 +195,31 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    def generate_static_review_prompt(
+        self,
+        paper_path: Path,
+        output_dir: Path,
+        repo_path: Optional[Path] = None,
+        data_path: Optional[Path] = None,
+    ) -> str:
+        """Generate the read-mode (``--depth read``) static-review prompt.
+
+        The reviewer reads the paper (and, when supplied, the code/data) but
+        executes nothing, and writes a combined Reproducibility Assessment +
+        per-claim assessments JSON. ``repo_path`` is the user's repo when one was
+        provided (full read mode) or None (paper-only read mode).
+        """
+        template = self.env.get_template("review/static_review.md")
+        context = {
+            **self._runtime_paths_context(
+                output_dir=output_dir, repo_path=repo_path, data_path=data_path
+            ),
+            "paper_path": str(Path(paper_path).absolute()),
+            "has_repo": repo_path is not None,
+            "has_data": data_path is not None,
+        }
+        return template.render(**context)
+
     def generate_fix_severity_prompt(
         self,
         fixes: List,

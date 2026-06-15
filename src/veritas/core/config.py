@@ -15,6 +15,15 @@ InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
 
+# Engagement depth: how hard veritas engages with the artifacts.
+#   "run"  — execute the (provided or generated) code and grade produced values.
+#            This is the default and covers the original three input modes.
+#   "read" — do NOT execute anything. Read the paper (and, when supplied, the
+#            code/data) and produce a reading-based Reproducibility Assessment.
+#            Backs the demo's "paper only" and "paper + resources (no run)" modes.
+DepthMode = Literal["read", "run"]
+VALID_DEPTHS = ["read", "run"]
+
 
 # Output directory structure — each phase writes into its own subdir.
 ANALYZE_SUBDIR = "analyze"
@@ -29,12 +38,22 @@ VERIFY_SUBDIR = "verify"
 # Distinct from the benchmark harness's ``evaluate/`` scoring dir.
 EVALUATION_SUBDIR = "evaluation"
 
+# Read-mode (``--depth read``) static-review phase output. Holds the per-claim
+# reading-based assessments and the aggregate Reproducibility Assessment.
+REVIEW_SUBDIR = "review"
+
+# Inline-comment subsystem output (both depths). Holds the anchored comments
+# JSON and the self-contained side-by-side viewer.
+INLINE_SUBDIR = "inline"
+
 OUTPUT_SUBDIRS = (
     ANALYZE_SUBDIR,
     REPLICATION_SUBDIR,
     ASSESS_SUBDIR,
     VERIFY_SUBDIR,
     EVALUATION_SUBDIR,
+    REVIEW_SUBDIR,
+    INLINE_SUBDIR,
     REPORT_SUBDIR,
     PROMPTS_SUBDIR,
 )
@@ -68,6 +87,18 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 # Contextual-evaluation phase filenames.
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
+
+# Read-mode static-review phase filenames. The agent writes per-claim
+# assessments and the aggregate; the transcript captures its streamed output.
+CLAIM_ASSESSMENTS_FILE = "claim_assessments.json"
+REPRODUCIBILITY_ASSESSMENT_FILE = "reproducibility_assessment.json"
+REVIEW_TRANSCRIPT_FILE = "static_review_transcript.jsonl"
+
+# Inline-comment subsystem filenames.
+INLINE_COMMENTS_FILE = "inline_comments.json"
+INLINE_VIEWER_FILE = "inline_review.html"
+INLINE_TRANSCRIPT_FILE = "inline_comments_transcript.jsonl"
+PAPER_TEXT_FILE = "paper_text.json"  # parsed paper paragraphs (for anchoring)
 
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
@@ -104,8 +135,15 @@ class Config:
     # Run settings
     provider: str = "claude"
     mode: str = "auto"
+    depth: str = "run"
     claims_path: Optional[Path] = None
     data_path: Optional[Path] = None
+
+    # Output selection. ``inline`` additionally emits the anchored in-line
+    # comments + side-by-side viewer; the referee-style report is always
+    # produced. Inline requires a paper (its comments anchor into paper text),
+    # so it is silently skipped in repo-only runs.
+    emit_inline: bool = False
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
@@ -120,6 +158,7 @@ class Config:
     replicate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
     evaluate_timeout: Optional[int] = None
+    review_timeout: Optional[int] = None  # read-mode static-review + inline passes
 
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
@@ -143,6 +182,7 @@ class Config:
         "replicate_timeout": "VERITAS_REPLICATE_TIMEOUT",
         "verify_timeout": "VERITAS_VERIFY_TIMEOUT",
         "evaluate_timeout": "VERITAS_EVALUATE_TIMEOUT",
+        "review_timeout": "VERITAS_REVIEW_TIMEOUT",
     }
 
     def __post_init__(self):
@@ -182,6 +222,29 @@ class Config:
 
         # Resolve input mode (auto-detect from inputs, or validate explicit mode)
         self.mode = self._resolve_mode(self.mode)
+
+        # Validate / constrain engagement depth.
+        if self.depth not in VALID_DEPTHS:
+            raise ValueError(
+                f"Unknown depth: {self.depth}. Valid options: {VALID_DEPTHS}"
+            )
+        if self.depth == "read":
+            # Read mode is a paper-centric review: the assessment narrates the
+            # paper's claims and (in the demo) anchors in-line comments into the
+            # paper text. A repo with no paper has nothing to read against.
+            if not self.has_paper:
+                raise ValueError(
+                    "--depth read requires --paper (read mode reviews the paper; "
+                    "repo-only runs must use --depth run)"
+                )
+            # paper-only and full are the meaningful read-mode shapes; repo-only
+            # was already rejected above. No code is generated or executed.
+        if self.emit_inline and not self.has_paper:
+            print(
+                "WARNING: --inline requested but no --paper provided; "
+                "in-line comments need paper text to anchor to. Skipping inline."
+            )
+            self.emit_inline = False
 
         # Validate --data: must be a directory if provided. Empty directories
         # warn rather than fail so smoke-test runs aren't punished. The
@@ -275,6 +338,10 @@ class Config:
         is the codegen output (replication_dir/codebase). In other modes it is the
         user-supplied repo. Returns None when neither is available (rare; should
         only occur if called before codegen runs in paper-only mode)."""
+        # Read mode never generates code: there is no codegen codebase to point
+        # at, so the effective codebase is simply the user's repo (or None).
+        if self.depth == "read":
+            return self.repo_path
         if self.mode == "paper-only":
             codebase = self.replication_dir / "codebase"
             return codebase if codebase.exists() else None
@@ -301,6 +368,14 @@ class Config:
     @property
     def evaluation_dir(self) -> Path:
         return self.output_dir / EVALUATION_SUBDIR
+
+    @property
+    def review_dir(self) -> Path:
+        return self.output_dir / REVIEW_SUBDIR
+
+    @property
+    def inline_dir(self) -> Path:
+        return self.output_dir / INLINE_SUBDIR
 
     @property
     def report_dir(self) -> Path:
@@ -351,6 +426,38 @@ class Config:
     @property
     def diligence_signals_path(self) -> Path:
         return self.replication_dir / DILIGENCE_SIGNALS_FILE
+
+    # -- Read-mode (static review) artifacts --------------------------------
+
+    @property
+    def claim_assessments_path(self) -> Path:
+        return self.review_dir / CLAIM_ASSESSMENTS_FILE
+
+    @property
+    def reproducibility_assessment_path(self) -> Path:
+        return self.review_dir / REPRODUCIBILITY_ASSESSMENT_FILE
+
+    @property
+    def review_transcript_path(self) -> Path:
+        return self.review_dir / REVIEW_TRANSCRIPT_FILE
+
+    # -- Inline-comment artifacts -------------------------------------------
+
+    @property
+    def inline_comments_path(self) -> Path:
+        return self.inline_dir / INLINE_COMMENTS_FILE
+
+    @property
+    def inline_viewer_path(self) -> Path:
+        return self.inline_dir / INLINE_VIEWER_FILE
+
+    @property
+    def inline_transcript_path(self) -> Path:
+        return self.inline_dir / INLINE_TRANSCRIPT_FILE
+
+    @property
+    def paper_text_path(self) -> Path:
+        return self.inline_dir / PAPER_TEXT_FILE
 
     # -- Manager retry-loop artifacts ---------------------------------------
 

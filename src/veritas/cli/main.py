@@ -52,6 +52,24 @@ def replicate(
             "'repo-only' = repo alone (claims extracted from README)."
         ),
     ),
+    depth: str = typer.Option(
+        "run",
+        "--depth",
+        help=(
+            "Engagement depth. 'run' (default) executes the code and grades "
+            "produced values. 'read' executes nothing: it reads the paper (and "
+            "code/data, when supplied) and produces a Reproducibility Assessment. "
+            "'read' requires --paper."
+        ),
+    ),
+    inline: bool = typer.Option(
+        False,
+        "--inline/--no-inline",
+        help=(
+            "Also emit anchored in-line comments and a side-by-side viewer "
+            "(inline_review.html). Requires --paper. Default: off."
+        ),
+    ),
     claims: Optional[Path] = typer.Option(
         None,
         "--claims",
@@ -98,6 +116,11 @@ def replicate(
         None,
         "--verify-timeout",
         help="Timeout in seconds for the verify phase (per claim). Default: no timeout.",
+    ),
+    review_timeout: Optional[int] = typer.Option(
+        None,
+        "--review-timeout",
+        help="Timeout in seconds for the read-mode static-review / inline passes. Default: no timeout.",
     ),
     evaluate: bool = typer.Option(
         False,
@@ -184,8 +207,11 @@ def replicate(
             replicate_timeout=replicate_timeout,
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
+            review_timeout=review_timeout,
             run_evaluation=evaluate,
             mode=mode,
+            depth=depth,
+            emit_inline=inline,
             claims_path=claims,
             data_path=data,
         )
@@ -196,7 +222,14 @@ def replicate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    console.print(f"[blue]Mode:[/blue] {config.mode}")
+    console.print(f"[blue]Mode:[/blue] {config.mode}  [blue]Depth:[/blue] {config.depth}")
+    if config.depth == "read":
+        console.print(
+            "[yellow]Read-only:[/yellow] no code will be executed; "
+            "producing a Reproducibility Assessment."
+        )
+    if config.emit_inline:
+        console.print("[blue]Inline comments:[/blue] ON")
     if config.max_iters > 1:
         console.print(
             f"[blue]Manager retry loop:[/blue] ON (max {config.max_iters} iterations)"
