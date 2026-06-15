@@ -208,7 +208,6 @@ def replicate(
             run_citation_check=check_citations,
             citation_timeout=citation_timeout,
             faithfulness_scope=check_citations_faithfulness,
-            claim_scope=scope,
             mode=mode,
             claims_path=claims,
             data_path=data,
