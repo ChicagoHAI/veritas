@@ -15,7 +15,6 @@
 #
 # Usage: ./veritas-host replicate --paper x.pdf --repo ./code --output ./run-1
 #        ./veritas-host replicate --paper x.pdf --output ./run-1 --mode paper-only
-#        ./veritas-host extract-plan x.pdf
 #        ./veritas-host report ./run-1
 # =============================================================================
 
@@ -240,7 +239,7 @@ cmd_replicate() {
 }
 
 cmd_passthrough() {
-    # extract-plan / report / evaluate — no pre/post staging needed; just
+    # report / evaluate — no pre/post staging needed; just
     # forward to the python CLI.
     local subcmd="$1"; shift
     run_veritas_cli "$subcmd" "$@"
@@ -254,7 +253,6 @@ Subcommands:
   full          Full pipeline: replicate + evaluate + report (the default; also via bare flags)
   replicate     Replication only, through verify (for benchmarking)
   evaluate      Run the evaluation manager + report on an existing replicate dir
-  extract-plan  Standalone plan extraction from a paper PDF
   report        Regenerate report from an existing replicate output dir
 
 Same flags as the docker \`./veritas\` wrapper. The host wrapper:
@@ -279,7 +277,7 @@ case "$1" in
         shift
         cmd_replicate "$@"
         ;;
-    extract-plan|report|evaluate)
+    report|evaluate)
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

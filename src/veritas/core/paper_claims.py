@@ -13,7 +13,6 @@ def parse_paper_claims_response(response: str) -> PaperClaims:
 
         {
             "paper": {"title": "...", "arxiv_id": "...", ...},
-            "extraction_mode": "main",
             "claims": [
                 {
                     "id": "C1",

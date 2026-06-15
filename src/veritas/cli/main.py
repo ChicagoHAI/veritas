@@ -74,14 +74,6 @@ def replicate(
         exists=True,
         file_okay=False,
     ),
-    scope: str = typer.Option(
-        "main",
-        "--scope",
-        help=(
-            "Claim-extraction scope. 'main' targets headline+supporting (default); "
-            "'full' (not yet implemented) includes setup tier."
-        ),
-    ),
     generate_pdf: bool = typer.Option(
         True,
         "--pdf/--no-pdf",
@@ -254,51 +246,6 @@ def replicate(
 
 
 @app.command()
-def extract_plan(
-    paper: Path = typer.Argument(
-        ...,
-        help="Path to the paper PDF file",
-        exists=True,
-        dir_okay=False,
-    ),
-    output: Optional[Path] = typer.Option(
-        None,
-        "--output", "-o",
-        help="Output path for the plan file",
-    ),
-    with_evidence: bool = typer.Option(
-        False,
-        "--with-evidence",
-        help="Include evidence quotes from the paper",
-    ),
-):
-    """
-    Extract a structured plan from a paper PDF.
-
-    This generates a plan.md file that can be used as input for a replication run.
-    """
-    from veritas.core.plan_extractor import PlanExtractor
-
-    console.print(f"[blue]Extracting plan from:[/blue] {paper}")
-
-    extractor = PlanExtractor()
-
-    try:
-        plan = extractor.extract(paper, with_evidence=with_evidence)
-
-        # Determine output path
-        if output is None:
-            output = paper.parent / f"{paper.stem}_plan.md"
-
-        output.write_text(plan, encoding='utf-8')
-        console.print(f"[green]Plan saved to:[/green] {output}")
-
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(1)
-
-
-@app.command()
 def report(
     replicate_dir: Path = typer.Argument(
         ...,
@@ -425,7 +372,7 @@ def evaluate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    result = ReplicationRunner(config).evaluate_existing()
+    result = ReplicationRunner(config).run()
     if result.success:
         console.print("[bold green]Evaluation + report complete.[/bold green]")
         console.print(f"Report: {result.report_path}")

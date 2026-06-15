@@ -39,7 +39,6 @@ from veritas.core.replication import _extract_json
 TIER_DISPLAY = {
     "headline": "Headline",
     "supporting": "Supporting",
-    "setup": "Setup",
 }
 
 # Display label for each verdict status.
@@ -605,7 +604,7 @@ class ReportGenerator:
         if score is None:
             return s + "\n*(no score data on disk)*\n\n"
 
-        for tier in ("headline", "supporting", "setup"):
+        for tier in ("headline", "supporting"):
             counts = getattr(score, tier)
             total = sum(counts.values())
             if total == 0:

@@ -7,19 +7,18 @@ from veritas.core.config_env import _env_float
 
 
 ClaimType = Literal["scalar", "scalar_range", "table", "qualitative", "figure"]
-ClaimTier = Literal["headline", "supporting", "setup"]
+ClaimTier = Literal["headline", "supporting"]
 VerdictStatus = Literal[
     "match", "partial", "no_match", "not_attempted", "not_applicable"
 ]
 
-# Tier weights for the Replication Score formula. Headline claims weigh most;
-# setup-tier claims are scored but down-weighted. Each weight is overridable
-# via a ``VERITAS_TIER_WEIGHT_*`` env var (issue #61; read from ``.env``, see
-# ``config_env`` / ``.env.example``). Defaults are unchanged when unset.
+# Tier weights for the Replication Score formula. Headline claims weigh most.
+# Each weight is overridable via a ``VERITAS_TIER_WEIGHT_*`` env var (read from
+# ``.env``, see ``config_env`` / ``.env.example``). Defaults are unchanged when
+# unset.
 TIER_WEIGHTS: Dict[str, float] = {
     "headline": _env_float("VERITAS_TIER_WEIGHT_HEADLINE", 3.0),
     "supporting": _env_float("VERITAS_TIER_WEIGHT_SUPPORTING", 2.0),
-    "setup": _env_float("VERITAS_TIER_WEIGHT_SETUP", 1.0),
 }
 
 # Verdict-to-score mapping. ``not_applicable`` is excluded from the score
@@ -111,7 +110,6 @@ class PaperClaim:
 class PaperClaims:
     """The set of claims extracted from a paper plus light metadata."""
     paper: Dict[str, Any] = field(default_factory=dict)
-    extraction_mode: str = "main"
     claims: List[PaperClaim] = field(default_factory=list)
 
     def claim_ids(self) -> "set[str]":
@@ -132,7 +130,6 @@ class PaperClaims:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "paper": self.paper,
-            "extraction_mode": self.extraction_mode,
             "claims": [c.to_dict() for c in self.claims],
         }
 
@@ -140,7 +137,6 @@ class PaperClaims:
     def from_dict(cls, data: Dict[str, Any]) -> "PaperClaims":
         return cls(
             paper=data.get("paper", {}),
-            extraction_mode=data.get("extraction_mode", "main"),
             claims=[PaperClaim.from_dict(c) for c in data.get("claims", [])],
         )
 
@@ -192,7 +188,6 @@ class ReplicationScore:
     score: Optional[float]  # None when no verifiable (non-n/a) claims exist
     headline: Dict[str, int] = field(default_factory=dict)
     supporting: Dict[str, int] = field(default_factory=dict)
-    setup: Dict[str, int] = field(default_factory=dict)
     total_claims: int = 0
     counted_claims: int = 0  # excludes ``not_applicable`` from denominator
     missing_verdicts: List[str] = field(default_factory=list)
@@ -203,7 +198,6 @@ class ReplicationScore:
             "score": self.score,
             "headline": self.headline,
             "supporting": self.supporting,
-            "setup": self.setup,
             "total_claims": self.total_claims,
             "counted_claims": self.counted_claims,
             "missing_verdicts": self.missing_verdicts,
@@ -216,7 +210,6 @@ class ReplicationScore:
             score=data.get("score"),
             headline=data.get("headline", {}),
             supporting=data.get("supporting", {}),
-            setup=data.get("setup", {}),
             total_claims=data.get("total_claims", 0),
             counted_claims=data.get("counted_claims", 0),
             missing_verdicts=data.get("missing_verdicts", []),

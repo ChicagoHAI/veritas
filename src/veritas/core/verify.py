@@ -66,15 +66,14 @@ def compute_replication_score(
     Edge cases:
     - All ``not_applicable`` (or no non-NA verdicts exist): ``score = None``,
       a flag is added.
-    - Zero headline claims extracted: score still computes from supporting +
-      setup; a flag is added.
+    - Zero headline claims extracted: score still computes from supporting;
+      a flag is added.
     - All ``not_attempted``: score = 0.0; a flag is added.
     """
     verdict_by_id = {v.claim_id: v for v in verdicts}
 
     headline = _tier_breakdown(claims.claims, verdict_by_id, "headline")
     supporting = _tier_breakdown(claims.claims, verdict_by_id, "supporting")
-    setup = _tier_breakdown(claims.claims, verdict_by_id, "setup")
 
     missing_verdicts: List[str] = [
         c.id for c in claims.claims if c.id not in verdict_by_id
@@ -127,7 +126,6 @@ def compute_replication_score(
         score=score,
         headline=headline,
         supporting=supporting,
-        setup=setup,
         total_claims=len(claims.claims),
         counted_claims=counted,
         missing_verdicts=missing_verdicts,

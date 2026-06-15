@@ -10,11 +10,11 @@ The basic claim-verification pipeline is in place: paper claims extraction in an
 
 - **Replication is the primary, highlightable output.** The Replication Score and per-claim verdicts are the publishable result; replication evidence and fix-severity context are the supporting narrative.
 - **The replicate agent should try hard to reproduce results.** Environment errors, API deprecations, and missing compilers should be fixed so replication can continue. Only give up after genuine effort. Every applied fix is logged and rated for severity in a separate pass.
-- **Paper claims drive verification.** Each paper's specific reproducible claims are extracted into `paper_claims.json` (5 shape-typed categories: `scalar | scalar_range | table | qualitative | figure`; 3 tiers: `headline | supporting | setup`). The verifier adjudicates each claim independently with a fresh-context LLM call.
-- **Replication Score is a tier-weighted fraction**: `score = Σ(tier_weight × verdict_value) / Σ(tier_weight)` with tier weights `3 / 2 / 1` for headline / supporting / setup, verdict values `match=1.0, partial=0.5, no_match=0.0, not_attempted=0.0`, and `not_applicable` excluded from both sums.
+- **Paper claims drive verification.** Each paper's specific reproducible claims are extracted into `paper_claims.json` (5 shape-typed categories: `scalar | scalar_range | table | qualitative | figure`; 2 tiers: `headline | supporting`). The verifier adjudicates each claim independently with a fresh-context LLM call.
+- **Replication Score is a tier-weighted fraction**: `score = Σ(tier_weight × verdict_value) / Σ(tier_weight)` with tier weights `3 / 2` for headline / supporting, verdict values `match=1.0, partial=0.5, no_match=0.0, not_attempted=0.0`, and `not_applicable` excluded from both sums.
 - **The replicate agent never sees `paper_claims.json`.** The replication plan references claim IDs in a `verifies` field but doesn't embed paper-reported result values. Plan steps' `expected_outcome` is shape-prescriptive (file path, JSON field names, figure layout), not value-prescriptive. This is veritas's structural defense against ground-truth leakage to the replication agent.
 - **The final codebase used during replication is preserved as output**: `replication/codebase/` holds the patched copy and `replication/codebase.diff` shows the unified diff vs. the original repo.
-- **Veritas is being modularized** — components (execution environment, LLM provider, PDF extractor, scoring formula, output format) are progressively being split into swappable modules.
+- **Veritas is being modularized** — components (execution environment, LLM provider, scoring formula, output format) are progressively being split into swappable modules.
 
 ## Commands
 
@@ -27,9 +27,6 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 # Select provider
 ./veritas replicate --repo ./my-project --provider codex
-
-# Select claim-extraction scope
-./veritas replicate --repo ./my-project --scope main  # headline+supporting (default)
 
 # Select input mode explicitly (default: auto-detected from inputs)
 ./veritas replicate --paper paper.pdf --mode paper-only  # generate code from paper, then run
@@ -46,9 +43,6 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 
 # Opt-in citation check (verify the paper's references exist + metadata is correct)
 ./veritas replicate --paper paper.pdf --repo ./my-project --check-citations
-
-# Extract a plan-only sketch from a paper
-./veritas extract-plan paper.pdf
 
 # Regenerate the report from existing outputs
 ./veritas report ./replicate-dir
@@ -105,7 +99,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 - **`paper-only`** — paper PDF only. The codegen phase writes the methodology from the paper into a fresh codebase, then the rest of the pipeline runs against that generated codebase.
 - **`repo-only`** — repo only. Claims are extracted from the repo's README; codegen is skipped.
 
-`--mode` is the input-mode selector. `--scope` (separate flag, values `main` / `full`) controls claim-extraction scope (which claim tiers to extract); the two flags are independent. `--claims path/to/claims.json` is a universal override that skips automatic extraction. `--data path/to/data-dir` mounts a host directory read-only at `/workspace/data/`; the path is surfaced to codegen / plan / replicate prompts via `has_data` so the agent uses these files instead of procuring from the network.
+`--mode` is the input-mode selector. `--claims path/to/claims.json` is a universal override that skips automatic extraction. `--data path/to/data-dir` mounts a host directory read-only at `/workspace/data/`; the path is surfaced to codegen / plan / replicate prompts via `has_data` so the agent uses these files instead of procuring from the network.
 
 ### Key modules (`src/veritas/core/`)
 
@@ -116,12 +110,10 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 - `replication.py` — `parse_replication_plan_response()`, `gather_evidence()`, and `_extract_json` / `_fix_json_escapes` JSON-repair logic.
 - `pipeline_state.py` — `PipelineState` class; persists per-phase status to `<output>/.veritas/pipeline_state.json` with a `schema_version` field. Loading a state file with `schema_version < 3` raises a clear error directing the user to `--restart`.
 - `models/` — dataclass-only sub-package: `replication.py` (`ReplicationPlan`, `ReplicationStep` with `verifies: List[str]`, `ExecutionEvidence`, `StepOutcome`, `AppliedFix`), `fix_severity.py` (`FixSeverityRating`, `FixSeverityAssessment`), `paper_claims.py` (`PaperClaim`, `PaperClaims`, `ClaimVerdict`, `ReplicationScore`, `Provenance`, `TIER_WEIGHTS`, `VERDICT_VALUES`).
-- `plan_extractor.py` — PDF → plan extraction (used by the standalone `extract-plan` subcommand; separate from the pipeline's analyze phase).
 - `report_generator.py` — markdown + PDF report generation (Replication Score headline, tier breakdown, per-claim verdict table, flags, replication evidence, fixes-applied section, environment summary).
 
 ### Utilities (`src/veritas/utils/`)
 
-- `pdf.py` — PDF text extraction (pdfplumber primary, pypdf fallback).
 - `security.py` — API key redaction via regex patterns; recursive log sanitization across the output tree.
 
 ### Templates (`templates/`)

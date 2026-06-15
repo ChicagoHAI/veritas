@@ -44,7 +44,7 @@ Input (Paper PDF and/or Repository)
 Veritas extracts each paper's own claims and checks them one at a time against
 the evidence the run produced. The **Replication Score** is a tier-weighted
 average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`,
-`not_attempted=0.0`) with tier weights `headline=3, supporting=2, setup=1`.
+`not_attempted=0.0`) with tier weights `headline=3, supporting=2`.
 `not_applicable` claims are excluded.
 
 The score is computed by code, not by a model. For numeric and table claims the
@@ -65,7 +65,6 @@ the comparator's judgment.
 ./veritas replicate --paper p.pdf --check-citations --check-citations-faithfulness all  # widen faithfulness scope
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
-./veritas extract-plan paper.pdf            # plan-only sketch
 ./veritas shell                             # interactive container
 ./veritas setup                             # one-shot prereqs + image + login + .env
 ./veritas status                            # dashboard
@@ -183,7 +182,6 @@ Five shape-typed claim categories; each claim carries a tier that sets its weigh
 |------|--------|---------|
 | **headline** | 3 | The paper's central result (usually 1-3 per paper) |
 | **supporting** | 2 | Intermediate measurements, secondary figures |
-| **setup** | 1 | Borderline configuration assertions (rare) |
 
 ## Output structure
 

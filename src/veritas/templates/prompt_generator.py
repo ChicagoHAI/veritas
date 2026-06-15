@@ -76,7 +76,6 @@ class PromptGenerator:
         output_dir: Path,
         paper_path: Optional[Path] = None,
         readme_path: Optional[Path] = None,
-        claim_scope: str = "main",
     ) -> str:
         """Generate prompt for paper-claim extraction.
 
@@ -91,7 +90,6 @@ class PromptGenerator:
             "readme_path": str(readme_path) if readme_path else "",
             "has_paper": paper_path is not None,
             "has_repo": repo_path is not None,
-            "claim_scope": claim_scope,
         }
         return template.render(**context)
 
@@ -125,7 +123,6 @@ class PromptGenerator:
         claims: "PaperClaims",
         paper_path: Optional[Path] = None,
         mode: str = "full",
-        claim_scope: str = "main",
         data_path: Optional[Path] = None,
         manager_guidance: Optional[object] = None,
     ) -> str:
@@ -146,7 +143,6 @@ class PromptGenerator:
             "paper_path": str(paper_path) if paper_path else "",
             "claims": claims,
             "mode": mode,
-            "claim_scope": claim_scope,
             "has_data": data_path is not None,
             "manager_guidance": manager_guidance,
         }
@@ -319,6 +315,7 @@ class PromptGenerator:
         self,
         template_name: str,
         output_dir: Path,
+        out_path: Path,
         need: str,
         rationale: str = "",
     ) -> str:
@@ -328,10 +325,15 @@ class PromptGenerator:
         (``research/resource_finder.md`` / ``research/literature_finder.md``).
         These are separate provider invocations with web-search/fetch access;
         they return findings + provenance, never the paper's reported values.
+
+        ``out_path`` is the exact file the sub-agent must write to; the template
+        must emit it verbatim rather than hardcoding a filename, since it carries
+        an index suffix for a second same-kind request.
         """
         template = self.env.get_template(template_name)
         context = {
             **self._runtime_paths_context(output_dir=output_dir),
+            "out_path": str(out_path),
             "need": need,
             "rationale": rationale,
         }

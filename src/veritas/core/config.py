@@ -10,10 +10,7 @@ from veritas.core.config_env import _env_int, _env_opt_int, _env_str
 # All valid AI providers
 VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
-# Valid claim-extraction scopes
-VALID_CLAIM_SCOPES = ["main", "full"]
-
-# Input mode literal — distinct from claim_scope
+# Input mode literal
 InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
@@ -118,7 +115,6 @@ class Config:
 
     # Run settings
     provider: str = "claude"
-    claim_scope: str = "main"
     mode: str = "auto"
     claims_path: Optional[Path] = None
     data_path: Optional[Path] = None
@@ -209,16 +205,6 @@ class Config:
         if self.provider.lower() not in VALID_PROVIDERS:
             raise ValueError(
                 f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}"
-            )
-
-        # Validate claim_scope (existing logic, kept as-is)
-        if self.claim_scope not in VALID_CLAIM_SCOPES:
-            raise ValueError(
-                f"Unknown claim scope: {self.claim_scope}. Valid options: {VALID_CLAIM_SCOPES}"
-            )
-        if self.claim_scope == "full":
-            raise NotImplementedError(
-                "--scope full is not yet implemented. Use --scope main (default)."
             )
 
         # Resolve input mode (auto-detect from inputs, or validate explicit mode)
