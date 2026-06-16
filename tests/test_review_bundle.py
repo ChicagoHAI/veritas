@@ -76,6 +76,57 @@ def test_saiweb_review_severity_and_verdict():
     assert rev["inlineSummary"] == "Overall ok."
 
 
+def test_assemble_bundle_from_output_run_mode(tmp_path):
+    from veritas.core.review_bundle import assemble_bundle_from_output
+    for d in ("analyze", "inline", "verify", "evaluation"):
+        (tmp_path / d).mkdir()
+    (tmp_path / "analyze" / "paper_claims.json").write_text(
+        json.dumps({"paper": {"title": "My Paper"}, "claims": []}))
+    (tmp_path / "inline" / "paper_text.json").write_text(
+        json.dumps({"paragraphs": ["Intro.", "Result 12%."]}))
+    (tmp_path / "inline" / "inline_comments.json").write_text(json.dumps([
+        {"id": "oar_0", "title": "t", "quote": "q", "explanation": "e",
+         "category": "technical", "severity": "moderate", "paragraph_index": 1},
+        {"id": "claim_C1", "title": "replication: did not reproduce", "quote": "Result 12%",
+         "explanation": "off", "category": "replication", "severity": "major", "paragraph_index": 1},
+    ]))
+    (tmp_path / "inline" / "overall_feedback.md").write_text("Overall.")
+    (tmp_path / "verify" / "replication_score.json").write_text(
+        json.dumps({"score": 0.6, "counted_claims": 5}))
+    (tmp_path / "evaluation" / "contextual_evaluation.json").write_text(
+        json.dumps({"report": {"replication_summary": "Mostly held."}}))
+
+    b = assemble_bundle_from_output(tmp_path, slug="mypaper")
+    assert b.depth == "run" and b.mode == "full"
+    assert b.title == "My Paper" and len(b.comments) == 2 and len(b.paragraphs) == 2
+    assert b.score["score"] == 0.6
+    headings = [s["heading"] for s in b.verdict_sections]
+    assert "Replication verdict" in headings and "Summary" in headings
+    # Both lenses present in the merged inline comments.
+    cats = {c.category for c in b.comments}
+    assert "technical" in cats and "replication" in cats
+    # Exports work off the assembled bundle.
+    demo = to_saiweb_demo(b)
+    assert demo["paragraphs"][1]["hasComment"] is True
+
+
+def test_assemble_bundle_from_output_read_mode(tmp_path):
+    from veritas.core.review_bundle import assemble_bundle_from_output
+    (tmp_path / "inline").mkdir()
+    (tmp_path / "review").mkdir()
+    (tmp_path / "inline" / "paper_text.json").write_text(json.dumps({"paragraphs": ["A para here."]}))
+    (tmp_path / "inline" / "inline_comments.json").write_text(json.dumps([]))
+    (tmp_path / "review" / "reproducibility_assessment.json").write_text(json.dumps({
+        "overall_risk": "high", "specification": "good", "code_coverage": "poor",
+        "data_availability": "poor", "summary": "Risky.", "weaknesses": ["no seed"],
+        "recommendation": "Release data.",
+    }))
+    b = assemble_bundle_from_output(tmp_path, slug="p")
+    assert b.depth == "read" and b.mode == "paper-only"
+    headings = [s["heading"] for s in b.verdict_sections]
+    assert "Reproducibility verdict" in headings and "Recommendation" in headings
+
+
 def test_write_bundle(tmp_path):
     paths = write_bundle(_bundle(), tmp_path)
     for key in ("bundle", "oar_viz", "saiweb_demo"):

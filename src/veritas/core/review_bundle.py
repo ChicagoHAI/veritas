@@ -196,6 +196,104 @@ def to_saiweb_review(bundle: ReviewBundle, project_id: str) -> Dict[str, Any]:
     }
 
 
+def _verdict_sections_run(score: Optional[dict], evaluation: Optional[dict]) -> List[Dict[str, str]]:
+    """Referee verdict sections for a run-mode (execution) review."""
+    out: List[Dict[str, str]] = []
+    if score and score.get("score") is not None:
+        pct = round(score["score"] * 100)
+        verdict = "Reproduced" if pct >= 85 else "Partially reproduced" if pct >= 50 else "Not reproduced"
+        out.append({"heading": "Replication verdict",
+                    "body": f"{verdict} — Replication Score {pct}% "
+                            f"({score.get('counted_claims', 0)} claims scored)."})
+    rep = (evaluation or {}).get("report", {}) if evaluation else {}
+    for heading, key in [
+        ("Summary", "replication_summary"),
+        ("Important claims", "important_claims"),
+        ("What did not replicate", "did_not_replicate"),
+        ("Methodology correspondence", "methodology_correspondence"),
+        ("Limitations", "code_quality_limitations"),
+    ]:
+        val = rep.get(key)
+        if isinstance(val, str) and val.strip():
+            out.append({"heading": heading, "body": val.strip()})
+    cm = (evaluation or {}).get("cheating_monitor", {}) if evaluation else {}
+    if isinstance(cm.get("risk"), str) and cm["risk"].lower() in ("medium", "high"):
+        out.append({"heading": f"Integrity flag — risk: {cm['risk']}",
+                    "body": str(cm.get("rationale", "")).strip()})
+    return out
+
+
+def _verdict_sections_read(reproducibility: Optional[dict]) -> List[Dict[str, str]]:
+    """Referee verdict sections for a read-mode (no-execution) review."""
+    r = reproducibility or {}
+    out: List[Dict[str, str]] = []
+    if r.get("overall_risk"):
+        out.append({"heading": "Reproducibility verdict",
+                    "body": f"Overall risk: {r['overall_risk'].upper()}. "
+                            f"Specification: {r.get('specification','?')}, code coverage: "
+                            f"{r.get('code_coverage','?')}, data availability: {r.get('data_availability','?')}."})
+    if r.get("summary"):
+        out.append({"heading": "Summary", "body": r["summary"]})
+    if r.get("weaknesses"):
+        out.append({"heading": "Obstacles to reproduction",
+                    "body": "\n".join(f"- {w}" for w in r["weaknesses"])})
+    if r.get("recommendation"):
+        out.append({"heading": "Recommendation", "body": r["recommendation"]})
+    return out
+
+
+def assemble_bundle_from_output(output_dir: Path, slug: Optional[str] = None) -> ReviewBundle:
+    """Assemble a ReviewBundle by reading a completed veritas run's output dir.
+
+    Pulls paragraphs + comments + overall_feedback from ``inline/``, the score
+    (run) or reproducibility assessment (read) from their phase dirs, and builds
+    referee verdict sections. Works for both depths; missing pieces degrade to
+    empty. This is the single function the demo/exporters consume.
+    """
+    output_dir = Path(output_dir)
+
+    def _load(path: Path):
+        try:
+            return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    claims = _load(output_dir / "analyze" / "paper_claims.json") or {}
+    title = (claims.get("paper", {}) or {}).get("title", "") or (slug or "Paper review")
+
+    ptext = _load(output_dir / "inline" / "paper_text.json") or {}
+    paragraphs = ptext.get("paragraphs", []) or []
+
+    comments_raw = _load(output_dir / "inline" / "inline_comments.json") or []
+    comments = [Comment.from_dict(c) for c in comments_raw]
+
+    fb_path = output_dir / "inline" / "overall_feedback.md"
+    overall = fb_path.read_text(encoding="utf-8") if fb_path.exists() else ""
+
+    score = _load(output_dir / "verify" / "replication_score.json")
+    reproducibility = _load(output_dir / "review" / "reproducibility_assessment.json")
+    evaluation = _load(output_dir / "evaluation" / "contextual_evaluation.json")
+
+    depth = "read" if reproducibility is not None and score is None else "run"
+    if depth == "run":
+        verdict_sections = _verdict_sections_run(score, evaluation)
+    else:
+        verdict_sections = _verdict_sections_read(reproducibility)
+
+    return ReviewBundle(
+        slug=slug or output_dir.name,
+        title=title,
+        mode="full" if depth == "run" else "paper-only",
+        depth=depth,
+        paragraphs=paragraphs,
+        comments=comments,
+        overall_feedback=overall,
+        verdict_sections=verdict_sections,
+        reproducibility=reproducibility,
+        score=score,
+    )
+
+
 def write_bundle(bundle: ReviewBundle, out_dir: Path) -> Dict[str, Path]:
     """Write the canonical bundle + both exports into ``out_dir``. Returns paths."""
     out_dir = Path(out_dir)
