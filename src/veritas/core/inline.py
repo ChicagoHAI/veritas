@@ -159,6 +159,8 @@ def build_claim_comments(
         if not quote:
             quote = _claim_quote(claim)
 
+        # Category distinguishes veritas's lenses in the viewer: read-mode
+        # reproducibility assessments vs run-mode execution/replication verdicts.
         if a is not None:
             level = a.support_level
             severity = _SUPPORT_SEVERITY.get(level, "moderate")
@@ -168,15 +170,24 @@ def build_claim_comments(
                 expl += f"\n\nComputed at: `{a.code_location}`"
             if a.issues:
                 expl += "\n\nIssues: " + "; ".join(a.issues)
+            category = "reproducibility"
         elif v is not None:
             status = v.status
             severity = _VERDICT_SEVERITY.get(status, "moderate")
-            title = f"[{claim.id}] {_VERDICT_LABEL.get(status, status)}"
+            title = f"[{claim.id}] replication: {_VERDICT_LABEL.get(status, status)}"
             expl = v.rationale or ""
+            # Surface the produced-vs-paper values the verifier extracted.
+            struct = v.structured or {}
+            rep = struct.get("replicated_value", struct.get("replicated_table"))
+            pap = struct.get("paper_value", struct.get("paper_range", struct.get("paper_table")))
+            if rep is not None or pap is not None:
+                expl += f"\n\nReplicated: `{rep}`  ·  Paper: `{pap}`"
+            category = "replication"
         else:
             severity = "minor"
             title = f"[{claim.id}] no verdict"
             expl = "This claim was extracted but not assessed."
+            category = "claim-support"
 
         expl = (expl or "(no rationale)").strip()
         expl = f"**Claim ({claim.tier}, {claim.type}):** {claim.description}\n\n{expl}"
@@ -185,7 +196,7 @@ def build_claim_comments(
             title=title,
             quote=quote,
             explanation=expl,
-            category="claim-support",
+            category=category,
             severity=severity,
             claim_id=claim.id,
         ))

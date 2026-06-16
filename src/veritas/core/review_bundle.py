@@ -26,8 +26,9 @@ from veritas.core.inline import Comment
 # -- field mappings between veritas and the two output schemas ---------------
 
 # veritas comment.category -> OpenAIReview / sai-web comment_type (2-valued).
+# Execution/numeric lenses read as "technical"; argumentation lenses as "logical".
 def _comment_type(category: str) -> str:
-    return "technical" if category in ("technical", "statistical") else "logical"
+    return "technical" if category in ("technical", "statistical", "replication") else "logical"
 
 
 # veritas severity -> OpenAIReview viz severity (major|moderate|minor).

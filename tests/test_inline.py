@@ -85,7 +85,7 @@ def test_build_claim_comments_from_assessments_severity():
     ]
     cc = build_claim_comments(_claims(), assessments=assessments)
     assert len(cc) == 2
-    assert cc[0].severity == "major" and cc[0].category == "claim-support"
+    assert cc[0].severity == "major" and cc[0].category == "reproducibility"
     assert cc[1].severity == "info"
     assert cc[0].claim_id == "C1"
     assert "boot.R" in cc[1].explanation  # code_location surfaced

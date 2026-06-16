@@ -67,9 +67,14 @@
 <script>
 const DATA = JSON.parse(document.getElementById("data").textContent);
 const SEV_CLASS = { major:"sev-major", moderate:"sev-moderate", minor:"sev-minor", info:"sev-info" };
-const CAT_LABEL = { "claim-support":"claim", "reproducibility":"repro", "technical":"tech",
-                    "data-availability":"data", "statistical":"stat" };
-function catColor(cat){ return cat==="claim-support" ? "bg-claim" : "bg-info"; }
+const CAT_LABEL = { "claim-support":"claim", "reproducibility":"repro", "replication":"replication",
+                    "technical":"tech", "logical":"logic", "data-availability":"data",
+                    "statistical":"stat", "method-specification":"method" };
+// veritas lenses (claim/repro/replication) get the green chip; OpenAIReview
+// review lenses (tech/logic/...) get the blue chip — so the two sources read apart.
+function catColor(cat){
+  return (cat==="claim-support"||cat==="reproducibility"||cat==="replication") ? "bg-claim" : "bg-info";
+}
 
 document.getElementById("subtitle").textContent = DATA.subtitle || "";
 
