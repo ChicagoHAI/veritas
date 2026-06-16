@@ -6,7 +6,6 @@ from typing import Literal, Optional
 
 from veritas.core.config_env import _env_int, _env_opt_int
 
-
 # All valid AI providers
 VALID_PROVIDERS = ["claude", "codex", "gemini"]
 
@@ -145,6 +144,15 @@ class Config:
     # so it is silently skipped in repo-only runs.
     emit_inline: bool = False
 
+    # Vendored review-engine (OpenAIReview) settings for the paper-review pass.
+    # ``review_model`` is a model id understood by the active provider; with
+    # OpenRouter, prefixed ids like ``openai/gpt-4o`` route cleanly. ``review_provider``
+    # forces the engine's provider (openrouter|openai|anthropic|gemini|mistral);
+    # None lets the engine auto-detect from available keys. Both fall back to env
+    # (VERITAS_REVIEW_MODEL / REVIEW_PROVIDER) then the defaults below.
+    review_model: Optional[str] = None
+    review_provider: Optional[str] = None
+
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
     # is worse than letting it finish. Re-enable once there's a checkpoint /
@@ -222,6 +230,13 @@ class Config:
 
         # Resolve input mode (auto-detect from inputs, or validate explicit mode)
         self.mode = self._resolve_mode(self.mode)
+
+        # Review-engine model/provider: CLI/explicit value wins, else env, else default.
+        import os as _os
+        if self.review_model is None:
+            self.review_model = _os.environ.get("VERITAS_REVIEW_MODEL", "openai/gpt-4o")
+        if self.review_provider is None:
+            self.review_provider = _os.environ.get("REVIEW_PROVIDER") or None
 
         # Validate / constrain engagement depth.
         if self.depth not in VALID_DEPTHS:

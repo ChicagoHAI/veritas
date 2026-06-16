@@ -284,15 +284,27 @@ def generate_inline_review(
     # 2. Deterministic claim-anchored comments.
     comments: List[Comment] = build_claim_comments(claims, assessments, verdicts)
 
-    # 3. Optional LLM reviewer pass (richer technical/reproducibility comments).
-    if invoke_provider is not None and prompt_generator is not None:
+    # 3. Reviewer comments. Prefer the vendored OpenAIReview engine (progressive
+    #    method, needs a provider API key); fall back to the CLI reviewer pass.
+    overall_feedback = ""
+    engine_meta: Optional[dict] = None
+    from veritas.core.paper_review import has_review_key
+    if config.has_paper and has_review_key():
         try:
-            reviewer = _run_reviewer_pass(config, prompt_generator, invoke_provider)
-            comments.extend(reviewer)
+            overall_feedback, engine_comments, engine_meta = _run_review_engine(
+                config, paragraphs
+            )
+            comments.extend(engine_comments)
+        except Exception as e:
+            print(f"  Note: review-engine pass failed ({e}); trying CLI reviewer pass.")
+            engine_meta = None
+    if engine_meta is None and invoke_provider is not None and prompt_generator is not None:
+        try:
+            comments.extend(_run_reviewer_pass(config, prompt_generator, invoke_provider))
         except Exception as e:
             print(f"  Note: reviewer-comment pass skipped: {e}")
 
-    # 4. Anchor everything to paragraphs.
+    # 4. Anchor everything to paragraphs (engine comments already carry an index).
     anchor_comments(comments, paragraphs)
 
     # 5. Persist + render.
@@ -300,6 +312,10 @@ def generate_inline_review(
         json.dumps([c.to_dict() for c in comments], indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    if overall_feedback:
+        (config.inline_dir / "overall_feedback.md").write_text(
+            overall_feedback, encoding="utf-8"
+        )
     title = (claims.paper.get("title") if claims and claims.paper else None) or "Paper review"
     depth_label = "read-only review" if config.depth == "read" else "replication review"
     n_anchored = sum(1 for c in comments if c.paragraph_index is not None)
@@ -315,6 +331,29 @@ def generate_inline_review(
         f"({n_anchored} anchored to paragraphs). Viewer: {config.inline_viewer_path}"
     )
     return config.inline_viewer_path
+
+
+def _run_review_engine(config, paragraphs: List[str]):
+    """Run the vendored OpenAIReview progressive engine; return (feedback, comments, meta).
+
+    Comments come back with ``paragraph_index`` already set against the same
+    paragraph split the viewer uses (both go through ``parse_paper_markdown`` +
+    ``split_into_paragraphs``), so no re-anchoring is needed for them.
+    """
+    from veritas.core.paper_review import review_paper
+
+    slug = Path(config.paper_path).stem
+    _title, _md, _paras, feedback, comments, meta = review_paper(
+        Path(config.paper_path),
+        slug=slug,
+        model=config.review_model,
+        provider=config.review_provider,
+    )
+    print(
+        f"  Review engine [{meta.get('model')}]: {len(comments)} comments, "
+        f"{meta.get('prompt_tokens')}+{meta.get('completion_tokens')} tokens"
+    )
+    return feedback, comments, meta
 
 
 def _run_reviewer_pass(config, prompt_generator, invoke_provider) -> List[Comment]:
