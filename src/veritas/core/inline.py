@@ -326,6 +326,23 @@ def generate_inline_review(
         comments=comments,
     )
     config.inline_viewer_path.write_text(html, encoding="utf-8")
+
+    # Also emit the OpenAIReview viewer (markdown + MathJax, multi-method, metrics)
+    # as a self-contained artifact, fed the same comments via the ReviewBundle.
+    try:
+        from veritas.core.oar_viewer import render_oar_viewer
+        from veritas.core.review_bundle import ReviewBundle, to_oar_viz
+        bundle = ReviewBundle(
+            slug=Path(config.paper_path).stem if config.has_paper else "paper",
+            title=title, mode=config.mode, depth=config.depth,
+            paragraphs=paragraphs, comments=comments,
+            overall_feedback=overall_feedback, engine_meta=engine_meta,
+        )
+        (config.inline_dir / "oar_review.html").write_text(
+            render_oar_viewer(to_oar_viz(bundle)), encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"  Note: OpenAIReview viewer not emitted: {e}")
     print(
         f"  Inline comments: {len(comments)} total "
         f"({n_anchored} anchored to paragraphs). Viewer: {config.inline_viewer_path}"
