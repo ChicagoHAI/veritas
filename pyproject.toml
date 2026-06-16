@@ -16,6 +16,15 @@ dependencies = [
     "requests>=2.31.0",
     "rich>=13.0.0",
     "typer>=0.9.0",
+    # --- vendored OpenAIReview review engine (src/veritas/review_engine) ---
+    # Paper parsing (pymupdf4llm path needs no API key); LLM client; tokenizer.
+    "openai>=2.0.0",
+    "tiktoken>=0.7.0",
+    "pymupdf>=1.24.0",
+    "pymupdf4llm>=1.24.0",
+    "python-docx>=1.1.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +32,11 @@ dev = [
     "ruff>=0.1.0",
     "pytest>=7.0.0",
 ]
+# Higher-fidelity PDF parsing (hosted OCR / layout-aware). OPTIONAL and not
+# installed by default: the engine falls back to pymupdf4llm (no key, no extra
+# deps). These pin Python >=3.11, so install them explicitly only where needed:
+#   uv pip install "pymupdf-layout>=1.27.0" "mistral-ocr-cli>=1.2.0"
+# (Mistral OCR additionally needs MISTRAL_API_KEY.)
 
 [project.scripts]
 veritas = "veritas.cli.main:app"

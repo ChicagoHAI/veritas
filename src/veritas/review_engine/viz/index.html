@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAIReview</title>
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+  },
+  options: {
+    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+    ignoreHtmlClass: 'no-mathjax',
+  },
+  startup: { typeset: false }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --border: #e5e7eb;
+  --border-light: #f0f0f0;
+  --text: #1a1a2e;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --accent: #800020;
+  --accent-light: #fdf0f2;
+  --accent-hover: #5c0017;
+  --green: #10b981;
+  --green-light: #ecfdf5;
+  --green-border: #a7f3d0;
+  --orange: #f59e0b;
+  --orange-light: #fffbeb;
+  --orange-border: #fde68a;
+  --red: #ef4444;
+  --red-light: #fef2f2;
+  --red-border: #fecaca;
+  --blue-light: #eff6ff;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+  --shadow-focus: 0 0 0 3px rgba(128,0,32,0.15);
+  --header-h: 64px;
+  --tabs-h: 52px;
+  --metrics-h: 44px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Header ── */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header .logo {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+}
+.version-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.header .separator {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+}
+.paper-select-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 480px;
+}
+.paper-select-wrapper select {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.paper-select-wrapper select:hover { border-color: #d1d5db; }
+.paper-select-wrapper select:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.paper-select-wrapper::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-secondary);
+  pointer-events: none;
+}
+
+/* ── Method Tabs ── */
+.tabs-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: stretch;
+  height: var(--tabs-h);
+  gap: 2px;
+  overflow-x: auto;
+}
+.method-tab {
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.method-tab:hover { color: var(--text); background: var(--bg); }
+.method-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.method-tab .tab-count {
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg);
+  color: var(--text-secondary);
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+.method-tab.active .tab-count {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* ── Metrics Bar ── */
+.metrics-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: var(--metrics-h);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  overflow-x: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.metric strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.metric-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+
+/* ── Main Layout ── */
+.main {
+  display: flex;
+  height: calc(100vh - var(--header-h) - var(--tabs-h) - var(--metrics-h));
+}
+
+/* ── Paper Panel ── */
+.paper-panel {
+  flex: 1 1 60%;
+  overflow-y: auto;
+  padding: 32px 48px 64px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.paper-panel-inner {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* Paragraphs */
+.para {
+  padding: 8px 16px;
+  margin: 0 -16px 2px;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  font-size: 15px;
+  line-height: 1.75;
+  cursor: default;
+  transition: border-color 0.2s, background 0.2s;
+  position: relative;
+}
+.para .para-idx {
+  position: absolute;
+  left: -44px;
+  top: 10px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  width: 28px;
+  text-align: right;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.para:hover .para-idx { opacity: 1; }
+.para.has-comment .para-idx,
+.para.has-gt-match .para-idx,
+.para.gt-only .para-idx,
+.para.severity-major .para-idx,
+.para.severity-moderate .para-idx,
+.para.severity-minor .para-idx { opacity: 0.6; }
+
+.para.has-comment {
+  border-left-color: var(--accent);
+  background: var(--accent-light);
+  cursor: pointer;
+}
+.para.severity-major {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+  cursor: pointer;
+}
+.para.severity-moderate {
+  border-left-color: #d97706;
+  background: #fffbeb;
+  cursor: pointer;
+}
+.para.severity-minor {
+  border-left-color: #0284c7;
+  background: #f0f9ff;
+  cursor: pointer;
+}
+.para.has-gt-match {
+  border-left-color: var(--green);
+  background: var(--green-light);
+  cursor: pointer;
+}
+.para.gt-only {
+  border-left-color: var(--orange);
+  background: var(--orange-light);
+}
+.para.highlight {
+  background: #fad7dc;
+  border-left-color: var(--accent-hover);
+}
+.para p { margin-bottom: 0.6em; }
+.para p:last-child { margin-bottom: 0; }
+
+/* Paragraph typography */
+.para h1, .para h2 { font-size: 18px; font-weight: 700; margin: 8px 0 4px; color: var(--text); }
+.para h3, .para h4 { font-size: 16px; font-weight: 600; margin: 6px 0 2px; color: var(--text); }
+.para code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.para pre { background: #f3f4f6; padding: 12px 16px; border-radius: var(--radius-sm); overflow-x: auto; font-size: 13px; margin: 8px 0; }
+.para table { border-collapse: collapse; font-size: 12px; margin: 8px 0; display: block; overflow-x: auto; }
+.para td, .para th { border: 1px solid var(--border); padding: 5px 10px; min-width: 80px; max-width: 320px; word-wrap: break-word; white-space: normal; vertical-align: top; }
+.para th { background: var(--bg); font-weight: 600; }
+.para img { max-width: 100%; height: auto; display: block; margin: 8px auto; border-radius: var(--radius-sm); border: 1px solid var(--border-light); }
+.para em { font-style: italic; color: var(--text-secondary); font-size: 13px; }
+.MathJax { overflow-x: auto; overflow-y: hidden; }
+
+/* ── Comment Panel ── */
+.comment-panel {
+  flex: 0 0 480px;
+  overflow-y: auto;
+  padding: 0;
+  background: var(--bg);
+}
+
+/* Model badge */
+.model-badge {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  margin-bottom: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* Overall feedback */
+.overall-feedback {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.65;
+  box-shadow: var(--shadow-sm);
+}
+.overall-feedback h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+/* Comment cards */
+.comment-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.1s;
+  box-shadow: var(--shadow-sm);
+}
+.comment-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: #d1d5db;
+}
+.comment-card.active {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus), var(--shadow);
+}
+
+.comment-card .card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.comment-card .card-title {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.4;
+  flex: 1;
+  color: var(--text);
+}
+.badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.badge.major { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.badge.moderate { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+.badge.minor { background: #f0f9ff; color: #075985; border: 1px solid #bae6fd; }
+
+.comment-card .quote {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  margin: 8px 0;
+}
+.comment-card .explanation {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin-top: 8px;
+}
+.comment-card .para-link {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  margin-top: 8px;
+  display: inline-block;
+}
+.comment-card .para-link.unlocated {
+  color: var(--text-muted);
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 20px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 48px 24px;
+  font-size: 14px;
+}
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+/* ── Resolved comments ── */
+.comment-card.resolved {
+  opacity: 0.6;
+  padding: 10px 20px;
+}
+.comment-card.resolved .card-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.comment-card.resolved .quote,
+.comment-card.resolved .explanation,
+.comment-card.resolved .para-link {
+  display: none;
+}
+.comment-card.resolved .card-header {
+  margin-bottom: 0;
+}
+
+/* Resolve button */
+.resolve-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  padding: 0;
+  vertical-align: middle;
+}
+.resolve-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+  background: var(--green-light);
+}
+.resolve-btn.is-resolved {
+  border-color: var(--green);
+  background: var(--green-light);
+  color: var(--green);
+}
+
+/* Comment panel filter bar */
+.comment-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  height: var(--metrics-h);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.comment-panel-content {
+  padding: 20px;
+}
+.comment-filter-bar .filter-label { margin-right: 2px; }
+.filter-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.filter-toggle button {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  border: none;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.filter-toggle button + button { border-left: 1px solid var(--border); }
+.filter-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.filter-resolved-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Scrollbar ── */
+.paper-panel::-webkit-scrollbar,
+.comment-panel::-webkit-scrollbar { width: 6px; }
+.paper-panel::-webkit-scrollbar-track,
+.comment-panel::-webkit-scrollbar-track { background: transparent; }
+.paper-panel::-webkit-scrollbar-thumb,
+.comment-panel::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+.paper-panel::-webkit-scrollbar-thumb:hover,
+.comment-panel::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* ── Mobile bottom nav ── */
+.mobile-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 56px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  z-index: 200;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.06);
+}
+.mobile-bottom-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s;
+  position: relative;
+}
+.mobile-bottom-nav-btn.active { color: var(--accent); }
+.mobile-bottom-nav-btn svg { width: 22px; height: 22px; }
+.mobile-nav-badge {
+  position: absolute;
+  top: 5px;
+  right: calc(50% - 22px);
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  padding: 0 4px;
+}
+
+/* ── Mobile responsive ── */
+@media (max-width: 768px) {
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Header: two-row layout */
+  .header {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--header-h);
+    padding: 8px 16px;
+    gap: 6px;
+    align-content: center;
+    flex-shrink: 0;
+  }
+  .header .separator { display: none; }
+  .legend { display: none; }
+  .paper-select-wrapper { order: 4; max-width: 100%; width: 100%; }
+
+  /* Tabs + metrics: don't shrink */
+  .tabs-bar { flex-shrink: 0; padding: 0 12px; }
+  .metrics-bar { flex-shrink: 0; padding: 0 12px; font-size: 11px; gap: 10px; }
+
+  /* Main: fill remaining space, panels overlap via absolute */
+  .main {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Paper panel: full size, visible by default */
+  .paper-panel {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    padding: 20px 16px 72px;
+    border-right: none;
+    overflow-y: auto;
+  }
+  .paper-panel.mobile-hidden { display: none; }
+  .paper-panel-inner { max-width: 100%; }
+
+  /* Paragraphs: tighter on mobile */
+  .para { padding: 6px 10px; margin: 0 -10px 2px; }
+  .para .para-idx { display: none; }
+
+  /* Comment panel: full size, hidden by default on mobile */
+  .comment-panel {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    flex: none;
+    width: 100%;
+    display: none;
+    overflow-y: auto;
+    padding-bottom: 56px;
+  }
+  .comment-panel.mobile-active { display: block; }
+
+  /* Show the mobile nav */
+  .mobile-bottom-nav { display: flex; }
+}
+
+@media (max-width: 480px) {
+  .version-badge { display: none; }
+  .metrics-bar { font-size: 10px; gap: 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="logo">OpenAIReview</span>
+  <span class="version-badge" id="version-badge"><!-- __VERSION__ --></span>
+  <span class="separator"></span>
+  <div class="paper-select-wrapper">
+    <select id="paper-select"></select>
+  </div>
+  <div class="legend" id="legend"></div>
+</div>
+<div class="tabs-bar" id="method-tabs"></div>
+<div class="metrics-bar" id="metrics-bar"></div>
+<div class="main">
+  <div class="paper-panel" id="paper-panel"></div>
+  <div class="comment-panel" id="comment-panel"></div>
+</div>
+
+<div class="mobile-bottom-nav" id="mobile-bottom-nav">
+  <button class="mobile-bottom-nav-btn active" id="mobile-btn-paper" onclick="switchMobilePanel('paper')">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>
+    Paper
+  </button>
+  <button class="mobile-bottom-nav-btn" id="mobile-btn-comments" onclick="switchMobilePanel('comments')">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 0 1 .865-.501 48.172 48.172 0 0 0 3.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" /></svg>
+    Comments
+    <span class="mobile-nav-badge" id="mobile-nav-badge" style="display:none"></span>
+  </button>
+</div>
+
+<script>
+let INDEX = null;
+let paperCache = {};
+let currentPaperSlug = null;
+let currentMethod = null;
+const METHOD_ORDER = ['ground_truth','zero_shot','local','progressive','progressive_full'];
+let activeCommentId = null;
+let renderedPaperSlug = null;
+let typesetQueue = Promise.resolve();
+let resolvedIds = new Set();
+let showOnlyOpen = false;
+let mobilePanelActive = 'paper';
+
+function isMobile() { return window.innerWidth <= 768; }
+
+function switchMobilePanel(panel) {
+  mobilePanelActive = panel;
+  const paperPanel = document.getElementById('paper-panel');
+  const commentPanel = document.getElementById('comment-panel');
+  const btnPaper = document.getElementById('mobile-btn-paper');
+  const btnComments = document.getElementById('mobile-btn-comments');
+  if (panel === 'paper') {
+    paperPanel.classList.remove('mobile-hidden');
+    commentPanel.classList.remove('mobile-active');
+    btnPaper && btnPaper.classList.add('active');
+    btnComments && btnComments.classList.remove('active');
+  } else {
+    paperPanel.classList.add('mobile-hidden');
+    commentPanel.classList.add('mobile-active');
+    btnPaper && btnPaper.classList.remove('active');
+    btnComments && btnComments.classList.add('active');
+  }
+}
+
+function updateMobileNavBadge(count) {
+  const badge = document.getElementById('mobile-nav-badge');
+  if (!badge) return;
+  badge.style.display = count > 0 ? '' : 'none';
+  badge.textContent = count > 99 ? '99+' : count;
+}
+
+function resolvedStorageKey(commentId) {
+  return `oar_resolved:${currentPaperSlug}:${currentMethod}:${commentId}`;
+}
+
+function loadResolvedState() {
+  resolvedIds = new Set();
+  const paper = getCurrentPaper();
+  if (!paper || !currentMethod) return;
+  const method = paper.methods[currentMethod];
+  if (!method) return;
+  method.comments.forEach(c => {
+    if (localStorage.getItem(resolvedStorageKey(c.id)) === '1') resolvedIds.add(c.id);
+  });
+}
+
+function getResolvedCount(comments) {
+  return comments.filter(c => resolvedIds.has(c.id)).length;
+}
+
+function isHiddenByFilter(c) {
+  return showOnlyOpen && resolvedIds.has(c.id);
+}
+
+function getVisibleComments(comments) {
+  if (!showOnlyOpen) return comments;
+  return comments.filter(c => !resolvedIds.has(c.id));
+}
+
+function typesetElement(el) {
+  if (!window.MathJax || typeof MathJax.typesetPromise !== 'function') return;
+  typesetQueue = typesetQueue.then(() => {
+    MathJax.typesetClear([el]);
+    return MathJax.typesetPromise([el]);
+  }).catch(err => console.warn('MathJax:', err));
+}
+
+function renderMarkdownWithMath(text) {
+  const mathStore = [];
+  let processed = text.replace(/\$\$([\s\S]+?)\$\$/g, (match) => {
+    mathStore.push(match);
+    return `%%MATH_${mathStore.length - 1}%%`;
+  });
+  processed = processed.replace(/\$([^\$]+?)\$/g, (match) => {
+    mathStore.push(match);
+    return `%%MATH_${mathStore.length - 1}%%`;
+  });
+  processed = processed.replace(/\\\[[\s\S]+?\\\]/g, (match) => {
+    mathStore.push(match);
+    return `%%MATH_${mathStore.length - 1}%%`;
+  });
+  processed = processed.replace(/\\\([\s\S]+?\\\)/g, (match) => {
+    mathStore.push(match);
+    return `%%MATH_${mathStore.length - 1}%%`;
+  });
+  let html = marked.parse(processed);
+  html = html.replace(/%%MATH_(\d+)%%/g, (_, idx) => mathStore[parseInt(idx)]);
+  return html;
+}
+
+async function init() {
+  // Try /data/index.json (serve mode) then data/index.json (static mode)
+  let resp;
+  try {
+    resp = await fetch('/data/index.json');
+    if (!resp.ok) throw new Error('not found');
+  } catch {
+    resp = await fetch('data/index.json');
+  }
+  INDEX = await resp.json();
+  buildPaperSelect();
+  if (INDEX.papers.length > 0) {
+    currentPaperSlug = INDEX.papers[0].slug;
+    await loadPaper(currentPaperSlug);
+    buildMethodTabs();
+    render();
+  }
+}
+
+async function loadPaper(slug) {
+  if (paperCache[slug]) return paperCache[slug];
+  let resp;
+  try {
+    resp = await fetch(`/data/${slug}.json`);
+    if (!resp.ok) throw new Error('not found');
+  } catch {
+    resp = await fetch(`data/${slug}.json`);
+  }
+  const data = await resp.json();
+  paperCache[slug] = data;
+  return data;
+}
+
+function getCurrentPaper() {
+  return paperCache[currentPaperSlug] || null;
+}
+
+function buildPaperSelect() {
+  const sel = document.getElementById('paper-select');
+  INDEX.papers.forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = p.slug;
+    opt.textContent = p.title.length > 70 ? p.title.slice(0, 70) + '...' : p.title;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', async () => {
+    currentPaperSlug = sel.value;
+    activeCommentId = null;
+    renderedPaperSlug = null;
+    if (isMobile()) switchMobilePanel('paper');
+    await loadPaper(currentPaperSlug);
+    buildMethodTabs();
+    render();
+  });
+}
+
+function getMethodKeys(paper) {
+  if (!paper) return [];
+  const keys = Object.keys(paper.methods);
+  keys.sort((a, b) => {
+    let ia = METHOD_ORDER.indexOf(a), ib = METHOD_ORDER.indexOf(b);
+    if (ia === -1) ia = 999;
+    if (ib === -1) ib = 999;
+    return ia - ib || a.localeCompare(b);
+  });
+  return keys;
+}
+
+function hasGroundTruth(paper) {
+  return paper && paper.methods && !!paper.methods.ground_truth;
+}
+
+function buildMethodTabs() {
+  const container = document.getElementById('method-tabs');
+  container.innerHTML = '';
+  const paper = getCurrentPaper();
+  if (!paper) return;
+  const keys = getMethodKeys(paper);
+  if (keys.length > 0 && (!currentMethod || !paper.methods[currentMethod])) {
+    currentMethod = keys[0];
+  }
+  keys.forEach(key => {
+    const tab = document.createElement('button');
+    tab.className = 'method-tab' + (key === currentMethod ? ' active' : '');
+    const comments = paper.methods[key].comments;
+    const count = comments.length;
+    const resolvedCount = (key === currentMethod) ? getResolvedCount(comments) : 0;
+    const openCount = count - resolvedCount;
+    const badgeTitle = resolvedCount > 0 ? `${openCount} open, ${resolvedCount} resolved` : '';
+    const badgeText = resolvedCount > 0 ? `${openCount}/${count}` : `${count}`;
+    let countLabel;
+    if (hasSeverityData(comments)) {
+      const mc = comments.filter(c => c.severity === 'major').length;
+      const modc = comments.filter(c => c.severity === 'moderate').length;
+      const mic = comments.filter(c => c.severity === 'minor').length;
+      countLabel = `<span class="tab-count" title="${badgeTitle || `${mc} major, ${modc} moderate, ${mic} minor`}">${badgeText}</span>`;
+    } else {
+      countLabel = `<span class="tab-count" title="${badgeTitle}">${badgeText}</span>`;
+    }
+    tab.innerHTML = `${escapeHtml(paper.methods[key].label)}${countLabel}`;
+    tab.addEventListener('click', () => {
+      currentMethod = key;
+      activeCommentId = null;
+      render();
+    });
+    container.appendChild(tab);
+  });
+}
+
+function render() {
+  const paper = getCurrentPaper();
+  if (!paper) return;
+  const paperChanged = renderedPaperSlug !== currentPaperSlug;
+  loadResolvedState();
+  buildMethodTabs();
+  renderMetrics();
+  renderLegend();
+
+  if (paperChanged) {
+    renderPaperContent();
+    renderedPaperSlug = currentPaperSlug;
+    typesetElement(document.getElementById('paper-panel'));
+  }
+
+  updatePaperHighlights();
+  renderComments();
+  const _m = paper && paper.methods[currentMethod];
+  if (_m) updateMobileNavBadge(getVisibleComments(_m.comments).length);
+}
+
+function renderLegend() {
+  const el = document.getElementById('legend');
+  const paper = getCurrentPaper();
+  const method = paper && paper.methods[currentMethod];
+  const isGt = currentMethod === 'ground_truth';
+  const hasGt = hasGroundTruth(paper);
+  const useSeverity = method && hasSeverityData(method.comments);
+
+  if (useSeverity && (isGt || !hasGt)) {
+    el.innerHTML = `
+      <span class="legend-item"><span class="legend-swatch" style="background:#fef2f2;border-left:3px solid #dc2626"></span>Major</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#fffbeb;border-left:3px solid #d97706"></span>Moderate</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#f0f9ff;border-left:3px solid #0284c7"></span>Minor</span>
+    `;
+  } else if (isGt || !hasGt) {
+    el.innerHTML = `
+      <span class="legend-item"><span class="legend-swatch" style="background:var(--accent-light);border-left:3px solid var(--accent)"></span>Comment</span>
+    `;
+  } else {
+    el.innerHTML = `
+      <span class="legend-item"><span class="legend-swatch" style="background:var(--green-light);border-left:3px solid var(--green)"></span>Predicted + Refine</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:var(--accent-light);border-left:3px solid var(--accent)"></span>Predicted only</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:var(--orange-light);border-left:3px solid var(--orange)"></span>Refine only</span>
+    `;
+  }
+}
+
+function renderMetrics() {
+  const bar = document.getElementById('metrics-bar');
+  const paper = getCurrentPaper();
+  if (!paper) { bar.innerHTML = ''; return; }
+  const method = paper.methods[currentMethod];
+  if (!method) { bar.innerHTML = ''; return; }
+  const m = method.metrics;
+  const comments = method.comments;
+
+  let parts = [];
+
+  // Model info (from method-level data)
+  if (method.model) {
+    parts.push(`<span class="metric">Model <strong>${escapeHtml(method.model)}</strong></span>`);
+  }
+  if (method.prompt_tokens !== undefined) {
+    const totalTokens = (method.prompt_tokens + method.completion_tokens).toLocaleString();
+    parts.push(`<span class="metric">Tokens <strong>${totalTokens}</strong></span>`);
+  }
+  if (method.cost_usd !== undefined) {
+    parts.push(`<span class="metric">Cost <strong>$${method.cost_usd.toFixed(2)}</strong></span>`);
+  }
+  if (parts.length > 0) {
+    parts.push(`<span class="metric-divider"></span>`);
+  }
+
+  // Comment count — with severity breakdown if available
+  const resolvedCount = getResolvedCount(comments);
+  const openCount = comments.length - resolvedCount;
+  const openLabel = resolvedCount > 0 ? ` <span style="color:var(--text-muted);font-weight:400">(${openCount} open)</span>` : '';
+  if (hasSeverityData(comments)) {
+    const counts = { major: 0, moderate: 0, minor: 0 };
+    comments.forEach(c => { if (counts[c.severity] !== undefined) counts[c.severity]++; });
+    parts.push(`<span class="metric"><strong>${comments.length}</strong> issues${openLabel}</span>`);
+    parts.push(`<span class="metric"><span class="badge major" style="font-size:10px">${counts.major}</span> <span class="badge moderate" style="font-size:10px">${counts.moderate}</span> <span class="badge minor" style="font-size:10px">${counts.minor}</span></span>`);
+  } else {
+    parts.push(`<span class="metric"><strong>${comments.length}</strong> comments${openLabel}</span>`);
+  }
+
+  if (!m) {
+    bar.innerHTML = parts.join('');
+    return;
+  }
+
+  if (m.num_predicted !== undefined) {
+    parts.push(`<span class="metric">Predicted <strong>${m.num_predicted}</strong></span>`);
+  }
+  if (m.num_ground_truth !== undefined) {
+    parts.push(`<span class="metric">Refine <strong>${m.num_ground_truth}</strong></span>`);
+  }
+  parts.push(`<span class="metric-divider"></span>`);
+  if (m.recall_llm !== undefined) {
+    parts.push(`<span class="metric">LLM Recall <strong>${(m.recall_llm * 100).toFixed(1)}%</strong></span>`);
+  }
+  if (m.recall_llm_wide !== undefined) {
+    parts.push(`<span class="metric">Wide Recall <strong>${(m.recall_llm_wide * 100).toFixed(1)}%</strong></span>`);
+  }
+  parts.push(`<span class="metric">Loc Recall <strong>${(m.location_recall * 100).toFixed(1)}%</strong></span>`);
+  if (m.location_recall_5 !== undefined) {
+    parts.push(`<span class="metric">Loc\u00b15 <strong>${(m.location_recall_5 * 100).toFixed(1)}%</strong></span>`);
+  }
+  parts.push(`<span class="metric-divider"></span>`);
+  parts.push(`<span class="metric">Precision <strong>${(m.precision * 100).toFixed(1)}%</strong></span>`);
+  parts.push(`<span class="metric">F1 <strong>${(m.f1 * 100).toFixed(1)}%</strong></span>`);
+  if (m.cost_usd !== undefined) {
+    parts.push(`<span class="metric-divider"></span>`);
+    parts.push(`<span class="metric">Cost <strong>$${m.cost_usd.toFixed(2)}</strong></span>`);
+  }
+  bar.innerHTML = parts.join('');
+}
+
+function getCommentParaIndices(method, respectFilter = false) {
+  const indices = new Set();
+  if (!method) return indices;
+  method.comments.forEach(c => {
+    if (respectFilter && isHiddenByFilter(c)) return;
+    if (c.paragraph_index != null) indices.add(c.paragraph_index);
+  });
+  return indices;
+}
+
+function getGtParaIndices(paper) {
+  return getCommentParaIndices(paper.methods.ground_truth);
+}
+
+function renderPaperContent() {
+  const panel = document.getElementById('paper-panel');
+  const paper = getCurrentPaper();
+  let html = '<div class="paper-panel-inner">';
+  paper.paragraphs.forEach(p => {
+    const cleanText = p.text
+      .replace(/\[([^\]]*)\]\(#page-[^)]+\)/g, '$1')
+      .replace(/\\\(/g, '(')
+      .replace(/\\\)/g, ')');
+    const rendered = renderMarkdownWithMath(cleanText);
+    html += `<div class="para" id="para-${p.index}" data-idx="${p.index}">
+      <span class="para-idx">${p.index}</span>
+      ${rendered}
+    </div>`;
+  });
+  html += '</div>';
+  panel.innerHTML = html;
+}
+
+function getSeverityForPara(method, idx) {
+  if (!method) return null;
+  const severityOrder = ['major', 'moderate', 'minor'];
+  let best = null;
+  method.comments.forEach(c => {
+    if (isHiddenByFilter(c)) return;
+    if (c.paragraph_index === idx && c.severity) {
+      if (!best || severityOrder.indexOf(c.severity) < severityOrder.indexOf(best)) {
+        best = c.severity;
+      }
+    }
+  });
+  return best;
+}
+
+function updatePaperHighlights() {
+  const panel = document.getElementById('paper-panel');
+  const paper = getCurrentPaper();
+  const method = paper.methods[currentMethod];
+  const commentIndices = getCommentParaIndices(method, true);
+  const hasGt = hasGroundTruth(paper);
+  const gtIndices = hasGt ? getGtParaIndices(paper) : new Set();
+  const isGt = currentMethod === 'ground_truth';
+  const useSeverity = method && hasSeverityData(method.comments);
+
+  panel.querySelectorAll('.para').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    const hasComment = commentIndices.has(idx);
+    const hasGtMatch = gtIndices.has(idx);
+    const isHighlight = activeCommentId != null && method && method.comments.some(
+      c => c.id === activeCommentId && c.paragraph_index === idx
+    );
+
+    el.className = 'para';
+    if (isHighlight) el.classList.add('highlight');
+    else if (!isGt && hasComment && hasGtMatch) el.classList.add('has-gt-match');
+    else if (!isGt && !hasComment && hasGtMatch) el.classList.add('gt-only');
+    else if (hasComment && useSeverity) {
+      const sev = getSeverityForPara(method, idx);
+      if (sev) el.classList.add('severity-' + sev);
+      else el.classList.add('has-comment');
+    }
+    else if (hasComment) el.classList.add('has-comment');
+  });
+
+  panel.querySelectorAll('.para.has-comment, .para.has-gt-match, .para.severity-major, .para.severity-moderate, .para.severity-minor').forEach(el => {
+    el.onclick = () => {
+      const idx = parseInt(el.dataset.idx);
+      const comment = method.comments.find(c => c.paragraph_index === idx);
+      if (comment) {
+        activeCommentId = comment.id;
+        render();
+        if (isMobile()) switchMobilePanel('comments');
+        const card = document.getElementById('card-' + comment.id);
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    };
+  });
+}
+
+function hasSeverityData(comments) {
+  return comments.some(c => c.severity);
+}
+
+function renderComments() {
+  const panel = document.getElementById('comment-panel');
+  const paper = getCurrentPaper();
+  const method = paper.methods[currentMethod];
+  if (!method) { panel.innerHTML = '<div class="empty-state">No data for this method.</div>'; return; }
+
+  const allComments = method.comments;
+  const resolvedCount = getResolvedCount(allComments);
+  const visibleComments = getVisibleComments(allComments);
+
+  // Filter bar
+  const filterBarHtml = `<div class="comment-filter-bar">
+    <span class="filter-label">Show:</span>
+    <div class="filter-toggle">
+      <button data-filter="all" class="${!showOnlyOpen ? 'active' : ''}">All</button>
+      <button data-filter="open" class="${showOnlyOpen ? 'active' : ''}">Open</button>
+    </div>
+    ${resolvedCount > 0 ? `<span class="filter-resolved-count">${resolvedCount} resolved</span>` : ''}
+  </div>`;
+
+  let html = filterBarHtml;
+  html += '<div class="comment-panel-content">';
+
+  if (method.overall_feedback) {
+    html += `<div class="overall-feedback"><h3>Overall Feedback</h3>${renderMarkdownWithMath(method.overall_feedback)}</div>`;
+  }
+
+  if (visibleComments.length === 0) {
+    html += `<div class="empty-state">${allComments.length === 0 ? 'No comments from this method.' : 'All issues resolved.'}</div>`;
+  } else if (hasSeverityData(allComments)) {
+    // Group by severity tier
+    const tiers = ['major', 'moderate', 'minor'];
+    const tierLabels = { major: 'Major Issues', moderate: 'Moderate Issues', minor: 'Minor Issues' };
+    const tierColors = { major: '#991b1b', moderate: '#92400e', minor: '#075985' };
+
+    tiers.forEach(tier => {
+      const tierComments = visibleComments.filter(c => c.severity === tier);
+      if (tierComments.length > 0) {
+        html += `<div class="section-label" style="color:${tierColors[tier]}">${tierLabels[tier]} (${tierComments.length})</div>`;
+        tierComments.forEach(c => { html += renderCommentCard(c); });
+      }
+    });
+
+    // Any comments without a recognized severity
+    const other = visibleComments.filter(c => !tiers.includes(c.severity));
+    if (other.length > 0) {
+      html += `<div class="section-label">Other (${other.length})</div>`;
+      other.forEach(c => { html += renderCommentCard(c); });
+    }
+  } else {
+    // Fallback: group by located / unlocated
+    const located = visibleComments.filter(c => c.paragraph_index != null);
+    const unlocated = visibleComments.filter(c => c.paragraph_index == null);
+    located.sort((a, b) => a.paragraph_index - b.paragraph_index);
+
+    if (located.length > 0) {
+      html += `<div class="section-label">Comments (${located.length})</div>`;
+      located.forEach(c => { html += renderCommentCard(c); });
+    }
+    if (unlocated.length > 0) {
+      html += `<div class="section-label">Unlocated (${unlocated.length})</div>`;
+      unlocated.forEach(c => { html += renderCommentCard(c); });
+    }
+  }
+  
+  html += '</div>';
+
+  panel.innerHTML = html;
+  typesetElement(panel);
+
+  panel.querySelectorAll('.filter-toggle button').forEach(btn => {
+    btn.onclick = () => {
+      showOnlyOpen = btn.dataset.filter === 'open';
+      render();
+    };
+  });
+
+  panel.querySelectorAll('.resolve-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const commentId = btn.dataset.resolveId;
+      if (resolvedIds.has(commentId)) {
+        resolvedIds.delete(commentId);
+        localStorage.removeItem(resolvedStorageKey(commentId));
+      } else {
+        resolvedIds.add(commentId);
+        localStorage.setItem(resolvedStorageKey(commentId), '1');
+      }
+      render();
+    };
+  });
+
+  panel.querySelectorAll('.comment-card').forEach(card => {
+    card.classList.toggle('active', card.dataset.id === activeCommentId);
+    card.onclick = () => {
+      const id = card.dataset.id;
+      const comment = method.comments.find(c => c.id === id);
+      activeCommentId = id;
+      render();
+      if (comment && comment.paragraph_index != null) {
+        if (isMobile()) switchMobilePanel('paper');
+        const paraEl = document.getElementById('para-' + comment.paragraph_index);
+        if (paraEl) paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      if (!isMobile()) {
+        const cardEl = document.getElementById('card-' + id);
+        if (cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    };
+  });
+}
+
+function renderCommentCard(c) {
+  const isResolved = resolvedIds.has(c.id);
+  const paraLink = c.paragraph_index != null
+    ? `<span class="para-link">\u00b6 ${c.paragraph_index}</span>`
+    : '<span class="para-link unlocated">unlocated</span>';
+
+  const quoteText = c.quote || '';
+  const explanationText = c.explanation || c.message || '';
+
+  let badges = '';
+  if (c.severity) badges += `<span class="badge ${c.severity}">${c.severity}</span>`;
+
+  const resolveBtn = `<button class="resolve-btn${isResolved ? ' is-resolved' : ''}" data-resolve-id="${c.id}" title="${isResolved ? 'Mark as open' : 'Mark as resolved'}">✓</button>`;
+
+  return `<div class="comment-card${isResolved ? ' resolved' : ''}" id="card-${c.id}" data-id="${c.id}">
+    <div class="card-header">
+      <span class="card-title">${escapeHtml(c.title)}</span>
+      ${badges}
+      ${resolveBtn}
+    </div>
+    ${quoteText ? `<div class="quote">${renderMarkdownWithMath(wrapBareLaTeX(quoteText))}</div>` : ''}
+    ${explanationText ? `<div class="explanation">${renderMarkdownWithMath(explanationText)}</div>` : ''}
+    ${paraLink}
+  </div>`;
+}
+
+function wrapBareLaTeX(text) {
+  if (!text) return text;
+  if (text.includes('$')) return text;
+  if (/\\[a-zA-Z]/.test(text)) {
+    if (text.includes('&')) return '$$\\begin{aligned}' + text + '\\end{aligned}$$';
+    return '$' + text + '$';
+  }
+  return text;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

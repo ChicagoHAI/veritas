@@ -7,18 +7,16 @@ paper) or a *reviewer* comment (a technical / reproducibility finding from an
 LLM pass). Comments are anchored to paper paragraphs by fuzzy quote matching,
 then rendered into a single self-contained side-by-side HTML viewer.
 
-The paragraph segmentation and fuzzy quote-anchoring (``split_into_paragraphs``,
-``_normalize_for_match``, ``_quote_coverage``, ``locate_comment_in_document``)
-are ported from OpenAIReview (``src/reviewer/utils.py``), adapted to veritas's
-data model.
+Paper parsing (``veritas.core.paper_parse``) and the segmentation + fuzzy
+quote-anchoring (``split_into_paragraphs`` / ``locate_comment_in_document``,
+imported from ``veritas.review_engine.utils``) come from the vendored
+OpenAIReview engine — single source of truth, re-exported here for callers/tests.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -77,98 +75,29 @@ class Comment:
 
 
 # -- Paper text -> paragraphs ----------------------------------------------
+#
+# Segmentation + fuzzy anchoring now come from the vendored OpenAIReview engine
+# (single source of truth), re-exported here so existing call sites/tests keep
+# importing them from this module.
+from veritas.review_engine.utils import (  # noqa: E402
+    locate_comment_in_document,
+    split_into_paragraphs,
+)
+
 
 def extract_paper_text(pdf_path: Path) -> str:
-    """Extract plain text from a PDF (deterministic, no LLM/network).
+    """Return the paper as markdown text via the vendored engine (no OCR).
 
-    Uses pdfplumber. Returns ``""`` if extraction is unavailable or fails — the
-    caller then renders comments without paragraph anchoring (graceful degrade).
+    Layout-aware markdown gives fine-grained, heading-aware paragraphs for
+    born-digital papers without needing Tesseract/OCR. Returns ``""`` on
+    failure so the caller renders comments unanchored (graceful degrade).
     """
+    from veritas.core.paper_parse import parse_paper_markdown
     try:
-        import pdfplumber  # type: ignore
+        _title, md = parse_paper_markdown(Path(pdf_path), ocr=False)
+        return md or ""
     except Exception:
         return ""
-    parts: List[str] = []
-    try:
-        with pdfplumber.open(str(pdf_path)) as pdf:
-            for page in pdf.pages:
-                parts.append(page.extract_text() or "")
-    except Exception:
-        return ""
-    return "\n\n".join(parts)
-
-
-def split_into_paragraphs(text: str, min_chars: int = 100) -> List[str]:
-    """Split text into paragraphs, merging short ones forward. (from OpenAIReview)"""
-    raw = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    paragraphs: List[str] = []
-    carry = ""
-    for p in raw:
-        if carry:
-            p = carry + "\n\n" + p
-            carry = ""
-        if len(p) < min_chars:
-            carry = p
-        else:
-            paragraphs.append(p)
-    if carry:
-        if paragraphs:
-            paragraphs[-1] = paragraphs[-1] + "\n\n" + carry
-        else:
-            paragraphs.append(carry)
-    return paragraphs
-
-
-def _normalize_for_match(text: str) -> str:
-    """Normalize text for quote-to-paragraph matching. (from OpenAIReview)"""
-    text = text.lower()
-    text = text.replace("<br>", " ").replace("|", " ")
-    text = text.replace("*", "").replace("_", "")
-    text = text.replace("’", "'")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def _quote_coverage(quote: str, window: str) -> float:
-    """Fraction of *quote* covered by matching blocks in *window*. (from OpenAIReview)"""
-    if not quote:
-        return 0.0
-    sm = SequenceMatcher(None, quote, window, autojunk=False)
-    matched = sum(block.size for block in sm.get_matching_blocks())
-    return matched / len(quote)
-
-
-def locate_comment_in_document(
-    quote: str, paragraphs: List[str], threshold: float = 0.3
-) -> Optional[int]:
-    """Best-matching paragraph index for *quote*, or None. (from OpenAIReview)"""
-    if not quote or not paragraphs:
-        return None
-    quote_norm = _normalize_for_match(quote)[:1000]
-    if not quote_norm:
-        return None
-    best_idx: Optional[int] = None
-    best_score = 0.0
-    for i, para in enumerate(paragraphs):
-        para_norm = _normalize_for_match(para)
-        if quote_norm in para_norm:
-            return i
-        if len(para_norm) <= len(quote_norm) + 200:
-            windows = [para_norm]
-        else:
-            window_size = min(len(para_norm), max(len(quote_norm) + 200, 400))
-            step = max(window_size // 2, 100)
-            windows = [
-                para_norm[start: start + window_size]
-                for start in range(0, len(para_norm) - window_size + 1, step)
-            ]
-            if (len(para_norm) - window_size) % step:
-                windows.append(para_norm[-window_size:])
-        score = max(_quote_coverage(quote_norm, w) for w in windows)
-        if score > best_score:
-            best_score = score
-            best_idx = i
-    return best_idx if best_score >= threshold else None
 
 
 def anchor_comments(comments: List[Comment], paragraphs: List[str]) -> None:
