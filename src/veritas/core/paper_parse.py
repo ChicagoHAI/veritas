@@ -13,8 +13,26 @@ PyMuPDF text, then to an empty string (callers then render unanchored).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Tuple
+
+# pymupdf4llm emits placeholder markers for images/vector graphics it omits, e.g.
+# "==> picture [255 x 238] intentionally omitted <==", plus image links and HR
+# noise. These are ugly in the rendered viewer, so strip them from the markdown.
+_ARTIFACT_PATTERNS = [
+    re.compile(r"^.*?==>.*?<==.*$", re.MULTILINE),      # ==> ... intentionally omitted <==
+    re.compile(r"!\[[^\]]*\]\([^)]*\)"),                # ![alt](data:...) image links
+    re.compile(r"^\s*-{3,}\s*$", re.MULTILINE),         # bare horizontal rules
+]
+
+
+def _clean_markdown(md: str) -> str:
+    """Strip pymupdf4llm artifacts and collapse the blank lines they leave."""
+    for pat in _ARTIFACT_PATTERNS:
+        md = pat.sub("", md)
+    md = re.sub(r"\n{3,}", "\n\n", md)  # collapse runs of blank lines
+    return md.strip()
 
 
 def _title_from_markdown(md: str) -> Optional[str]:
@@ -51,7 +69,8 @@ def parse_paper_markdown(
     try:
         import pymupdf4llm
         md = pymupdf4llm.to_markdown(str(pdf_path), use_ocr=False)
-        if md and md.strip():
+        md = _clean_markdown(md or "")
+        if md:
             return _title_from_markdown(md), md
     except Exception as e:
         print(f"  Note: pymupdf4llm parse failed ({e}); falling back to plain text.")

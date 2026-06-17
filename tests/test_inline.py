@@ -102,10 +102,21 @@ def test_build_claim_comments_from_verdicts_severity():
 
 
 def test_build_claim_comments_uses_provenance_quote_fallback():
-    cc = build_claim_comments(_claims())  # no assessments/verdicts
+    cc = build_claim_comments(_claims(), drop_uninformative=False)  # no assessments/verdicts
     # C1 has a provenance quote; C2 falls back to its description.
     assert cc[0].quote == "we observe a 12 percent reduction in equality"
     assert cc[1].quote == "bootstrap B=2000"
+
+
+def test_build_claim_comments_drops_uninformative_claims():
+    # Product view: no assessments/verdicts -> nothing useful to show.
+    assert build_claim_comments(_claims()) == []
+    # not_attempted / not_assessable are dropped; informative ones kept.
+    from veritas.core.models.paper_claims import ClaimVerdict
+    verdicts = [ClaimVerdict(claim_id="C1", status="match", rationale="ok"),
+                ClaimVerdict(claim_id="C2", status="not_attempted", rationale="-")]
+    cc = build_claim_comments(_claims(), verdicts=verdicts)
+    assert len(cc) == 1 and cc[0].claim_id == "C1" and cc[0].verified_by_run is True
 
 
 # -- reviewer parsing -------------------------------------------------------
@@ -134,7 +145,7 @@ def test_parse_reviewer_comments_tolerates_fence():
 
 def test_render_viewer_embeds_data_and_is_self_contained():
     paras = split_into_paragraphs(TEXT)
-    comments = build_claim_comments(_claims())
+    comments = build_claim_comments(_claims(), drop_uninformative=False)
     anchor_comments(comments, paras)
     html = render_viewer("My Paper", "sub", paras, comments)
     assert "<!DOCTYPE html>" in html

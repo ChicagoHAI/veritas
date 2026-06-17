@@ -45,6 +45,10 @@ class Comment:
     severity: CommentSeverity = "moderate"
     paragraph_index: Optional[int] = None
     claim_id: Optional[str] = None
+    # True when veritas actually EXECUTED the code to back this comment (run-mode
+    # replication verdicts). Drives the "Verified by running" badge; all comments
+    # otherwise render identically regardless of source (OpenAIReview vs claims).
+    verified_by_run: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -55,6 +59,7 @@ class Comment:
             "category": self.category,
             "severity": self.severity,
             "paragraph_index": self.paragraph_index,
+            "verified_by_run": self.verified_by_run,
         }
         if self.claim_id is not None:
             d["claim_id"] = self.claim_id
@@ -71,6 +76,7 @@ class Comment:
             severity=data.get("severity", "moderate"),
             paragraph_index=data.get("paragraph_index"),
             claim_id=data.get("claim_id"),
+            verified_by_run=bool(data.get("verified_by_run", False)),
         )
 
 
@@ -144,11 +150,20 @@ def build_claim_comments(
     claims: PaperClaims,
     assessments: Optional[List[ClaimAssessment]] = None,
     verdicts: Optional[List[ClaimVerdict]] = None,
+    drop_uninformative: bool = True,
 ) -> List[Comment]:
-    """Build one comment per claim from its read-mode assessment or run-mode verdict."""
+    """Build one claim-anchored comment per *informative* claim.
+
+    ``drop_uninformative`` (default True, product-facing): skip claims veritas
+    couldn't speak to — run-mode ``not_attempted`` / ``not_applicable`` and
+    read-mode ``not_assessable`` — so the demo shows only useful comments.
+    Comments carry ``verified_by_run=True`` when backed by actual execution.
+    """
     out: List[Comment] = []
     a_by_id = {a.claim_id: a for a in (assessments or [])}
     v_by_id = {v.claim_id: v for v in (verdicts or [])}
+    SKIP_STATUS = {"not_attempted", "not_applicable"}
+    SKIP_SUPPORT = {"not_assessable"}
 
     for claim in claims.claims:
         a = a_by_id.get(claim.id)
@@ -159,10 +174,11 @@ def build_claim_comments(
         if not quote:
             quote = _claim_quote(claim)
 
-        # Category distinguishes veritas's lenses in the viewer: read-mode
-        # reproducibility assessments vs run-mode execution/replication verdicts.
+        verified_by_run = False
         if a is not None:
             level = a.support_level
+            if drop_uninformative and level in SKIP_SUPPORT:
+                continue
             severity = _SUPPORT_SEVERITY.get(level, "moderate")
             title = f"[{claim.id}] {level.replace('_', ' ')} · risk: {a.reproducibility_risk}"
             expl = a.rationale or ""
@@ -173,8 +189,10 @@ def build_claim_comments(
             category = "reproducibility"
         elif v is not None:
             status = v.status
+            if drop_uninformative and status in SKIP_STATUS:
+                continue
             severity = _VERDICT_SEVERITY.get(status, "moderate")
-            title = f"[{claim.id}] replication: {_VERDICT_LABEL.get(status, status)}"
+            title = f"[{claim.id}] {_VERDICT_LABEL.get(status, status)}"
             expl = v.rationale or ""
             # Surface the produced-vs-paper values the verifier extracted.
             struct = v.structured or {}
@@ -183,7 +201,10 @@ def build_claim_comments(
             if rep is not None or pap is not None:
                 expl += f"\n\nReplicated: `{rep}`  ·  Paper: `{pap}`"
             category = "replication"
+            verified_by_run = True  # a verdict means the code was executed
         else:
+            if drop_uninformative:
+                continue
             severity = "minor"
             title = f"[{claim.id}] no verdict"
             expl = "This claim was extracted but not assessed."
@@ -199,6 +220,7 @@ def build_claim_comments(
             category=category,
             severity=severity,
             claim_id=claim.id,
+            verified_by_run=verified_by_run,
         ))
     return out
 
