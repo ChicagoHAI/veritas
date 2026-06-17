@@ -111,6 +111,16 @@ fi
 uv pip list > {{ replication_dir }}/installed_packages.txt 2>&1
 ```
 
+**Non-Python code is in scope too.** This environment can run other languages —
+don't skip a claim just because its code isn't Python:
+- **MATLAB `.m` files** → run them with **GNU Octave** (preinstalled):
+  `cd <dir> && octave-cli --no-gui --norc script.m` (Octave runs almost all
+  plain numerical MATLAB code unmodified; `parfor` runs serially). Toolbox
+  functions may need `pkg load statistics` (etc.) at the top.
+- **R `.R` / `.Rmd`** → `Rscript file.R` (R + common packages are preinstalled).
+Attempt every claim's code path you reasonably can; only leave a claim
+unexercised if it genuinely cannot run here, and say why.
+
 ## How to Fix Issues
 
 When something fails, actively resolve it:
