@@ -173,22 +173,43 @@ Populate `structured`::
 {% elif claim.type == "figure" %}
 **Figure claim** — read the produced figure file (you have multimodal Read access). Assess structural match against the claim's described figure.
 
-- `match` — produced figure has the structural features described in the claim (panel layout, color coding, axes, key visual features).
-- `partial` — most structural features present but some missing/wrong.
-- `no_match` — produced figure does not match the description.
-- `not_attempted` — `expected_output_file` does not exist in the patched codebase.
+**Finding the produced figure — look beyond the exact expected filename.** The
+`expected_output_file` is a hint, not the only acceptable evidence. Before
+concluding the figure wasn't produced, search the patched codebase for the
+figure the claim describes, in this order:
+1. The exact `expected_output_file`.
+2. Any single produced figure with a related name/location (e.g. `figures/`,
+   `results/`, `output/`; `.pdf` / `.png` / `.svg` / `.jpg`).
+3. **The figure's constituent panels.** A multi-panel figure is often emitted as
+   separate panel files (e.g. `fig3_a.png … fig3_f.png`, or per-panel PDFs) even
+   when the combined file was never assembled. If the panels that make up the
+   claimed figure were produced, that **counts as produced** — assess the
+   structural match from the panels collectively.
+
+- `match` — the produced figure (single file or its panels together) has the
+  structural features described in the claim (panel layout, color coding, axes,
+  key visual features).
+- `partial` — most structural features present but some missing/wrong, OR the
+  panels were produced but the claimed combined/assembled figure was not.
+- `no_match` — the produced figure(s) contradict the description.
+- `not_attempted` — **no** relevant figure file or panel was produced at all
+  (the code that draws this figure did not run / emitted nothing).
 
 Populate `structured`::
 
     {
-      "file_exists": <true|false>,
-      "file_path_checked": "<absolute path you read>",
+      "file_exists": <true if the exact expected_output_file exists>,
+      "evidence_found": <true if ANY relevant figure file OR its panels exist>,
+      "file_path_checked": ["<path 1>", "<panel path 2>", ...],
       "structural_features_present": ["<feature1>", "<feature2>", ...],
       "structural_features_missing": ["<feature3>", ...],
       "structural_match": <true|false>
     }
 
-If `file_exists` is false, status MUST be `not_attempted`.
+Set status to `not_attempted` **only when `evidence_found` is false** — i.e. no
+figure and no panels were produced. If panels exist but the combined figure does
+not, prefer `partial` (the content reproduced; only the assembly is missing),
+not `not_attempted`.
 {% endif %}
 
 ## Scoring Rules
