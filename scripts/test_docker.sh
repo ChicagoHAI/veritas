@@ -38,6 +38,9 @@ assert_run "gemini CLI responds"  gemini  --version
 assert_run "pandoc responds"      pandoc  --version
 assert_run "pdflatex responds"    pdflatex --version
 
+# MATLAB-code execution (GNU Octave)
+assert_run "octave-cli responds"  octave-cli --no-gui --eval "disp(2+2)"
+
 # Python + veritas
 assert_run "python --version"     python  --version
 assert_run "veritas --help"       veritas --help
