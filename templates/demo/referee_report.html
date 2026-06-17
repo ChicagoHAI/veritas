@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replication Report — Veritas</title>
+<script>
+MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']],displayMath:[['$$','$$']],processEscapes:true},
+  options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f7f9f9; --card:#ffffff; --ink:#111827; --ink-soft:#374151; --muted:#6b7280;
+  --line:#e5e7eb; --line-strong:#d1d5db; --accent:#146c5f; --accent-dark:#0f4f48; --accent-wash:rgba(20,108,95,.08);
+  --match:#1a7f37; --match-wash:#eaf6ec; --partial:#b45309; --partial-wash:#fffbeb;
+  --nomatch:#cf222e; --nomatch-wash:#fdf0f2; --na:#6b7280; --na-wash:#f3f4f6;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.04); --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 10px 30px -12px rgba(17,24,39,.18);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;color:var(--ink);background:var(--bg);
+     line-height:1.6;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:900px;margin:0 auto;padding:34px 24px 80px;}
+
+.topline{display:flex;align-items:baseline;gap:10px;margin-bottom:4px;}
+.topline .logo{font-weight:800;font-size:15px;color:var(--accent-dark);}
+.topline .tag{font-size:11px;font-weight:700;color:#fff;background:var(--accent);border-radius:999px;padding:2px 9px;}
+h1{font-family:'Source Serif 4',Georgia,serif;font-size:1.9rem;font-weight:600;letter-spacing:-.01em;margin:6px 0 2px;}
+.sub{color:var(--muted);font-size:.82rem;margin-bottom:18px;}
+
+/* hero score card */
+.hero{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 28px;
+      box-shadow:var(--shadow);margin-bottom:20px;}
+.hero-top{display:flex;gap:26px;align-items:center;}
+.gauge{flex:0 0 auto;position:relative;width:128px;height:128px;}
+.gauge svg{transform:rotate(-90deg);}
+.gauge .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.gauge .pct .n{font-size:2rem;font-weight:800;letter-spacing:-.02em;line-height:1;}
+.gauge .pct .l{font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:3px;}
+.hero-body{flex:1;}
+.verdict-badge{display:inline-block;font-weight:700;font-size:.72rem;letter-spacing:.03em;text-transform:uppercase;
+               padding:4px 12px;border-radius:999px;color:#fff;margin-bottom:10px;}
+.bottomline{font-family:'Source Serif 4',serif;font-size:1.05rem;line-height:1.55;color:var(--ink-soft);}
+.kpis{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:14px;color:var(--muted);font-size:.82rem;}
+.kpis b{color:var(--ink);font-weight:700;}
+
+.glance{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);}
+.glance h3{font-size:.74rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:9px;}
+.bar{display:flex;height:14px;border-radius:7px;overflow:hidden;border:1px solid var(--line);}
+.bar>span{display:block;}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:.78rem;color:var(--muted);margin-top:9px;}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px;}
+.chip{font-size:.74rem;font-weight:700;padding:4px 11px;border-radius:999px;color:#fff;cursor:default;
+      position:relative;}
+
+/* section + prose cards */
+h2{font-family:'Source Serif 4',serif;font-size:1.3rem;font-weight:600;margin:30px 0 10px;}
+.prose-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+@media(max-width:760px){.prose-grid{grid-template-columns:1fr;}}
+.pcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow-sm);
+       min-width:0;}
+.pcard h4{font-size:.72rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;margin-bottom:9px;
+          display:flex;align-items:center;gap:7px;}
+.pcard h4 .d{width:8px;height:8px;border-radius:50%;}
+.pcard p{font-size:.9rem;line-height:1.62;color:var(--ink-soft);
+         overflow-wrap:break-word;word-break:normal;hyphens:auto;}
+.pcard.good h4{color:var(--match);} .pcard.good h4 .d{background:var(--match);} .pcard.good{border-top:3px solid var(--match);}
+.pcard.bad h4{color:var(--nomatch);} .pcard.bad h4 .d{background:var(--nomatch);} .pcard.bad{border-top:3px solid var(--nomatch);}
+.pcard.neutral h4{color:var(--accent-dark);} .pcard.neutral h4 .d{background:var(--accent);}
+
+/* per-claim list */
+.claim{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:10px;
+       box-shadow:var(--shadow-sm);overflow:hidden;border-left:4px solid var(--na);}
+.claim.match{border-left-color:var(--match);}
+.claim.partial{border-left-color:var(--partial);}
+.claim.no_match{border-left-color:var(--nomatch);}
+.claim summary{list-style:none;cursor:pointer;padding:14px 18px;display:flex;gap:12px;align-items:flex-start;}
+.claim summary::-webkit-details-marker{display:none;}
+.claim .cid{font-weight:800;font-size:.85rem;color:var(--ink);flex:0 0 38px;}
+.claim .cmain{flex:1;min-width:0;}
+.claim .cdesc{font-size:.9rem;line-height:1.5;color:var(--ink);overflow-wrap:break-word;}
+.claim .cmeta{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.statpill{font-size:.62rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;padding:2px 9px;border-radius:999px;}
+.statpill.match{background:var(--match-wash);color:var(--match);border:1px solid #b6dcbf;}
+.statpill.partial{background:var(--partial-wash);color:var(--partial);border:1px solid #fde68a;}
+.statpill.no_match{background:var(--nomatch-wash);color:var(--nomatch);border:1px solid #f5c2c7;}
+.statpill.not_attempted,.statpill.not_applicable{background:var(--na-wash);color:var(--na);border:1px solid var(--line-strong);}
+.tagpill{font-size:.62rem;font-weight:700;letter-spacing:.02em;text-transform:uppercase;padding:2px 8px;border-radius:999px;
+         background:var(--accent-wash);color:var(--accent-dark);}
+.tagpill.tier-headline{background:#fbeef0;color:var(--nomatch);}
+.claim .chev{flex:0 0 auto;color:var(--muted);transition:transform .15s;margin-top:2px;}
+.claim[open] .chev{transform:rotate(90deg);}
+.claim .detail{padding:0 18px 16px 18px;border-top:1px solid var(--line);margin-top:0;}
+.claim .detail .blk{margin-top:12px;}
+.claim .detail .blk h5{font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:5px;}
+.claim .detail p{font-size:.88rem;line-height:1.6;color:var(--ink-soft);overflow-wrap:break-word;word-break:break-word;}
+.cmp{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;}
+.cmp .box{flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;}
+.cmp .box .lab{font-size:.62rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+.cmp .box code{font-family:'Inter';font-size:.82rem;color:var(--ink);font-weight:600;white-space:pre-wrap;word-break:break-word;}
+.refs{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;}
+.refs code{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;background:var(--bg);border:1px solid var(--line);
+           border-radius:5px;padding:2px 7px;color:var(--ink-soft);word-break:break-all;}
+footer{margin-top:40px;color:var(--muted);font-size:.78rem;text-align:center;}
+@media print{body{background:#fff;} .claim,.pcard,.hero{box-shadow:none;} .chev{display:none;} .claim .detail{display:block!important;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline"><span class="logo">Veritas</span><span class="tag">Replication Report</span></div>
+  <h1 id="paper-title"></h1>
+  <div class="sub" id="sub"></div>
+
+  <div class="hero">
+    <div class="hero-top">
+      <div class="gauge" id="gauge"></div>
+      <div class="hero-body">
+        <span class="verdict-badge" id="verdict"></span>
+        <div class="bottomline" id="bottomline"></div>
+        <div class="kpis" id="kpis"></div>
+      </div>
+    </div>
+    <div class="glance">
+      <h3 id="glance-title"></h3>
+      <div class="bar" id="bar"></div>
+      <div class="legend" id="legend"></div>
+      <div class="chips" id="chips"></div>
+    </div>
+  </div>
+
+  <h2>Summary</h2>
+  <div class="prose-grid">
+    <div class="pcard good"><h4><span class="d"></span>What reproduced</h4><p id="what-checked"></p></div>
+    <div class="pcard bad"><h4><span class="d"></span>What did not reproduce</h4><p id="what-not"></p></div>
+  </div>
+  <div class="prose-grid" style="margin-top:14px;">
+    <div class="pcard neutral"><h4><span class="d"></span>Whole-paper consistency</h4><p id="consistency"></p></div>
+    <div class="pcard neutral"><h4><span class="d"></span>Repository divergence</h4><p id="divergence"></p></div>
+  </div>
+
+  <h2>Per-claim verdicts</h2>
+  <div id="claims"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+const D=JSON.parse(document.getElementById("data").textContent);
+const STATUS_COLOR={match:"var(--match)",partial:"var(--partial)",no_match:"var(--nomatch)",
+                    not_attempted:"var(--na)",not_applicable:"var(--na)"};
+const STATUS_LABEL={match:"match",partial:"partial",no_match:"no match",
+                    not_attempted:"not attempted",not_applicable:"n/a"};
+
+/* same conservative math prettifier as inline */
+const GREEK={alpha:"\\alpha",beta:"\\beta",gamma:"\\gamma",delta:"\\delta",Delta:"\\Delta",sigma:"\\sigma",
+  lambda:"\\lambda",mu:"\\mu",rho:"\\rho",tau:"\\tau",theta:"\\theta",phi:"\\phi",omega:"\\omega"};
+function texify(t){let s=t;for(const w in GREEK)s=s.replace(new RegExp("\\b"+w+"\\b","g"),GREEK[w]+" ");
+  s=s.replace(/\b([A-Za-z])-bar\b/g,"\\bar{$1}").replace(/\^([A-Za-z0-9]+)/g,"^{$1}").replace(/_([A-Za-z0-9]+)/g,"_{$1}").replace(/ x /g," \\times ");
+  return s.replace(/\s{2,}/g," ").trim();}
+const MP=[/\(b\/c\)\*?(?:_[A-Za-z0-9]+)?/g,/\b(?:Gini|Delta[A-Za-z]*|p_conflict)_?[A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g,
+  /\b(?:sigma|lambda|gamma|beta|delta|mu|rho|tau|alpha)\b(?:\^?\d+)?(?:\s*=\s*-?\d+(?:\.\d+)?)?/g,
+  /\bDelta\s?[A-Za-z](?:_[A-Za-z0-9]+)?\b/g,/\b[A-Za-z]-bar\b(?:\s*=\s*-?\d+(?:\.\d+)?)?/g,
+  /\bG_[A-Za-z](?:\s*[-=]\s*G_[A-Za-z])?\b/g,/\bN\s*=\s*\d+\b/g];
+function pm(t){if(!t)return t;const p=[];t=t.replace(/\$\$[\s\S]+?\$\$|\$[^\$\n]+?\$|`[^`]+`/g,m=>{p.push(m);return"\x00"+(p.length-1)+"\x00";});
+  for(const x of MP)t=t.replace(x,m=>"\\("+texify(m)+"\\)");return t.replace(/\x00(\d+)\x00/g,(_,i)=>p[+i]);}
+function esc(s){return(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function md(s){return esc(s).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");}
+function rich(s){return pm(md(s));}
+
+/* header */
+const pct=Math.round(D.score.score*100);
+document.getElementById("paper-title").textContent=D.paper_title;
+document.getElementById("sub").textContent=`Mode: full · ${D.score.total_claims} claims · ${D.rows.filter(r=>r.status==='match').length} reproduced`;
+
+/* verdict color + label by score band */
+let vcolor,vlabel;
+if(pct>=70){vcolor="var(--match)";vlabel="Largely reproduced";}
+else if(pct>=40){vcolor="var(--partial)";vlabel="Partially reproduced";}
+else{vcolor="var(--nomatch)";vlabel="Not reproduced";}
+
+/* donut gauge */
+const r=54,circ=2*Math.PI*r;const off=circ*(1-D.score.score);
+document.getElementById("gauge").innerHTML=`
+  <svg width="128" height="128" viewBox="0 0 128 128">
+    <circle cx="64" cy="64" r="${r}" fill="none" stroke="#edf0f0" stroke-width="13"/>
+    <circle cx="64" cy="64" r="${r}" fill="none" stroke="${vcolor}" stroke-width="13" stroke-linecap="round"
+      stroke-dasharray="${circ}" stroke-dashoffset="${off}"/>
+  </svg>
+  <div class="pct"><span class="n" style="color:${vcolor}">${pct}%</span><span class="l">Replication</span></div>`;
+
+const vb=document.getElementById("verdict");vb.textContent=vlabel;vb.style.background=vcolor;
+document.getElementById("bottomline").innerHTML=rich(D.bottomline);
+
+/* kpis: tier breakdown */
+const h=D.score.headline,s=D.score.supporting;
+document.getElementById("kpis").innerHTML=
+  `<span>Headline <b>${h.match}/${h.match+h.partial+h.no_match+h.not_attempted}</b> matched</span>`+
+  `<span>Supporting <b>${s.match}/${s.match+s.partial+s.no_match+s.not_attempted}</b> matched</span>`+
+  `<span>Score formula <b>tier-weighted (3:2)</b></span>`;
+
+/* glance bar over statuses */
+const order=["match","partial","no_match","not_attempted"];
+const cnt={};order.forEach(k=>cnt[k]=0);
+D.rows.forEach(r=>{cnt[r.status]=(cnt[r.status]||0)+1;});
+const tot=D.rows.length;
+document.getElementById("glance-title").textContent=`Claim support at a glance (${tot} claims)`;
+const barColors={match:"var(--match)",partial:"var(--partial)",no_match:"var(--nomatch)",not_attempted:"var(--na)"};
+document.getElementById("bar").innerHTML=order.filter(k=>cnt[k]).map(k=>
+  `<span style="width:${cnt[k]/tot*100}%;background:${barColors[k]}" title="${STATUS_LABEL[k]} ${cnt[k]}"></span>`).join("");
+const legLabel={match:"matched",partial:"partial",no_match:"no match",not_attempted:"not attempted"};
+document.getElementById("legend").innerHTML=order.filter(k=>cnt[k]).map(k=>
+  `<span><i style="background:${barColors[k]}"></i>${legLabel[k]} ${cnt[k]}</span>`).join("");
+
+/* claim chips */
+document.getElementById("chips").innerHTML=D.rows.map(r=>
+  `<span class="chip" style="background:${STATUS_COLOR[r.status]}" title="${r.type} · ${STATUS_LABEL[r.status]}">${r.id}</span>`).join("");
+
+/* summary prose */
+document.getElementById("what-checked").innerHTML=rich(D.what_checked);
+document.getElementById("what-not").innerHTML=rich(D.what_not);
+document.getElementById("consistency").innerHTML=rich(D.consistency);
+document.getElementById("divergence").innerHTML=rich(D.divergence);
+
+/* per-claim */
+function fmtVal(v){ if(v==null) return "—"; if(typeof v==="object") return JSON.stringify(v,null,1); return String(v); }
+document.getElementById("claims").innerHTML=D.rows.map(r=>{
+  const st=r.structured||{};
+  let cmp="";
+  if(st.replicated_value!==undefined||st.paper_value!==undefined){
+    cmp=`<div class="blk"><h5>Value comparison</h5><div class="cmp">
+      <div class="box"><div class="lab">Paper reports</div><code>${esc(fmtVal(st.paper_value))}</code></div>
+      <div class="box"><div class="lab">Replication produced</div><code>${esc(fmtVal(st.replicated_value))}</code></div>
+    </div></div>`;
+  }
+  const refs=(r.evidence_refs||[]).length
+    ? `<div class="blk"><h5>Evidence</h5><div class="refs">${r.evidence_refs.map(x=>`<code>${esc(x)}</code>`).join("")}</div></div>`:"";
+  const openDefault=(r.tier==="headline"||r.status==="no_match")?" open":"";
+  return `<details class="claim ${r.status}"${openDefault}>
+    <summary>
+      <span class="cid">${esc(r.id)}</span>
+      <span class="cmain">
+        <span class="cdesc">${rich(r.description)}</span>
+        <span class="cmeta">
+          <span class="statpill ${r.status}">${STATUS_LABEL[r.status]}</span>
+          <span class="tagpill tier-${r.tier}">${esc(r.tier)}</span>
+          <span class="tagpill">${esc(r.type)}</span>
+        </span>
+      </span>
+      <span class="chev">▶</span>
+    </summary>
+    <div class="detail">
+      ${cmp}
+      <div class="blk"><h5>Adjudication</h5><p>${rich(r.rationale)}</p></div>
+      ${refs}
+    </div>
+  </details>`;
+}).join("");
+
+document.getElementById("footer").textContent="Generated by Veritas · execution-grounded replication · Replication Score is a tier-weighted fraction of verified claims";
+
+function typeset(){if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise();}else setTimeout(typeset,150);}
+typeset();
+</script>
+</body>
+</html>

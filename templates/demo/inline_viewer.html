@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veritas — In-line review</title>
+
+<!-- MathJax: render $...$ and \(...\) inline, $$...$$ display -->
+<script>
+MathJax = {
+  tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']], processEscapes:true },
+  options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'], ignoreHtmlClass:'no-mathjax' },
+  startup: { typeset:false }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  /* sai-web design language */
+  --bg:#ffffff; --surface:#f7f9f9; --panel:#ffffff;
+  --ink:#111827; --ink-soft:#374151; --muted:#6b7280;
+  --line:#e5e7eb; --line-strong:#d1d5db;
+  --accent:#146c5f; --accent-dark:#0f4f48; --accent-wash:rgba(20,108,95,.08);
+  --red:#800020; --red-wash:#fdf0f2;
+  --major:#cf222e; --major-wash:#fdf0f2;
+  --moderate:#b45309; --moderate-wash:#fffbeb;
+  --minor:#0f4f48; --minor-wash:#eef6f4;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.04);
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 10px 30px -12px rgba(17,24,39,.18);
+  --header-h:60px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;color:var(--ink);background:var(--surface);
+     -webkit-font-smoothing:antialiased;}
+
+/* ── Header ── */
+.topbar{height:var(--header-h);background:#fff;border-bottom:1px solid var(--line);
+        display:flex;align-items:center;gap:16px;padding:0 22px;position:sticky;top:0;z-index:30;}
+.brand{display:flex;align-items:baseline;gap:8px;}
+.brand .logo{font-weight:800;font-size:16px;color:var(--accent-dark);letter-spacing:-.02em;}
+.brand .tag{font-size:11px;font-weight:700;color:#fff;background:var(--accent);border-radius:999px;padding:2px 9px;}
+.topbar .doc{font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;
+             text-overflow:ellipsis;max-width:min(46vw,560px);}
+.topbar .spacer{flex:1;}
+.filters{display:flex;gap:6px;flex-wrap:wrap;}
+.fchip{font-size:11.5px;font-weight:700;border:1px solid var(--line);background:#fff;color:var(--muted);
+       border-radius:999px;padding:4px 11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+       transition:all .14s;}
+.fchip .dot{width:8px;height:8px;border-radius:50%;}
+.fchip:hover{border-color:var(--line-strong);color:var(--ink);}
+.fchip.off{opacity:.4;text-decoration:line-through;}
+
+/* ── Layout ── */
+.board{display:grid;grid-template-columns:minmax(0,1fr) 460px;
+       height:calc(100vh - var(--header-h));}
+.paper-pane,.comment-pane{overflow:auto;}
+.paper-pane{background:#fff;border-right:1px solid var(--line);padding:40px clamp(24px,5vw,72px) 96px;}
+.paper-inner{max-width:760px;margin:0 auto;}
+.comment-pane{background:var(--surface);}
+
+/* ── Paper title / byline ── */
+.paper-title{font-family:'Source Serif 4',Georgia,serif;font-size:clamp(1.7rem,2.6vw,2.25rem);
+             font-weight:600;line-height:1.15;letter-spacing:-.01em;margin-bottom:14px;}
+.byline{font-size:13px;color:var(--muted);line-height:1.5;border-left:3px solid var(--accent-wash);
+        padding:8px 0 8px 14px;margin-bottom:20px;}
+
+/* ── Paragraphs ── */
+.para{position:relative;border-left:3px solid transparent;border-radius:6px;padding:8px 16px;
+      margin:0 -16px 3px;font-family:'Source Serif 4',Georgia,serif;font-size:1.06rem;line-height:1.72;
+      color:var(--ink-soft);transition:background .18s,border-color .18s;}
+.para .idx{position:absolute;left:-30px;top:11px;width:24px;text-align:right;font-family:'Inter';
+           font-size:.66rem;color:var(--muted);opacity:0;transition:opacity .15s;}
+.para:hover .idx{opacity:.7;}
+.para.has{cursor:pointer;}
+.para.has:hover{background:var(--accent-wash);}
+.para h2{font-family:'Source Serif 4';font-size:1.35rem;font-weight:600;margin:22px 0 6px;color:var(--ink);}
+.para h3{font-size:1.05rem;font-weight:700;margin:16px 0 3px;color:var(--ink);font-family:'Inter';}
+.para h4{font-size:.95rem;font-weight:700;margin:12px 0 2px;color:var(--ink-soft);font-family:'Inter';}
+.para p{margin:0;}
+.para p+p{margin-top:.55em;}
+.para table{border-collapse:collapse;font-size:.8rem;margin:10px 0;display:block;overflow-x:auto;font-family:'Inter';}
+.para td,.para th{border:1px solid var(--line);padding:5px 9px;vertical-align:top;max-width:320px;}
+.para th{background:var(--surface);font-weight:600;}
+.para code{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.85em;}
+
+/* whole-paragraph fallback tint (only when quote couldn't be located) */
+.para.tint-major{background:var(--major-wash);border-left-color:var(--major);}
+.para.tint-moderate{background:var(--moderate-wash);border-left-color:var(--moderate);}
+.para.tint-minor{background:var(--minor-wash);border-left-color:var(--minor);}
+
+/* PRECISE quote highlight: a <mark> inside the paragraph */
+mark.q{background:linear-gradient(transparent 58%, var(--hl) 58%);padding:0;border-radius:2px;
+       cursor:pointer;transition:background .15s;--hl:#ffe9b0;}
+mark.q.sev-major{--hl:#ffd0d6;}
+mark.q.sev-moderate{--hl:#ffe3b0;}
+mark.q.sev-minor{--hl:#cdebe4;}
+mark.q.active{background:var(--hl);box-shadow:0 0 0 2px var(--accent);border-radius:3px;--hl:#ffe9b0;}
+mark.q.sev-major.active{--hl:#ffd0d6;}
+mark.q.sev-moderate.active{--hl:#ffe3b0;}
+mark.q.sev-minor.active{--hl:#cdebe4;}
+
+/* ── Comment pane ── */
+.cp-head{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+         padding:14px 22px;}
+.cp-head .row{display:flex;align-items:baseline;justify-content:space-between;}
+.cp-head .eyebrow{font-size:.72rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--red);}
+.cp-head .count{font-size:.78rem;color:var(--muted);font-weight:600;}
+.cp-head .loc{font-size:.72rem;color:var(--accent-dark);margin-top:3px;font-weight:600;}
+.cp-body{padding:18px 22px 64px;}
+
+.overall{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px 18px;margin-bottom:18px;
+         box-shadow:var(--shadow-sm);}
+.overall h4{font-size:.72rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--accent-dark);
+            margin-bottom:8px;}
+.overall p{font-size:.92rem;line-height:1.62;color:var(--ink-soft);}
+
+.tier-label{font-size:.7rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+            margin:18px 0 8px;display:flex;align-items:center;gap:7px;}
+.tier-label .ln{flex:1;height:1px;background:var(--line);}
+
+.card{background:#fff;border:1px solid var(--line);border-left:4px solid var(--minor);border-radius:10px;
+      padding:14px 16px;margin-bottom:10px;cursor:pointer;box-shadow:var(--shadow-sm);
+      transition:box-shadow .15s,border-color .15s,transform .1s;}
+.card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
+.card.active{box-shadow:0 0 0 2px var(--accent),var(--shadow);border-left-color:var(--accent);}
+.card.major{border-left-color:var(--major);}
+.card.moderate{border-left-color:var(--moderate);}
+.card.minor{border-left-color:var(--minor);}
+.card .chead{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;}
+.card .ctitle{flex:1;font-weight:700;font-size:.94rem;line-height:1.35;color:var(--ink);}
+.sev-badge{flex-shrink:0;font-size:.62rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;
+           padding:2px 8px;border-radius:999px;}
+.sev-badge.major{background:var(--major-wash);color:var(--major);border:1px solid #f5c2c7;}
+.sev-badge.moderate{background:var(--moderate-wash);color:var(--moderate);border:1px solid #fde68a;}
+.sev-badge.minor{background:var(--minor-wash);color:var(--minor);border:1px solid #bfe3da;}
+.card .csource{font-size:.62rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;
+               padding:2px 7px;border-radius:999px;background:var(--accent-wash);color:var(--accent-dark);
+               flex-shrink:0;}
+.card .quote{font-family:'Source Serif 4',serif;font-style:italic;font-size:.86rem;color:var(--muted);
+             line-height:1.5;border-left:2px solid var(--line-strong);padding-left:11px;margin:8px 0;}
+.card .expl{font-size:.88rem;line-height:1.6;color:var(--ink-soft);}
+.card .expl strong{color:var(--ink);}
+.card .plink{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:700;
+             color:var(--accent-dark);margin-top:9px;}
+.card .plink.unloc{color:var(--muted);font-weight:600;}
+.card .plink .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+
+/* scrollbars */
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+
+@media (max-width:900px){
+  .board{grid-template-columns:1fr;height:auto;}
+  .paper-pane,.comment-pane{height:auto;}
+  .paper-pane{border-right:none;border-bottom:1px solid var(--line);}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand"><span class="logo">Veritas</span><span class="tag">Review</span></div>
+  <div class="doc" id="doc-title"></div>
+  <div class="spacer"></div>
+  <div class="filters" id="filters"></div>
+</div>
+
+<div class="board">
+  <div class="paper-pane"><div class="paper-inner" id="paper"></div></div>
+  <div class="comment-pane">
+    <div class="cp-head">
+      <div class="row"><span class="eyebrow">Comments</span><span class="count" id="cp-count"></span></div>
+      <div class="loc" id="cp-loc"></div>
+    </div>
+    <div class="cp-body" id="panel"></div>
+  </div>
+</div>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+/* The builder substitutes the JSON payload into the <script id="data"> tag. */
+const RAW = JSON.parse(document.getElementById("data").textContent);
+
+/* ---- math prettify (client side mirror of the python pass for SAFETY:
+   the python pass already cleaned text; here we wrap plain-text math so
+   MathJax can typeset). Kept conservative. ---- */
+const GREEK = {alpha:"\\alpha",beta:"\\beta",gamma:"\\gamma",delta:"\\delta",Delta:"\\Delta",
+  sigma:"\\sigma",Sigma:"\\Sigma",lambda:"\\lambda",mu:"\\mu",rho:"\\rho",tau:"\\tau",
+  theta:"\\theta",phi:"\\phi",epsilon:"\\epsilon",omega:"\\omega"};
+function texify(tok){
+  let s=tok;
+  for(const w in GREEK){ s=s.replace(new RegExp("\\b"+w+"\\b","g"),GREEK[w]+" "); }
+  s=s.replace(/\b([A-Za-z])-bar\b/g,"\\bar{$1}");
+  s=s.replace(/\^([A-Za-z0-9]+)/g,"^{$1}");
+  s=s.replace(/_([A-Za-z0-9]+)/g,"_{$1}");
+  s=s.replace(/ x /g," \\times ");
+  return s.replace(/\s{2,}/g," ").trim();
+}
+const MATH_PATS=[
+  /\(b\/c\)\*?(?:_[A-Za-z0-9]+)?/g,
+  /\b(?:Gini|Delta[A-Za-z]*|p_conflict)_?[A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g,
+  /\b(?:sigma|lambda|gamma|beta|delta|mu|rho|tau|alpha)\b(?:\^?\d+)?(?:\s*=\s*-?\d+(?:\.\d+)?)?/g,
+  /\bDelta\s?[A-Za-z](?:_[A-Za-z0-9]+)?\b/g,
+  /\b[A-Za-z]-bar\b(?:\s*=\s*-?\d+(?:\.\d+)?)?/g,
+  /\bG_[A-Za-z](?:\s*[-=]\s*G_[A-Za-z])?\b/g,
+  /\bN\s*=\s*\d+\b/g
+];
+function prettifyMath(text){
+  if(!text) return text;
+  const prot=[];
+  text=text.replace(/\$\$[\s\S]+?\$\$|\$[^\$\n]+?\$|\\\([\s\S]+?\\\)|`[^`]+`/g,m=>{prot.push(m);return "\x00"+(prot.length-1)+"\x00";});
+  /* Wrap with \(...\) (unambiguous open/close) rather than $...$ so MathJax
+     never mis-pairs adjacent fragments in a long sentence. */
+  for(const p of MATH_PATS){ text=text.replace(p,m=>"\\("+texify(m)+"\\)"); }
+  return text.replace(/\x00(\d+)\x00/g,(_,i)=>prot[+i]);
+}
+
+/* ---- minimal markdown -> html (headings, bold, italic, links, br) ---- */
+function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function mdInline(s){
+  // Protect \(...\) math so markdown emphasis (esp. _italics_) never corrupts
+  // LaTeX subscripts like \(G_{u} - G_{e}\).
+  const m=[];
+  s=s.replace(/\\\([\s\S]+?\\\)/g,x=>{m.push(x);return "\x01"+(m.length-1)+"\x01";});
+  s=s.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+     .replace(/(?<!\*)\*(?!\*)([^*]+)\*(?!\*)/g,"<em>$1</em>")
+     .replace(/(?<![A-Za-z0-9])_([^_\n]+)_(?![A-Za-z0-9])/g,"<em>$1</em>")
+     .replace(/\[([^\]]*)\]\((?:#page-[^)]*|[^)]*)\)/g,"$1");
+  return s.replace(/\x01(\d+)\x01/g,(_,i)=>m[+i]);
+}
+
+/* ---- per-paragraph renderer with PRECISE quote highlight ----
+   For each paragraph we collect comment quote spans (char offsets computed by
+   the builder), splice <mark> tags around them, THEN run math-prettify on the
+   surrounding text segments, then markdown. */
+const byPara={};
+RAW.comments.forEach((c,i)=>{ c._i=i; if(c.paragraph_index!=null){(byPara[c.paragraph_index]=byPara[c.paragraph_index]||[]).push(c);} });
+
+function severityRank(s){return s==="major"?0:s==="moderate"?1:2;}
+
+function renderParagraphHTML(p){
+  const cs=(byPara[p.index]||[]).filter(c=>c.quote_span).sort((a,b)=>a.quote_span[0]-b.quote_span[0]);
+  const text=p.text;
+  if(!cs.length){
+    return renderTextChunk(text);
+  }
+  // Build segments with marks; avoid overlapping spans (keep first, skip overlap).
+  let out="",cursor=0;
+  let lastEnd=-1;
+  for(const c of cs){
+    let [s,e]=c.quote_span;
+    if(s<lastEnd){continue;} // overlap -> skip
+    if(s<cursor) s=cursor;
+    out+=renderTextChunk(text.slice(cursor,s));
+    const seg=text.slice(s,e);
+    out+=`<mark class="q sev-${c.severity}" data-cid="${c._i}">`+renderTextChunk(seg,true)+`</mark>`;
+    cursor=e; lastEnd=e;
+  }
+  out+=renderTextChunk(text.slice(cursor));
+  return out;
+}
+/* renderTextChunk: math-prettify then light markdown. inline=true keeps it span-level. */
+function renderTextChunk(t,inline){
+  if(!t) return "";
+  let h=prettifyMath(t);
+  if(inline){ return mdInline(esc(h)).replace(/\$([^$]+)\$/g,(m,x)=>"$"+x+"$"); }
+  // block: split on headings + blank lines
+  const lines=h.split("\n");
+  let blocks=[],buf=[];
+  const flush=()=>{ if(buf.length){const j=buf.join(" ").trim(); if(j) blocks.push("<p>"+mdInline(esc(j))+"</p>"); buf=[];} };
+  for(const ln of lines){
+    const hd=ln.match(/^(#{1,6})\s+(.*)$/);
+    if(hd){ flush(); const lv=Math.min(hd[1].length+1,4); blocks.push(`<h${lv}>`+mdInline(esc(hd[2]))+`</h${lv}>`); continue; }
+    if(ln.trim()===""){ flush(); continue; }
+    buf.push(ln);
+  }
+  flush();
+  let html=blocks.join("");
+  // un-escape $...$ so MathJax sees raw delimiters
+  return html;
+}
+
+/* ---- render paper ---- */
+document.getElementById("doc-title").textContent=RAW.title||"";
+const paperEl=document.getElementById("paper");
+let html="";
+if(RAW.title){ html+=`<h1 class="paper-title">${esc(RAW.title)}</h1>`; }
+RAW.paragraphs.forEach((p,pos)=>{
+  if(!p.text) return;
+  const cs=byPara[p.index]||[];
+  const cls=["para"];
+  if(cs.length){ cls.push("has");
+    // whole-paragraph tint ONLY if no quote could be located for any comment here
+    const anyLocated=cs.some(c=>c.quote_span);
+    if(!anyLocated){ const worst=cs.map(c=>c.severity).sort((a,b)=>severityRank(a)-severityRank(b))[0]; cls.push("tint-"+worst); }
+  }
+  html+=`<div class="${cls.join(" ")}" id="para-${p.index}" data-idx="${p.index}"><span class="idx">${p.index}</span>${renderParagraphHTML(p)}</div>`;
+});
+paperEl.innerHTML=html;
+
+/* ---- render comments ---- */
+let activeFilter=null;
+const SEVS=[["major","Major Issues"],["moderate","Moderate Issues"],["minor","Minor Issues"]];
+function srcLabel(c){ return c.comment_type==="technical"||/replication|repro/i.test(c.title)?"veritas":"review"; }
+
+function renderComments(){
+  const panel=document.getElementById("panel");
+  let h="";
+  if(RAW.overall_feedback){
+    h+=`<div class="overall"><h4>Overall Feedback</h4><p>${mdInline(esc(prettifyMath(RAW.overall_feedback)))}</p></div>`;
+  }
+  const visible=RAW.comments.filter(c=>!activeFilter||activeFilter.has(c.severity));
+  SEVS.forEach(([sev,label])=>{
+    const list=visible.filter(c=>c.severity===sev);
+    if(!list.length) return;
+    h+=`<div class="tier-label" style="color:var(--${sev==='major'?'major':sev==='moderate'?'moderate':'minor'})">${label} (${list.length})<span class="ln"></span></div>`;
+    list.forEach(c=>{ h+=cardHTML(c); });
+  });
+  panel.innerHTML=h;
+  bindCards();
+  if(window.MathJax&&MathJax.typesetPromise){ MathJax.typesetClear&&MathJax.typesetClear([panel]); MathJax.typesetPromise([panel]); }
+}
+function cardHTML(c){
+  const loc=c.paragraph_index!=null;
+  const plink=loc
+    ? `<span class="plink${c.quote_span?'':' unloc'}"><span class="dot"></span>¶${c.paragraph_index}${c.quote_span?' · quote located':' · paragraph'}</span>`
+    : `<span class="plink unloc">unanchored</span>`;
+  return `<div class="card ${c.severity}" id="card-${c._i}" data-cid="${c._i}">
+    <div class="chead">
+      <span class="ctitle">${esc(c.title)}</span>
+      <span class="csource">${srcLabel(c)}</span>
+      <span class="sev-badge ${c.severity}">${c.severity}</span>
+    </div>
+    ${c.quote?`<div class="quote">“${esc(prettifyMath(c.quote))}”</div>`:""}
+    ${c.explanation?`<div class="expl">${mdInline(esc(prettifyMath(c.explanation)))}</div>`:""}
+    ${plink}
+  </div>`;
+}
+
+let activeCid=null;
+function bindCards(){
+  document.querySelectorAll(".card").forEach(card=>{
+    card.classList.toggle("active",+card.dataset.cid===activeCid);
+    card.onclick=()=>focusComment(+card.dataset.cid,"card");
+  });
+}
+function focusComment(i,from){
+  const c=RAW.comments[i]; activeCid=i;
+  document.querySelectorAll(".card.active").forEach(e=>e.classList.remove("active"));
+  document.querySelectorAll("mark.q.active").forEach(e=>e.classList.remove("active"));
+  const card=document.getElementById("card-"+i);
+  if(card){ card.classList.add("active"); if(from!=="card") card.scrollIntoView({behavior:"smooth",block:"center"}); }
+  const mk=document.querySelector(`mark.q[data-cid="${i}"]`);
+  if(mk){ mk.classList.add("active"); if(from!=="para") mk.scrollIntoView({behavior:"smooth",block:"center"}); }
+  else if(c.paragraph_index!=null){ const pe=document.getElementById("para-"+c.paragraph_index);
+    if(pe&&from!=="para") pe.scrollIntoView({behavior:"smooth",block:"center"}); }
+}
+/* click on a highlight -> focus its comment */
+paperEl.addEventListener("click",e=>{
+  const mk=e.target.closest("mark.q"); if(mk){ focusComment(+mk.dataset.cid,"para"); return; }
+  const pa=e.target.closest(".para.has"); if(pa){ const cs=byPara[+pa.dataset.idx]; if(cs&&cs.length) focusComment(cs[0]._i,"para"); }
+});
+
+/* ---- filters ---- */
+const counts={major:0,moderate:0,minor:0};
+RAW.comments.forEach(c=>{counts[c.severity]=(counts[c.severity]||0)+1;});
+const fEl=document.getElementById("filters");
+const fActive=new Set(["major","moderate","minor"]);
+SEVS.forEach(([sev,label])=>{
+  if(!counts[sev]) return;
+  const b=document.createElement("button"); b.className="fchip";
+  b.innerHTML=`<span class="dot" style="background:var(--${sev==='major'?'major':sev==='moderate'?'moderate':'minor'})"></span>${sev} ${counts[sev]}`;
+  b.onclick=()=>{ if(fActive.has(sev)){fActive.delete(sev);b.classList.add("off");}else{fActive.add(sev);b.classList.remove("off");}
+    activeFilter=fActive.size===3?null:new Set(fActive); renderComments(); };
+  fEl.appendChild(b);
+});
+
+/* counts header */
+document.getElementById("cp-count").textContent=RAW.stats.n_comments+" notes";
+const pct=Math.round(RAW.stats.n_located*100/Math.max(RAW.stats.n_comments,1));
+document.getElementById("cp-loc").textContent=`${RAW.stats.n_located} of ${RAW.stats.n_comments} anchored to a precise quote (${pct}%)`;
+
+renderComments();
+/* typeset the paper after MathJax loads */
+function typesetPaper(){ if(window.MathJax&&MathJax.typesetPromise){ MathJax.typesetPromise([paperEl]); } else { setTimeout(typesetPaper,150); } }
+typesetPaper();
+</script>
+</body>
+</html>
