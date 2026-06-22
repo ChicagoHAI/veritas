@@ -53,6 +53,8 @@ PAPER_CLAIMS_FILE = "paper_claims.json"
 VERDICTS_FILE = "verdicts.json"
 REPLICATION_SCORE_FILE = "replication_score.json"
 RESOURCE_USAGE_FILE = "resource_usage.json"
+RESOURCE_ESTIMATE_FILE = "resource_estimate.json"
+RESOURCE_ESTIMATE_TRANSCRIPT_FILE = "resource_estimate_transcript.jsonl"
 VERIFY_FILE_SUFFIX = ".json"  # per-claim files: ``verify/<claim_id>.json``
 
 PAPER_CLAIMS_TRANSCRIPT_FILE = "paper_claims_transcript.jsonl"
@@ -125,6 +127,7 @@ class Config:
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
+    dry_run: bool = False
 
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
@@ -356,6 +359,14 @@ class Config:
     @property
     def resource_usage_path(self) -> Path:
         return self.output_dir / RESOURCE_USAGE_FILE
+
+    @property
+    def resource_estimate_path(self) -> Path:
+        return self.analyze_dir / RESOURCE_ESTIMATE_FILE
+
+    @property
+    def resource_estimate_transcript_path(self) -> Path:
+        return self.analyze_dir / RESOURCE_ESTIMATE_TRANSCRIPT_FILE
 
     # -- Manager retry-loop artifacts ---------------------------------------
 

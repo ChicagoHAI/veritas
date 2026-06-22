@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS
+from veritas.core.models.resource_estimate import ResourceEstimate
 from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
@@ -144,7 +145,7 @@ class ReplicationRunner:
         # manager does the judging.
         self._last_facts: Optional[ExecutionFacts] = None
 
-    def run(self) -> RunResult:
+    def run(self, dry_run: bool = False) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
 
         Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
@@ -208,7 +209,24 @@ class ReplicationRunner:
                 except Exception:
                     state.complete_stage('plan', success=False)
                     raise
+            # resource estimation
+            if state.is_stage_completed('resource_estimate'):
+                print("[OK] resource_estimate: skipped (already completed)")
+            else:
+                state.start_stage('resource_estimate')
+                try:
+                    self._estimate_resources(replication_plan)
+                    state.complete_stage('resource_estimate', success=True)
+                except Exception:
+                    state.complete_stage('resource_estimate', success=False)
+                    raise
 
+            if dry_run:
+                estimate = json.loads(self.config.resource_estimate_path.read_text())
+                print("\nResource Estimate (--dry-run):")
+                print(json.dumps(estimate, indent=2))
+                print("\nRun without --dry-run to start replication.")
+                return RunResult(success=True)
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
                 state, claims, replication_plan
@@ -1794,6 +1812,59 @@ class ReplicationRunner:
         }
         with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
             json.dump(out_dict, f, indent=2)
+
+    def _estimate_resources(
+        self,
+        replication_plan: Optional[ReplicationPlan],
+    ) -> ResourceEstimate:
+        from veritas.core.models.resource_estimate import ResourceEstimate
+        from veritas.utils.static_analysis import analyze_repo
+        """Combines static code analysis with an LLM pass over the paper and replication plan to produce
+        resource_estimate.json before replication runs"""
+        print("Estimating replication resources...")
+
+        static = analyze_repo(self.config.effective_repo_path)
+
+        plan_text = json.dumps(
+            replication_plan.to_dict() if replication_plan else {}, indent=2
+        )
+
+        prompt = self.prompt_generator.generate_resource_estimation_prompt(
+            replication_plan=plan_text,
+            output_dir=self.config.output_dir,
+            paper_path=self.config.paper_path,
+        )
+
+        prompt_path = self.config.prompts_dir / "resource_estimation_prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        log_path = self.config.resource_estimate_transcript_path
+        output_path = self.config.resource_estimate_path
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=log_path,
+            timeout=None,
+        )
+
+        if not success or not output_path.exists():
+            print("  Warning: Resource estimation did not produce output")
+            return ResourceEstimate(**static)
+
+        try:
+            raw = _extract_json(output_path.read_text(encoding="utf-8"))
+            data = json.loads(raw)
+            data.update(static)  # static analysis always wins
+            result = ResourceEstimate.from_dict(data)
+            output_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+            print(f"  Compute class: {result.compute_class}, "
+                f"Steps: {result.total_steps}, "
+                f"GPU: {result.needs_gpu}")
+            return result
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: Could not parse resource estimate: {e}")
+            return ResourceEstimate(**static)
 
     # -- Report ------------------------------------------------------------
 

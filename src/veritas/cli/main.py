@@ -127,6 +127,11 @@ def replicate(
         "--restart",
         help="Discard previous run state and start fresh.",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Stop after resource estimation and print the estimate without running replication.",
+    ),
 ):
     """
     Run the replication pipeline against a paper and/or its code repository.
@@ -205,7 +210,7 @@ def replicate(
     runner = ReplicationRunner(config)
 
     try:
-        result = runner.run()
+        result = runner.run(dry_run=dry_run)
         if result.success:
             console.print()
             console.print("[bold green]Replication completed successfully![/bold green]")
