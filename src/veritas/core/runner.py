@@ -223,9 +223,12 @@ class ReplicationRunner:
 
             if dry_run:
                 estimate = json.loads(self.config.resource_estimate_path.read_text())
+                compute_class = estimate.get("compute_class", "light")
+                cost_tier = {"light": "< $1", "medium": "$1–$10", "heavy": "$10–$100+"}.get(compute_class, "unknown")
                 print("\nResource Estimate (--dry-run):")
                 print(json.dumps(estimate, indent=2))
-                print("\nRun without --dry-run to start replication.")
+                print(f"\nEstimated cost tier: {cost_tier} (based on compute_class: {compute_class})")
+                print("Run without --dry-run to start replication.")
                 return RunResult(success=True)
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
