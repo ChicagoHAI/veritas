@@ -95,7 +95,7 @@ Never guess a value to fill the slot.
 Populate `structured`:: (the grader reads these exact fields)
 
     {
-      "replicated_value": <number or list — what THIS run produced; null if none>,
+      "replicated_value": <number, list, or flat dict {key: number} — what THIS run produced; null if none>,
       "paper_value": <number or list, copied verbatim from the claim>,
       "uncertainty": <the 1σ uncertainty as a single number if the claim conveys
                       one (from a ± marker, an *_sigma/*_err field, or a high/low
