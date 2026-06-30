@@ -127,7 +127,6 @@ class Config:
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
-    dry_run: bool = False
 
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via

@@ -4,8 +4,10 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -100,6 +102,19 @@ PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
     "claude": (),
     "codex":  ("-",),
     "gemini": (),
+}
+
+# Per-million-token pricing for known models (input_price, output_price).
+# Unknown models produce None for estimated_cost_usd_approximate; the
+# resource-estimation prompt instructs the LLM to search for pricing in that
+# case and record it narratively in breakdown_notes.
+KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
+    "claude-sonnet-4-6": (3.00,  15.00),
+    "claude-opus-4-8":   (15.00, 75.00),
+    "claude-haiku-4-5":  (0.80,   4.00),
+    "gpt-4o":            (2.50,  10.00),
+    "gpt-4o-mini":       (0.15,   0.60),
+    "gemini-2.0-flash":  (0.10,   0.40),
 }
 
 
@@ -212,24 +227,29 @@ class ReplicationRunner:
             # resource estimation
             if state.is_stage_completed('resource_estimate'):
                 print("[OK] resource_estimate: skipped (already completed)")
+                resource_estimate = None
             else:
                 state.start_stage('resource_estimate')
                 try:
-                    self._estimate_resources(replication_plan)
+                    resource_estimate = self._estimate_resources(replication_plan)
                     state.complete_stage('resource_estimate', success=True)
                 except Exception:
                     state.complete_stage('resource_estimate', success=False)
                     raise
 
             if dry_run:
-                estimate = json.loads(self.config.resource_estimate_path.read_text())
+                estimate = resource_estimate.to_dict() if resource_estimate is not None else {}
                 compute_class = estimate.get("compute_class", "light")
                 cost_tier = {"light": "< $1", "medium": "$1–$10", "heavy": "$10–$100+"}.get(compute_class, "unknown")
-                print("\nResource Estimate (--dry-run):")
+                reported = estimate.get("reported_compute")
+                print("\nResource Estimate:")
                 print(json.dumps(estimate, indent=2))
-                print(f"\nEstimated cost tier: {cost_tier} (based on compute_class: {compute_class})")
+                if reported:
+                    print(f"\nPaper-reported compute: {reported}")
+                print(f"Estimated cost tier (rough size class): {cost_tier}")
                 print("Run without --dry-run to start replication.")
                 return RunResult(success=True)
+
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
                 state, claims, replication_plan
@@ -278,7 +298,10 @@ class ReplicationRunner:
             if self.config.run_evaluation:
                 self._evaluate()
 
-            self._collect_resource_usage(state)
+            try:
+                self._collect_resource_usage(state)
+            except Exception as e:
+                print(f"  Warning: Could not collect resource usage: {e}")
             
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
@@ -1729,20 +1752,18 @@ class ReplicationRunner:
             print(f"  Flag: {flag}")
 
         return score
-    
+
     def _collect_resource_usage(self, state: PipelineState) -> None:
         """Combine time per phase, token counts, and disk usage into resource_usage.json."""
-        import json
-        from datetime import datetime
         from veritas.core.models.resource_usage import ResourceUsage, PhaseUsage
         from veritas.core.config import RESOURCE_USAGE_FILE
         from veritas.utils.transcripts import sum_tokens_from_transcript
 
         phase_transcripts = {
-            "analyze":      self.config.analyze_dir / "paper_claims_transcript.jsonl",
-            "plan":         self.config.analyze_dir / "replication_plan_transcript.jsonl",
-            "replicate":    self.config.replication_dir / "replication_transcript.jsonl",
-            "assess_fixes": self.config.assess_dir / "fix_severity_transcript.jsonl",
+            "analyze":      self.config.paper_claims_transcript_path,
+            "plan":         self.config.replication_plan_transcript_path,
+            "replicate":    self.config.replication_transcript_path,
+            "assess_fixes": self.config.fix_severity_transcript_path,
         }
         # verify transcripts: one per claim
         verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))
@@ -1780,24 +1801,36 @@ class ReplicationRunner:
         usage.total_input_tokens = sum(p.input_tokens for p in all_phases)
         usage.total_output_tokens = sum(p.output_tokens for p in all_phases)
 
-        # disk footprint
+        # disk footprint (-sb is GNU-only; -sk works on both macOS and Linux)
         try:
-            result = subprocess.run(
-                ["du", "-sb", str(self.config.output_dir)],
-                capture_output=True, text=True
-            )
-            usage.disk_bytes = int(result.stdout.split()[0])
+            if sys.platform == "darwin":
+                result = subprocess.run(
+                    ["du", "-sk", str(self.config.output_dir)],
+                    capture_output=True, text=True
+                )
+                usage.disk_bytes = int(result.stdout.split()[0]) * 1024
+            else:
+                result = subprocess.run(
+                    ["du", "-sb", str(self.config.output_dir)],
+                    capture_output=True, text=True
+                )
+                usage.disk_bytes = int(result.stdout.split()[0])
         except Exception:
             usage.disk_bytes = None
 
-        # cost estimate (Claude Sonnet 4.6 pricing)
-        INPUT_COST_PER_M = 3.00
-        OUTPUT_COST_PER_M = 15.00
-        estimated_cost_usd = round(
-            usage.total_input_tokens / 1_000_000 * INPUT_COST_PER_M +
-            usage.total_output_tokens / 1_000_000 * OUTPUT_COST_PER_M,
-            4,
+        # cost estimate: known models use KNOWN_MODEL_PRICING; unknown models
+        # produce None so the field is omitted rather than silently wrong.
+        model = (
+            os.environ.get("ANTHROPIC_MODEL")
+            or os.environ.get("OPENAI_MODEL")
+            or os.environ.get("GEMINI_MODEL")
         )
+        pricing = KNOWN_MODEL_PRICING.get(model) if model else None
+        estimated_cost_usd = round(
+            usage.total_input_tokens / 1_000_000 * pricing[0] +
+            usage.total_output_tokens / 1_000_000 * pricing[1],
+            4,
+        ) if pricing else None
 
         # write
         out_dict = {
@@ -1810,7 +1843,7 @@ class ReplicationRunner:
                 "input_tokens": usage.total_input_tokens,
                 "output_tokens": usage.total_output_tokens,
                 "disk_bytes": usage.disk_bytes,
-                "estimated_cost_usd": estimated_cost_usd,
+                "estimated_cost_usd_approximate": estimated_cost_usd,
             }
         }
         with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
@@ -1820,10 +1853,8 @@ class ReplicationRunner:
         self,
         replication_plan: Optional[ReplicationPlan],
     ) -> ResourceEstimate:
-        from veritas.core.models.resource_estimate import ResourceEstimate
+        """Combine static code analysis with an LLM pass to produce resource_estimate.json."""
         from veritas.utils.static_analysis import analyze_repo
-        """Combines static code analysis with an LLM pass over the paper and replication plan to produce
-        resource_estimate.json before replication runs"""
         print("Estimating replication resources...")
 
         static = analyze_repo(self.config.effective_repo_path)
@@ -1858,7 +1889,7 @@ class ReplicationRunner:
         try:
             raw = _extract_json(output_path.read_text(encoding="utf-8"))
             data = json.loads(raw)
-            data.update(static)  # static analysis always wins
+            data.update(static)  # static analysis always wins on its fields
             result = ResourceEstimate.from_dict(data)
             output_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
             print(f"  Compute class: {result.compute_class}, "

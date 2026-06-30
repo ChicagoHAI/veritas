@@ -28,7 +28,6 @@ class ResourceEstimate:
             "external_llm": self.external_llm,
             "parallelizable": self.parallelizable,
             "requires_data_download": self.requires_data_download,
-            "key_dependencies": self.key_dependencies,
             "reported_compute": self.reported_compute,
             "reported_cost_usd": self.reported_cost_usd,
             "total_steps": self.total_steps,

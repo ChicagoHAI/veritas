@@ -147,7 +147,7 @@ cmd_replicate() {
 
     local output_dir
     output_dir="$(resolve_output_dir "$@")"
-    output_dir="$(realpath -m "$output_dir")"
+    output_dir="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$output_dir")"
     mkdir -p "$output_dir"
 
     # Load $VERITAS_REPO/.env if present and set VERITAS_ENV_FILE_KEYS so
@@ -252,6 +252,7 @@ Usage: $(basename "$0") <subcommand> [args...]
 Subcommands:
   full          Full pipeline: replicate + evaluate + report (the default; also via bare flags)
   replicate     Replication only, through verify (for benchmarking)
+  estimate      Estimate compute/cost for a paper without running replication
   evaluate      Run the evaluation manager + report on an existing replicate dir
   report        Regenerate report from an existing replicate output dir
 
@@ -277,7 +278,10 @@ case "$1" in
         shift
         cmd_replicate "$@"
         ;;
-    report|evaluate)
+    estimate)
+        cmd_passthrough "$@"
+        ;;
+    extract-plan|report|evaluate)
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

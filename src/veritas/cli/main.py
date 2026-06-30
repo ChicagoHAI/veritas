@@ -227,6 +227,49 @@ def replicate(
 
 
 @app.command()
+def estimate(
+    paper: Optional[Path] = typer.Option(None, "--paper", "-p", help="Path to the paper PDF file", exists=True, dir_okay=False),
+    repo: Optional[Path] = typer.Option(None, "--repo", "-r", help="Path to the repository", exists=True, file_okay=False),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    provider: str = typer.Option("claude", "--provider", help="AI provider (claude, codex, gemini)"),
+    mode: str = typer.Option("auto", "--mode"),
+):
+    """
+    Estimate the compute and cost required to replicate a paper, without running replication.
+
+    Runs analyze + plan + resource estimation, prints the estimate, and exits.
+    """
+    console.print("[bold blue]Veritas Resource Estimator[/bold blue]")
+    console.print()
+
+    if output is not None:
+        output_dir = output
+    elif repo is not None:
+        output_dir = repo / "estimate"
+    elif paper is not None:
+        output_dir = paper.parent / "estimate"
+    else:
+        console.print("[bold red]Error:[/bold red] at least one of --paper or --repo is required")
+        raise typer.Exit(1)
+
+    try:
+        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode)
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    runner = ReplicationRunner(config)
+    try:
+        result = runner.run(dry_run=True)
+        if not result.success:
+            console.print(f"[bold red]Estimation failed:[/bold red] {result.error}")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def report(
     replicate_dir: Path = typer.Argument(
         ...,
