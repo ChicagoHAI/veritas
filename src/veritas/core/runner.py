@@ -197,19 +197,6 @@ class ReplicationRunner:
                     state.complete_stage('analyze', success=False)
                     raise
 
-            # codegen (paper-only mode only)
-            if self.config.mode == "paper-only":
-                if state.is_stage_completed('codegen'):
-                    print("[OK] codegen: skipped (already completed)")
-                else:
-                    state.start_stage('codegen')
-                    try:
-                        self._generate_code()
-                        state.complete_stage('codegen', success=True)
-                    except Exception:
-                        state.complete_stage('codegen', success=False)
-                        raise
-
             # plan (now its own phase)
             if state.is_stage_completed('plan'):
                 print("[OK] plan: skipped (already completed)")
@@ -224,31 +211,54 @@ class ReplicationRunner:
                 except Exception:
                     state.complete_stage('plan', success=False)
                     raise
-            # resource estimation
+
+            # resource estimation (non-fatal: a failed estimate never aborts replication)
+            resource_estimate = None
             if state.is_stage_completed('resource_estimate'):
                 print("[OK] resource_estimate: skipped (already completed)")
-                resource_estimate = None
             else:
                 state.start_stage('resource_estimate')
                 try:
                     resource_estimate = self._estimate_resources(replication_plan)
                     state.complete_stage('resource_estimate', success=True)
-                except Exception:
+                except Exception as e:
+                    print(f"Warning: resource estimation failed (continuing): {e}")
                     state.complete_stage('resource_estimate', success=False)
-                    raise
 
             if dry_run:
-                estimate = resource_estimate.to_dict() if resource_estimate is not None else {}
-                compute_class = estimate.get("compute_class", "light")
+                # On resume, resource_estimate is None — read from disk.
+                if resource_estimate is None and self.config.resource_estimate_path.exists():
+                    try:
+                        resource_estimate_data = json.loads(
+                            self.config.resource_estimate_path.read_text(encoding="utf-8")
+                        )
+                    except (json.JSONDecodeError, OSError):
+                        resource_estimate_data = {}
+                else:
+                    resource_estimate_data = resource_estimate.to_dict() if resource_estimate is not None else {}
+                compute_class = resource_estimate_data.get("compute_class", "light")
                 cost_tier = {"light": "< $1", "medium": "$1–$10", "heavy": "$10–$100+"}.get(compute_class, "unknown")
-                reported = estimate.get("reported_compute")
+                reported = resource_estimate_data.get("paper_reported_compute") or resource_estimate_data.get("reported_compute")
                 print("\nResource Estimate:")
-                print(json.dumps(estimate, indent=2))
+                print(json.dumps(resource_estimate_data, indent=2))
                 if reported:
                     print(f"\nPaper-reported compute: {reported}")
                 print(f"Estimated cost tier (rough size class): {cost_tier}")
                 print("Run without --dry-run to start replication.")
                 return RunResult(success=True)
+
+            # codegen (paper-only mode only) — runs after dry-run exit so `estimate` never triggers it
+            if self.config.mode == "paper-only":
+                if state.is_stage_completed('codegen'):
+                    print("[OK] codegen: skipped (already completed)")
+                else:
+                    state.start_stage('codegen')
+                    try:
+                        self._generate_code()
+                        state.complete_stage('codegen', success=True)
+                    except Exception:
+                        state.complete_stage('codegen', success=False)
+                        raise
 
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
@@ -1853,11 +1863,21 @@ class ReplicationRunner:
         self,
         replication_plan: Optional[ReplicationPlan],
     ) -> ResourceEstimate:
-        """Combine static code analysis with an LLM pass to produce resource_estimate.json."""
-        from veritas.utils.static_analysis import analyze_repo
+        """Combine static code analysis with an LLM pass to produce resource_estimate.json.
+
+        The LLM output is written to disk as free-form JSON — the schema is a suggestion,
+        not a contract. We only parse the fields the code needs programmatically; everything
+        else stays in the raw JSON for downstream LLM consumers.
+        """
         print("Estimating replication resources...")
 
-        static = analyze_repo(self.config.effective_repo_path)
+        # Static analysis: only run if there is a repo to scan (skipped in paper-only
+        # mode before codegen has produced one).
+        static: Dict[str, Any] = {}
+        repo_path = self.config.effective_repo_path
+        if repo_path and repo_path.exists():
+            from veritas.utils.static_analysis import analyze_repo
+            static = analyze_repo(repo_path)
 
         plan_text = json.dumps(
             replication_plan.to_dict() if replication_plan else {}, indent=2
@@ -1889,12 +1909,12 @@ class ReplicationRunner:
         try:
             raw = _extract_json(output_path.read_text(encoding="utf-8"))
             data = json.loads(raw)
-            data.update(static)  # static analysis always wins on its fields
+            # Static analysis fields always win (they are deterministic).
+            data.update(static)
+            # Write the merged free-form JSON back to disk as-is.
+            output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             result = ResourceEstimate.from_dict(data)
-            output_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
-            print(f"  Compute class: {result.compute_class}, "
-                f"Steps: {result.total_steps}, "
-                f"GPU: {result.needs_gpu}")
+            print(f"  Compute class: {result.compute_class}, GPU: {result.needs_gpu}")
             return result
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: Could not parse resource estimate: {e}")

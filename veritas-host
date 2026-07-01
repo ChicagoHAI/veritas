@@ -281,7 +281,7 @@ case "$1" in
     estimate)
         cmd_passthrough "$@"
         ;;
-    extract-plan|report|evaluate)
+    report|evaluate)
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

@@ -36,27 +36,34 @@ Use web search to find current costs for the detected resource type:
 
 - If GPU is required: search for current hourly rates (e.g. "RunPod A100 hourly price 2025" or "Lambda Labs H100 cost per hour")
 - If external LLM API calls are detected: search for the provider's current pricing page
-- Use real numbers you find, and quote the source URL in `breakdown_notes`.
-- If you cannot find reliable pricing, set `reported_cost_usd` to `null`.
+- Use real numbers you find, and quote the source URL in your output.
+- If you cannot find reliable pricing, omit the cost fields or set them to null.
 
 ## Output
 
-Write your estimate to `{{ output_dir }}/analyze/resource_estimate.json`:
+Write your estimate to {{ output_dir }}/analyze/resource_estimate.json.
+
+The file must contain at minimum:
+- compute_class: "light" (under 5 min on CPU), "medium" (significant CPU/RAM or hours), "heavy" (GPU required or multi-hour run)
+- breakdown_notes: a plain-English explanation of your estimate, quoting the paper or plan where possible
+
+Beyond those, include any fields that are useful and available for this paper. Examples:
 
 ```json
 {
-    "reported_compute": "4 A100 GPUs for 48 hours",
-    "reported_cost_usd": null,
+    "compute_class": "heavy",
+    "breakdown_notes": "Paper states 48h on 4 A100s. Current A100 rate ~$2/hr on RunPod (https://runpod.io/pricing), giving ~$384 estimated.",
+    "needs_gpu": true,
+    "paper_reported_compute": "4 A100 GPUs for 48 hours",
+    "paper_reported_cost_usd": null,
+    "estimated_cost_usd": 384.0,
+    "estimated_cost_source": "https://runpod.io/pricing",
     "total_steps": 5,
     "estimated_experiment_runs": 15,
     "estimated_llm_calls": null,
-    "compute_class": "heavy",
-    "breakdown_notes": "Paper explicitly states training took 48 hours on 4 A100s."
+    "parallelizable": false
 }
 ```
 
-`compute_class`: `light` (under 5 min on CPU), `medium` (significant CPU/RAM),
-`heavy` (GPU required or multi-hour run).
-
-If the paper explicitly reports compute, set `breakdown_notes` to quote it directly.
-Set fields to `null` when unknown. Write the file now.
+Add or omit fields as the paper warrants — the schema is a suggestion, not a contract.
+Set numeric fields to null when unknown. Write the file now.
