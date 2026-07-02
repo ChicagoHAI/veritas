@@ -439,6 +439,28 @@ compute_env_file_keys() {
 }
 
 # -----------------------------------------------------------------------------
+# Provider auth keys: forwarded from the HOST environment (not .env) so any
+# configured provider can authenticate with an API key in every phase. .env
+# stays reserved for replication keys (paper-code credentials); a provider
+# key placed only in .env still works because the Python layer exempts the
+# active providers' keys from phase-scoping.
+# Values are embedded in an eval'd docker command line; keys/URLs contain no
+# whitespace, and each value is double-quoted for safety.
+# -----------------------------------------------------------------------------
+PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
+
+get_provider_auth_flags() {
+    local flags=""
+    local var
+    for var in $PROVIDER_AUTH_VARS; do
+        if [ -n "${!var}" ]; then
+            flags="$flags -e $var=\"${!var}\""
+        fi
+    done
+    echo "$flags"
+}
+
+# -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
 # don't watch an LLM-call hang for several minutes before realising they
@@ -451,31 +473,39 @@ check_provider_credentials() {
     local provider="$1"
     case "$provider" in
         claude)
-            if is_claude_configured; then
+            if is_claude_configured || [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
                 return 0
             fi
             echo -e "${RED}Claude credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login claude${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login claude${NC} (or export ANTHROPIC_API_KEY)" >&2
             exit 1
             ;;
         codex)
-            if [ -d "$HOME/.codex" ] && [ -n "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
+            if { [ -d "$HOME/.codex" ] && [ -n "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; } || [ -n "$OPENAI_API_KEY" ]; then
                 return 0
             fi
             echo -e "${RED}Codex credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login codex${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login codex${NC} (or export OPENAI_API_KEY)" >&2
             exit 1
             ;;
         gemini)
-            if [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+            if { [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; } || [ -n "$GEMINI_API_KEY" ] || [ -n "$GOOGLE_API_KEY" ]; then
                 return 0
             fi
             echo -e "${RED}Gemini credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login gemini${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login gemini${NC} (or export GEMINI_API_KEY)" >&2
+            exit 1
+            ;;
+        openrouter)
+            if [ -n "$OPENROUTER_API_KEY" ] || [ -n "$(get_env_value OPENROUTER_API_KEY)" ]; then
+                return 0
+            fi
+            echo -e "${RED}OpenRouter API key not found.${NC}" >&2
+            echo -e "Export ${BOLD}OPENROUTER_API_KEY${NC} or add it to .env (${BOLD}./veritas config${NC})." >&2
             exit 1
             ;;
         *)
-            echo -e "${RED}Unknown provider:${NC} $provider (expected claude|codex|gemini)" >&2
+            echo -e "${RED}Unknown provider:${NC} $provider (expected claude|codex|gemini|openrouter)" >&2
             exit 1
             ;;
     esac
@@ -1198,6 +1228,8 @@ cmd_replicate() {
         model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
     fi
 
+    local auth_flags=$(get_provider_auth_flags)
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
@@ -1205,6 +1237,7 @@ cmd_replicate() {
         $env_file_flag \
         $env_keys_flag \
         $model_flag \
+        $auth_flags \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1259,10 +1292,12 @@ cmd_evaluate() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
+    local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
+        $auth_flags \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
