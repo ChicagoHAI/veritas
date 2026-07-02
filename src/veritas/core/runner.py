@@ -2013,6 +2013,7 @@ class ReplicationRunner:
         Score.
         """
         try:
+            self._check_provider_auth()
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
             report_path, pdf_path = self.report_generator.generate(

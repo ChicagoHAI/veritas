@@ -81,7 +81,7 @@ def replicate(
         "--evaluate-model",
         help=(
             "Engine for the evaluate bucket (manager review, research, "
-            "contextual evaluation), as [provider:]model."
+            "contextual evaluation, citation check), as [provider:]model."
         ),
     ),
     mode: str = typer.Option(
@@ -454,7 +454,18 @@ def check_citations(
         "main", "--check-citations-faithfulness",
         help="Faithfulness scope: 'main' (default) or 'all'.",
     ),
-    provider: str = typer.Option("claude", "--provider", help="AI provider."),
+    provider: str = typer.Option(
+        "claude", "--provider",
+        help="AI provider for the citation check (claude, codex, gemini, openrouter).",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the citation check (bare name).",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None, "--evaluate-model",
+        help="Engine for the evaluate bucket (the citation check rides it), as [provider:]model.",
+    ),
     citation_timeout: Optional[int] = typer.Option(
         None, "--citation-timeout", help="Timeout (seconds) for the citation check.",
     ),
@@ -498,6 +509,8 @@ def check_citations(
             paper_path=recovered_paper,
             output_dir=replicate_dir,
             provider=provider,
+            model=model,
+            evaluate_model=evaluate_model,
             mode="auto",
             run_citation_check=True,
             faithfulness_scope=check_citations_faithfulness,

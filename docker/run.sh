@@ -1374,10 +1374,13 @@ cmd_check_citations() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
+    load_provider_auth_env
+    local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
+        $auth_flags \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
