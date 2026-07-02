@@ -43,6 +43,47 @@ def replicate(
         "--provider",
         help="AI provider to use (claude, codex, gemini)",
     ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Global default model (bare name; the provider comes from "
+            "--provider). Default: the provider CLI's own default."
+        ),
+    ),
+    analyze_model: Optional[str] = typer.Option(
+        None,
+        "--analyze-model",
+        help="Engine for the analyze bucket (claims + plan), as [provider:]model.",
+    ),
+    codegen_model: Optional[str] = typer.Option(
+        None,
+        "--codegen-model",
+        help="Engine for the codegen bucket (paper-only mode), as [provider:]model.",
+    ),
+    replicate_model: Optional[str] = typer.Option(
+        None,
+        "--replicate-model",
+        help="Engine for the replication session, as [provider:]model.",
+    ),
+    assess_model: Optional[str] = typer.Option(
+        None,
+        "--assess-model",
+        help="Engine for the fix-severity assessment, as [provider:]model.",
+    ),
+    verify_model: Optional[str] = typer.Option(
+        None,
+        "--verify-model",
+        help="Engine for per-claim verification, as [provider:]model.",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None,
+        "--evaluate-model",
+        help=(
+            "Engine for the evaluate bucket (manager review, research, "
+            "contextual evaluation), as [provider:]model."
+        ),
+    ),
     mode: str = typer.Option(
         "auto",
         "--mode",
@@ -178,6 +219,13 @@ def replicate(
             repo_path=repo,
             output_dir=output_dir,
             provider=provider,
+            model=model,
+            analyze_model=analyze_model,
+            codegen_model=codegen_model,
+            replicate_model=replicate_model,
+            assess_model=assess_model,
+            verify_model=verify_model,
+            evaluate_model=evaluate_model,
             generate_pdf=generate_pdf,
             analyze_timeout=analyze_timeout,
             codegen_timeout=codegen_timeout,
@@ -280,6 +328,14 @@ def evaluate(
     provider: str = typer.Option(
         "claude", "--provider", help="AI provider for the evaluation manager."
     ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the evaluation (bare name).",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None, "--evaluate-model",
+        help="Engine for the evaluate bucket, as [provider:]model.",
+    ),
     evaluate_timeout: Optional[int] = typer.Option(
         None, "--evaluate-timeout",
         help="Timeout in seconds for the evaluation phase. Default: no timeout.",
@@ -338,6 +394,8 @@ def evaluate(
             repo_path=repo,
             output_dir=replicate_dir,
             provider=provider,
+            model=model,
+            evaluate_model=evaluate_model,
             mode=mode,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
