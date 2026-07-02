@@ -171,3 +171,28 @@ def test_stripped_env_default_unchanged(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf-test")
     env = ReplicationRunner._stripped_env()
     assert "HF_TOKEN" not in env
+
+
+def test_openrouter_auth_check_raises_without_key(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    verify_model="openrouter:openai/gpt-5.5")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    runner = ReplicationRunner(config)
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        runner._check_provider_auth()
+
+
+def test_openrouter_auth_check_passes_with_key(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    verify_model="openrouter:openai/gpt-5.5")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    ReplicationRunner(config)._check_provider_auth()
+
+
+def test_auth_check_noop_without_openrouter(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    ReplicationRunner(config)._check_provider_auth()

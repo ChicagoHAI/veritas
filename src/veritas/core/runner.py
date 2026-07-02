@@ -240,6 +240,7 @@ class ReplicationRunner:
         are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
         """
         try:
+            self._check_provider_auth()
             self._setup_output_dir()
             state = PipelineState(self.config.output_dir)
 
@@ -1947,6 +1948,22 @@ class ReplicationRunner:
         for provider in self.config.resolved_providers():
             exempt.update(PROVIDER_AUTH_VARS.get(provider, ()))
         return frozenset(exempt)
+
+    def _check_provider_auth(self) -> None:
+        """Fail fast when a configured provider cannot authenticate.
+
+        The wrapper preflight only sees the global --provider; per-bucket
+        engines are validated here so a missing key surfaces before any
+        stage runs instead of mid-pipeline. openrouter is API-key-only;
+        the other providers may authenticate via mounted login state, so
+        only openrouter is checked.
+        """
+        if "openrouter" in self.config.resolved_providers():
+            if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+                raise RuntimeError(
+                    "Provider openrouter requires OPENROUTER_API_KEY. "
+                    "Export it in your shell or add it to .env."
+                )
 
     def _invoke_provider(
         self,
