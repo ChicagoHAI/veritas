@@ -1,19 +1,56 @@
 """Configuration for Veritas."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional, Tuple
 
-from veritas.core.config_env import _env_int, _env_opt_int
+from veritas.core.config_env import _env_int, _env_opt_int, _env_opt_str
 
 
 # All valid AI providers
-VALID_PROVIDERS = ["claude", "codex", "gemini"]
+VALID_PROVIDERS = ["claude", "codex", "gemini", "openrouter"]
 
 # Input mode literal
 InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
+
+# Named groups of LLM call sites. Each bucket can run on its own engine
+# (provider + model); call sites pass their bucket to _invoke_provider.
+BUCKETS = ("analyze", "codegen", "replicate", "assess", "verify", "evaluate")
+
+# Text before the first ':' counts as a provider prefix only when it is a
+# simple token — OpenRouter variant suffixes like 'model:free' stay parseable
+# as bare models.
+_PROVIDER_PREFIX_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+def parse_model_spec(spec: str) -> Tuple[Optional[str], str]:
+    """Parse a ``[provider:]model`` spec into ``(provider, model)``.
+
+    Returns ``(None, model)`` for bare specs. Raises ``ValueError`` on a
+    typo'd provider prefix, an empty model after a valid prefix, or an
+    empty spec.
+    """
+    spec = spec.strip()
+    if not spec:
+        raise ValueError("Empty model spec")
+    head, sep, tail = spec.partition(":")
+    if not sep:
+        return None, spec
+    if head in VALID_PROVIDERS:
+        if not tail.strip():
+            raise ValueError(
+                f"Model spec '{spec}': provider prefix requires a model"
+            )
+        return head, tail.strip()
+    if _PROVIDER_PREFIX_RE.match(head):
+        raise ValueError(
+            f"Model spec '{spec}': unknown provider '{head}'. "
+            f"Valid providers: {VALID_PROVIDERS}"
+        )
+    return None, spec
 
 
 # Output directory structure — each phase writes into its own subdir.
@@ -121,6 +158,17 @@ class Config:
     verify_timeout: Optional[int] = None
     evaluate_timeout: Optional[int] = None
 
+    # Per-bucket engine selection. Each field takes a ``[provider:]model``
+    # spec; ``model`` is the bare global default (its provider is
+    # ``provider`` above). None = the provider CLI's own default model.
+    model: Optional[str] = None
+    analyze_model: Optional[str] = None
+    codegen_model: Optional[str] = None
+    replicate_model: Optional[str] = None
+    assess_model: Optional[str] = None
+    verify_model: Optional[str] = None
+    evaluate_model: Optional[str] = None
+
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
@@ -145,12 +193,29 @@ class Config:
         "evaluate_timeout": "VERITAS_EVALUATE_TIMEOUT",
     }
 
+    # Env-var names backing each model field, consulted in __post_init__
+    # when the CLI flag is absent (the field is left as None).
+    _MODEL_ENV_VARS = {
+        "model": "VERITAS_MODEL",
+        "analyze_model": "VERITAS_ANALYZE_MODEL",
+        "codegen_model": "VERITAS_CODEGEN_MODEL",
+        "replicate_model": "VERITAS_REPLICATE_MODEL",
+        "assess_model": "VERITAS_ASSESS_MODEL",
+        "verify_model": "VERITAS_VERIFY_MODEL",
+        "evaluate_model": "VERITAS_EVALUATE_MODEL",
+    }
+
     def __post_init__(self):
         # Timeouts: CLI (explicit value) wins; otherwise honor the env var as
         # the default. Code default (None) remains when neither is set.
         for field_name, env_name in self._TIMEOUT_ENV_VARS.items():
             if getattr(self, field_name) is None:
                 setattr(self, field_name, _env_opt_int(env_name, None))
+
+        # Models: CLI (explicit value) wins; otherwise honor the env var.
+        for field_name, env_name in self._MODEL_ENV_VARS.items():
+            if getattr(self, field_name) is None:
+                setattr(self, field_name, _env_opt_str(env_name))
 
         # Convert input paths to Path objects (if provided)
         if self.repo_path is not None:
@@ -198,6 +263,26 @@ class Config:
                 )
             if not any(self.data_path.iterdir()):
                 print(f"WARNING: --data directory is empty: {self.data_path}")
+
+        # The global model is bare by definition — its provider is --provider.
+        if self.model is not None:
+            prefix, _ = parse_model_spec(self.model)
+            if prefix is not None:
+                raise ValueError(
+                    f"--model must be a bare model (set the provider with "
+                    f"--provider); got '{self.model}'"
+                )
+
+        # Eagerly resolve every bucket so malformed specs (flags or
+        # VERITAS_*_MODEL vars) fail at startup, and openrouter always has
+        # an explicit model to hand to opencode.
+        for bucket in BUCKETS:
+            bucket_provider, bucket_model = self.engine_for(bucket)
+            if bucket_provider == "openrouter" and bucket_model is None:
+                raise ValueError(
+                    f"Provider openrouter requires an explicit model for the "
+                    f"'{bucket}' bucket (pass --model or --{bucket}-model)"
+                )
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
@@ -279,6 +364,43 @@ class Config:
             codebase = self.replication_dir / "codebase"
             return codebase if codebase.exists() else None
         return self.repo_path
+
+    # -- Per-bucket engine resolution -----------------------------------------
+
+    def engine_for(self, bucket: str) -> Tuple[str, Optional[str]]:
+        """Resolve the ``(provider, model)`` engine for a bucket.
+
+        Precedence: the bucket's own spec (flag or VERITAS_<BUCKET>_MODEL,
+        already merged in __post_init__) -> the global ``model`` with the
+        global ``provider``. ``model=None`` means the provider CLI's default.
+        """
+        if bucket not in BUCKETS:
+            raise ValueError(f"Unknown bucket: {bucket}. Valid: {BUCKETS}")
+        spec = getattr(self, f"{bucket}_model")
+        if spec is not None:
+            prefix, model = parse_model_spec(spec)
+            return (prefix or self.provider.lower(), model)
+        return (self.provider.lower(), self.model)
+
+    def resolved_engines(self) -> Dict[str, str]:
+        """Canonical ``bucket -> 'provider:model'`` (or ``'provider'``) map,
+        used for state fingerprinting and report provenance."""
+        engines = {}
+        for bucket in BUCKETS:
+            provider, model = self.engine_for(bucket)
+            engines[bucket] = f"{provider}:{model}" if model else provider
+        return engines
+
+    def resolved_providers(self) -> set:
+        """Set of providers any bucket resolves to (auth-exemption scope)."""
+        return {self.engine_for(bucket)[0] for bucket in BUCKETS}
+
+    @property
+    def any_model_knob_set(self) -> bool:
+        return any(
+            getattr(self, field_name) is not None
+            for field_name in self._MODEL_ENV_VARS
+        )
 
     # -- Output subdirectories ----------------------------------------------
 
