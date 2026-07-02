@@ -96,6 +96,18 @@ def test_author_overlap_empty_is_zero():
     assert author_overlap(["A. Smith"], []) == 0.0
 
 
+def test_author_overlap_handles_surname_first_order():
+    # APA-style "Surname, Initial." reference lists vs full-name records.
+    assert author_overlap(["Vaswani, A."], ["Ashish Vaswani"]) == 1.0
+    assert author_overlap(
+        ["Vaswani, A.", "Shazeer, N."], ["Ashish Vaswani", "Noam Shazeer"]
+    ) == 1.0
+    # Compound surnames keep their final particle on both sides.
+    assert author_overlap(["van der Berg, J."], ["Jan van der Berg"]) == 1.0
+    # A genuinely different surname still fails to match.
+    assert author_overlap(["Vaswani, A."], ["John Doe"]) == 0.0
+
+
 def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("arXiv:1706.03762v5") == "1706.03762"
     assert normalize_arxiv_id("1706.03762") == "1706.03762"
