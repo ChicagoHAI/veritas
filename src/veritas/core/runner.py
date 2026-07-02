@@ -71,12 +71,15 @@ CLI_COMMANDS: Dict[str, Tuple[str, ...]] = {
     "claude": ("claude", "-p"),
     "codex":  ("codex", "exec"),
     "gemini": ("gemini",),
+    # opencode `run` is the non-interactive mode.
+    "openrouter": ("opencode", "run"),
 }
 
 TRANSCRIPT_FLAGS: Dict[str, Tuple[str, ...]] = {
     "claude": ("--verbose", "--output-format", "stream-json"),
     "codex":  ("--json",),
     "gemini": ("--output-format", "stream-json"),
+    "openrouter": ("--format", "json"),
 }
 
 PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
@@ -90,6 +93,10 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
     "codex":  ("--dangerously-bypass-approvals-and-sandbox",
                "--skip-git-repo-check"),
     "gemini": ("--yolo", "--skip-trust"),
+    # opencode: --auto approves tool use not explicitly denied — headless runs
+    # must never block on a permission prompt. Same trust as the other
+    # providers' bypass flags; the container is the isolation boundary.
+    "openrouter": ("--auto",),
 }
 
 # Trailing positional args appended after all flags. codex exec only reads
@@ -99,7 +106,37 @@ PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
     "claude": (),
     "codex":  ("-",),
     "gemini": (),
+    "openrouter": (),
 }
+
+# Flag each provider CLI uses to pin a model. Appended only when the
+# resolved engine names a model; otherwise the CLI's own default applies.
+# opencode addresses models as `openrouter/<author>/<slug>`, so the model
+# value gets that prefix in build_provider_command.
+MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("--model",),
+    "codex":  ("-m",),
+    "gemini": ("-m",),
+    "openrouter": ("-m",),
+}
+
+
+def build_provider_command(
+    cli: str, provider: str, model: Optional[str]
+) -> List[str]:
+    """Assemble the provider argv: base command, transcript and permission
+    flags, model flag (when a model is resolved), then prompt-stdin args."""
+    cmd: List[str] = [
+        cli,
+        *CLI_COMMANDS[provider][1:],
+        *TRANSCRIPT_FLAGS[provider],
+        *PERMISSION_FLAGS[provider],
+    ]
+    if model is not None:
+        value = f"openrouter/{model}" if provider == "openrouter" else model
+        cmd.extend([*MODEL_FLAGS[provider], value])
+    cmd.extend(PROMPT_STDIN_ARGS[provider])
+    return cmd
 
 
 # Per-field stage invalidation rules. When an input or config field changes
@@ -1880,13 +1917,7 @@ class ReplicationRunner:
             print(f"  {e}")
             return False
 
-        cmd: List[str] = [
-            cli,
-            *CLI_COMMANDS[provider][1:],
-            *TRANSCRIPT_FLAGS[provider],
-            *PERMISSION_FLAGS[provider],
-            *PROMPT_STDIN_ARGS[provider],
-        ]
+        cmd = build_provider_command(cli, provider, None)
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         open_mode = "a" if append else "w"
