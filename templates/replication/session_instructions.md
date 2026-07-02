@@ -121,7 +121,7 @@ When something fails, actively resolve it:
 - **Missing data files** → check for download scripts, look for URLs in the README, check for filename typos
 - **Configuration issues** → adjust paths, environment variables, config files
 - **Version incompatibilities** → pin compatible versions, patch import paths
-- **Memory/resource issues** → reduce batch sizes, use smaller models, set resource limits
+- **Memory/resource issues** → set resource limits, stream or chunk the data, checkpoint and resume. Reducing the scale of the computation itself is a last resort governed by "Run at the methodology's intended scale" below — never swap in a smaller model or dataset as a convenience.
 
 **Every fix you apply is valuable evidence.** A paper that needed 4 minor patches to run is still reproducible — the fixes document what a human would have to do. Report each fix in your evidence (see Evidence Collection below).
 
@@ -131,7 +131,9 @@ When something fails, actively resolve it:
 
 Run each step at the **scale the plan/methodology specifies** — the full grid, the full epoch count, the full dataset or sample size. Do **not** quietly substitute a toy or downsized run (1 epoch, a handful of samples, a tiny grid) to finish faster.
 
-- Only downsize if a genuine resource limit forces it (out of memory, no GPU, a step that cannot finish in the available time) — and only after trying to make the full-scale run work.
+There is **no hidden time budget**. A heavy step is allowed to run for hours; a full-scale run that takes hours beats a fast toy run. When a step looks expensive, make it *efficient at full scale* first — use the compiled/vectorized code path, run on the GPU if one is available, split the work into resumable chunks — rather than shrinking the problem.
+
+- Only downsize if a genuine resource limit forces it (out of memory, required hardware absent, a step that would clearly run for days) — and only after trying to make the full-scale run work.
 - If you must downsize, **say so explicitly in that step's `notes`**: what you reduced, from what to what, and why (the specific resource limit). A downsized run that is clearly labeled is a finding; an unlabeled one is a silent flaw.
 
 **When to stop trying:** Only after you have tried several genuinely different approaches (see the strategies above) and the problem is fundamental — core algorithm wrong, essential data paywalled with no alternative, hardware genuinely unavailable. Document what you tried, the distinct approaches, and why each failed, then move on.
@@ -156,7 +158,12 @@ Surfacing a corrupted intermediate as a logged finding is far more useful than l
 {% if has_gpu_step | length > 0 %}
 ### GPU Guidance
 
-This plan includes GPU-dependent steps. If GPU is not available:
+This plan includes GPU-dependent steps.
+
+If `nvidia-smi` shows a GPU, run GPU-capable steps on it — do not quietly fall
+back to CPU (and then to a downsized run) when the hardware is present.
+
+If GPU is not available:
 - Try running with `CUDA_VISIBLE_DEVICES=""` to force CPU mode
 - Check if the code supports a `--device cpu` or `--no-cuda` flag
 - Install missing compilers if GPU code needs to fall back to CPU compilation
