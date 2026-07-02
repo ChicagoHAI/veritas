@@ -120,6 +120,19 @@ MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
     "openrouter": ("-m",),
 }
 
+# Auth vars each provider CLI reads. Vars for providers configured in the
+# current run are exempted from .env key-stripping so an API key placed in
+# .env still reaches its provider in every phase. Keys for providers not in
+# use stay stripped. Consequence when claude is configured: an
+# ANTHROPIC_API_KEY present in .env reaches claude in all phases and billing
+# follows the key.
+PROVIDER_AUTH_VARS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
+    "codex": ("OPENAI_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY",),
+}
+
 
 def build_provider_command(
     cli: str, provider: str, model: Optional[str]
@@ -1880,12 +1893,23 @@ class ReplicationRunner:
         return {k.strip() for k in raw.split(",") if k.strip()}
 
     @staticmethod
-    def _stripped_env() -> Dict[str, str]:
-        """os.environ minus the keys defined in VERITAS_ENV_FILE_KEYS."""
-        keys_to_strip = ReplicationRunner._env_file_keys()
+    def _stripped_env(exempt: frozenset = frozenset()) -> Dict[str, str]:
+        """os.environ minus the keys defined in VERITAS_ENV_FILE_KEYS.
+
+        ``exempt`` names keys excluded from stripping — the auth vars of
+        the providers this run actually uses (see PROVIDER_AUTH_VARS).
+        """
+        keys_to_strip = ReplicationRunner._env_file_keys() - set(exempt)
         if not keys_to_strip:
             return os.environ.copy()
         return {k: v for k, v in os.environ.items() if k not in keys_to_strip}
+
+    def _auth_exemptions(self) -> frozenset:
+        """Auth vars of every provider any bucket resolves to."""
+        exempt = set()
+        for provider in self.config.resolved_providers():
+            exempt.update(PROVIDER_AUTH_VARS.get(provider, ()))
+        return frozenset(exempt)
 
     def _invoke_provider(
         self,
@@ -1945,7 +1969,7 @@ class ReplicationRunner:
         # Default: strip replication API keys (sourced from .env via --env-file)
         # so non-replicate phases don't see them. _replicate opts in via
         # expose_api_keys=True since the paper code it runs needs the keys.
-        env = None if expose_api_keys else self._stripped_env()
+        env = None if expose_api_keys else self._stripped_env(self._auth_exemptions())
 
         try:
             process = subprocess.Popen(

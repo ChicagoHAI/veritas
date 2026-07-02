@@ -96,3 +96,29 @@ def test_invoke_default_is_legacy_claude(tmp_path, monkeypatch):
         "--verbose", "--output-format", "stream-json",
         "--dangerously-skip-permissions",
     ]
+
+
+def test_stripped_env_exempts_configured_provider_keys(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    verify_model="openrouter:openai/gpt-5.5")
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS",
+                       "OPENROUTER_API_KEY,OPENAI_API_KEY,HF_TOKEN")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    runner = ReplicationRunner(config)
+    env = ReplicationRunner._stripped_env(runner._auth_exemptions())
+    # openrouter is a configured provider -> its key survives stripping
+    assert env["OPENROUTER_API_KEY"] == "sk-or-test"
+    # codex is NOT configured -> its key stays stripped
+    assert "OPENAI_API_KEY" not in env
+    # plain replication keys stay stripped
+    assert "HF_TOKEN" not in env
+
+
+def test_stripped_env_default_unchanged(monkeypatch):
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "HF_TOKEN")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    env = ReplicationRunner._stripped_env()
+    assert "HF_TOKEN" not in env
