@@ -39,7 +39,8 @@ The replication pipeline has already run. Read the relevant files to gather evid
 - **Unified diff of agent changes**: `{{ codebase_diff_path }}`
 - **Step-by-step execution log**: `{{ replication_log_path }}`
 - **Fix-severity assessment** (interpret deviations in context): `{{ fix_severity_path }}`
-{% if plan_step_ids %}- **Plan steps that targeted this claim** (cross-reference from `replication_plan.json::steps[*].verifies`): {{ plan_step_ids | join(", ") }}
+- **Replication plan** (step descriptions, commands, and which steps target which claims): `{{ output_dir }}/analyze/replication_plan.json`
+{% if plan_step_ids %}- **Plan steps that targeted this claim** (from the plan's `steps[*].verifies`): {{ plan_step_ids | join(", ") }}
 {% endif %}
 
 ## Answer Fidelity (applies to every structured field you write)
@@ -68,11 +69,12 @@ underlying computation is correct — avoid both:
 For **scalar / scalar_range / table** claims you are the **comparator**: your job
 is to extract the replicated value *accurately and objectively* into `structured`.
 A separate deterministic grader (not an LLM) then decides `match | partial |
-no_match` from your extracted value against `paper_value` and the declared
-tolerances — so your numeric `status` is only a proposal and **will be
-re-derived from your `structured` values**. Get the *values, keys, and
-uncertainty* right; the pass/fail is computed, not argued. The rules below tell
-you what that grader will compute, so you can sanity-check your extraction.
+no_match` from your extracted value against `paper_value` and the run's
+tolerance policy (defaults shown per type below) — so your numeric `status` is
+only a proposal and **will be re-derived from your `structured` values**. Get
+the *values, keys, and uncertainty* right; the pass/fail is computed, not
+argued. The rules below tell you what that grader will compute, so you can
+sanity-check your extraction.
 
 For **qualitative / figure** claims there is no number to compute on, so **your
 `status` is authoritative** — judge carefully.
@@ -86,13 +88,13 @@ Never guess a value to fill the slot.
 {% if claim.type == "scalar" %}
 **Scalar claim** — find the replicated value, compare against `paper_value`.
 
-- `match` — if the claim conveys an uncertainty in any form (a `±` marker in the description, a high/low range in `paper_value`, an `*_unc` / `*_sigma` / `*_err` field, or an analogous convention), the replicated value is within ±1σ of `paper_value`. Otherwise within 5% relative error (or, for very small absolute values, within ±1 in the relevant unit).
+- `match` — if the claim conveys an uncertainty in any form (a `±` marker in the description, a high/low range in `paper_value`, an `*_unc` / `*_sigma` / `*_err` field, or an analogous convention), the replicated value is within ±1σ of `paper_value`. Otherwise within 5% relative error (for a paper value that is essentially zero, a small absolute band replaces the relative test).
 - `partial` — within ±2σ if an uncertainty is given, otherwise within 30% relative error.
-- `no_match` — outside 30% relative error AND the discrepancy is not explained by a known critical fix.
+- `no_match` — outside those bands.
 - `not_attempted` — relevant evidence files were never produced.
 - `not_applicable` — the claim isn't checkable from this run's evidence in principle (set `n_a_reason`).
 
-Populate `structured`:: (the grader reads these exact fields)
+Populate `structured`: (the grader reads these exact fields)
 
     {
       "replicated_value": <number, list, or flat dict {key: number} — what THIS run produced; null if none>,
@@ -104,14 +106,14 @@ Populate `structured`:: (the grader reads these exact fields)
     }
 
 {% elif claim.type == "scalar_range" %}
-**Scalar-range claim** — check whether the replicated value(s) fall within the paper's stated range, OR whether the replicated range overlaps the paper's range.
+**Scalar-range claim** — check whether the replicated value(s) fall within the paper's stated range.
 
-- `match` — replicated value(s) within paper range OR ranges overlap by ≥80% of paper range width. If the range itself carries an uncertainty on its endpoints, treat the paper range as widened by ±1σ when checking containment.
-- `partial` — ranges overlap but coverage < 80%, or some sub-conditions match and others don't. If endpoint uncertainty is given, ±2σ widening defines the partial band.
-- `no_match` — no overlap.
+- `match` — every replicated value lies inside `paper_range`.
+- `partial` — a value lands outside the range but within the range widened by 30% of its width, or some values fall inside and others outside.
+- `no_match` — every value falls outside even the widened range.
 - `not_attempted` / `not_applicable` — as for scalar.
 
-Populate `structured`:: (the grader reads these exact fields)
+Populate `structured`: (the grader reads these exact fields)
 
     {
       "replicated_value": <number or list of numbers this run produced; null if none>,
@@ -122,9 +124,9 @@ Populate `structured`:: (the grader reads these exact fields)
 {% elif claim.type == "table" %}
 **Table claim** — per-cell comparison against the paper's reported table.
 
-- `match` — every cell within tolerance. If the paper table provides per-cell uncertainty (e.g. an explicit `uncertainty` column or `±` markers), every numerical cell is within ±1σ; otherwise within 5% relative error. Label cells must match exactly.
-- `partial` — some cells match, others don't. If uncertainty is given, ±2σ defines the partial band per cell.
-- `no_match` — most cells outside tolerance.
+- `match` — every cell within 5% relative error of its paper value. Label keys must match exactly (a missing or mutated key fails that cell).
+- `partial` — anything in between: mixed cells, or cells landing in the 5-30% band.
+- `no_match` — every cell beyond 30% relative error.
 
 **Cell resolution.** When the claim asks for a specific cell of a table
 (e.g. "the similarity between A and B"), resolve it by **explicit row-label
@@ -134,7 +136,7 @@ not by row order or position. For an **asymmetric** matrix (where cell [A][B] �
 designates, not its transpose. Report the value under the exact key the claim
 uses for that question.
 
-Populate `structured`:: (the grader compares per key — prefer flat dicts)
+Populate `structured`: (the grader compares per key — prefer flat dicts)
 
     {
       "replicated_table": {"<exact key1>": <number>, "<exact key2>": <number>, ...},
@@ -162,7 +164,7 @@ to a subjective judgment.
 - `partial` — evidence is consistent with the claim but doesn't unambiguously demonstrate it, or only partial sub-claims are supported.
 - `no_match` — evidence contradicts the claim.
 
-Populate `structured`::
+Populate `structured`:
 
     {
       "observed_behavior": "<paraphrase of what the evidence shows>",
@@ -195,7 +197,7 @@ figure the claim describes, in this order:
 - `not_attempted` — **no** relevant figure file or panel was produced at all
   (the code that draws this figure did not run / emitted nothing).
 
-Populate `structured`::
+Populate `structured`:
 
     {
       "file_exists": <true if the exact expected_output_file exists>,
@@ -215,7 +217,7 @@ not `not_attempted`.
 ## Scoring Rules
 
 - **Use evidence first, claim text second.** The claim describes what the paper reported; your job is to check what *this* run produced.
-- **Fixes can explain discrepancies.** If `fix_severity.json` shows a critical fix in the relevant code path, mention it in the rationale and consider whether it changes your verdict.
+- **Fixes give context.** If `fix_severity.json` shows a critical fix in the relevant code path, cite it in your rationale. For qualitative / figure claims it may legitimately change your judgment; for numeric claims it cannot change the computed status — the grader sees only your extracted values.
 - **`not_applicable` is rare.** Use it only when the claim genuinely can't be checked from a replication (e.g., a claim about paper metadata like a DOI, or a claim about a hardware-only behavior not exercisable here). Always set `n_a_reason`.
 - **Don't dodge with `not_applicable` if you just couldn't reach the evidence.** That's `not_attempted`.
 
@@ -229,9 +231,9 @@ Save your verdict to `{{ output_dir }}/verify/{{ claim.id }}.json` with this sha
     "status": "match | partial | no_match | not_attempted | not_applicable",
     "structured": { /* type-specific, see above */ },
     "rationale": "<one paragraph explaining your verdict, citing evidence files>",
-    "evidence_refs": ["<relative path 1>", "<relative path 2>", ...]
-{% if false %}    , "n_a_reason": "<populate ONLY if status == not_applicable>"
-{% endif %}}
+    "evidence_refs": ["<relative path 1>", "<relative path 2>", ...],
+    "n_a_reason": "<ONLY when status == not_applicable; omit this key otherwise>"
+}
 ```
 
 The pipeline reads that file; nothing else is captured.
