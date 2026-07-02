@@ -181,9 +181,9 @@ def build_config_fingerprint(
 
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
-# pipeline state so they re-run. Every output-affecting field currently
-# invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. a knob that only affects the verify phase).
+# pipeline state so they re-run. Input and provider/mode fields invalidate the
+# full downstream pipeline; engine_* fields are scoped to the stages their
+# bucket feeds (a verify-engine change re-runs verify alone).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
     'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
