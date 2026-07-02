@@ -4,8 +4,8 @@
 #
 # For use on environments where docker is not available (HPC clusters,
 # managed compute) but you still want the veritas pipeline. Assumes the
-# host already has the runtime deps (claude/codex/gemini CLI, python, uv,
-# pandoc/latex if you want PDF reports) on PATH.
+# host already has the runtime deps (claude/codex/gemini/opencode CLI,
+# python, uv, pandoc/latex if you want PDF reports) on PATH.
 #
 # Mirrors the layout the docker `entrypoint.sh` would set up:
 #   <--output>/veritas-skills/         (copy of templates/skills, runtime read-only)
@@ -34,7 +34,7 @@ require_tools() {
     done
     if [ ${#missing[@]} -gt 0 ]; then
         echo "ERROR: missing required tools on PATH: ${missing[*]}" >&2
-        echo "Install them and re-run. (claude/codex/gemini via curl|bash, python+uv via your package manager.)" >&2
+        echo "Install them and re-run. (claude/codex/gemini via curl|bash, opencode via npm, python+uv via your package manager.)" >&2
         exit 1
     fi
 }
@@ -139,8 +139,9 @@ cmd_replicate() {
     provider="$(extract_provider "$@")"
     case "$provider" in
         claude|codex|gemini) require_tools python uv "$provider" ;;
+        openrouter)          require_tools python uv opencode ;;
         *)
-            echo "ERROR: unknown --provider: $provider (expected claude|codex|gemini)" >&2
+            echo "ERROR: unknown --provider: $provider (expected claude|codex|gemini|openrouter)" >&2
             exit 1
             ;;
     esac

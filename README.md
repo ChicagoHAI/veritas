@@ -177,8 +177,10 @@ alone — cheap re-adjudication under a different judge.
 
 **Auth.** Provider API keys are read from your host shell and forwarded
 into the container (a key set only in `.env` is forwarded too; the host environment wins when both are set): `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `GEMINI_API_KEY`. An API key is accepted as an
-alternative to `./veritas login <provider>`. Note: when an
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`,
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`. For claude/codex/gemini an API key is
+accepted as an alternative to `./veritas login <provider>`; OpenRouter is
+API-key-only (there is no login flow). Note: when an
 `ANTHROPIC_API_KEY` is visible to claude, billing follows the key rather
 than your subscription.
 
