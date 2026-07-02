@@ -48,15 +48,28 @@ do not memorize numerical results for hardcoding (see Self-Review).
 
 ### 2. Plan
 
+First choose the computational stack, then outline the file structure.
+
+**Match the paper's computational demands.** Implement in the language
+and framework the methodology genuinely needs — do not default to pure
+Python/NumPy on CPU. If the method's scale depends on compiled or GPU
+performance (an N-body force solver, a long MCMC, deep-model training),
+use tools that deliver it: GPU-enabled libraries (PyTorch / CuPy / JAX)
+when a GPU is present, JIT or vectorized paths (numba), C/C++ extensions
+via the available gcc toolchain, or R for R-native methods. An
+implementation that is faithful on paper but cannot run at the paper's
+scale will fail the replication.
+
 Outline the file structure of your codebase before writing any code:
 
 - What modules do you need?
 - What is their dependency order?
 - Where will entry points live?
-- What dependencies (Python packages) are needed?
+- What dependencies (packages, system libraries) are needed?
 
-Track dependencies in `pyproject.toml` or `requirements.txt` (your
-choice; pick one and be consistent).
+Track Python dependencies in `pyproject.toml` or `requirements.txt`
+(your choice; pick one and be consistent); a non-Python stack
+additionally uses its native manifest (e.g. R's `DESCRIPTION`).
 
 ### 2.5. Capture the plan to disk
 
@@ -160,7 +173,9 @@ python -c "import <module_name>"
 ```
 
 Fix any `ImportError`, `SyntaxError`, or `ModuleNotFoundError`. The
-codebase must be importable end-to-end before you exit.
+codebase must be importable end-to-end before you exit. For non-Python
+components, run the equivalent smoke check (the C/C++ code compiles;
+R sources parse).
 
 #### d. Dependency completeness
 
