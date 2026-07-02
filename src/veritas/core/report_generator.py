@@ -363,7 +363,12 @@ class ReportGenerator:
         )
         return intro + body
 
-    _INTEGRITY_SEVERITY = {"likely_fabricated": 3, "metadata_mismatch": 2, "inconclusive": 1, "verified": 0}
+    _INTEGRITY_SEVERITY = {
+        "likely_fabricated": 4, "metadata_mismatch": 3, "unresolved": 2,
+        "inconclusive": 1, "verified": 0,
+    }
+    # "inaccessible" (the audit could not retrieve the source) is deliberately
+    # absent: it carries no information, so it neither softens nor escalates.
     _FAITHFULNESS_SEVERITY = {"contradicted": 3, "not_mentioned": 2, "partially_supported": 1, "supported": 0}
 
     @staticmethod
@@ -411,7 +416,8 @@ class ReportGenerator:
             f"{s.get('verified', 0)} verified, "
             f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
             f"{s.get('likely_fabricated', 0)} likely fabricated, "
-            f"{s.get('inconclusive', 0)} inconclusive.\n\n"
+            f"{s.get('inconclusive', 0)} inconclusive, "
+            f"{s.get('unresolved', 0)} unresolved.\n\n"
         )
         if audit_lookup:
             section += (
@@ -488,13 +494,16 @@ class ReportGenerator:
                     softened_faith = False
                 else:
                     first_verdict = f.get("verdict", "")
+                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
                     final_verdict, softened_faith = self._soften_verdict(
-                        first_verdict, audit_lookup.get((f.get("key"), "faithfulness")), "faithfulness")
+                        first_verdict, audit_verdict, "faithfulness")
                     if softened_faith:
                         softened_count += 1
                     verdict_label = label_faith.get(final_verdict, final_verdict or "?")
                     if softened_faith:
                         verdict_label += f" (audit softened from {first_verdict})"
+                    elif audit_verdict == "inaccessible":
+                        verdict_label += " (audit could not retrieve the source)"
                 key = (f.get("key") or "?").replace("|", "\\|")
                 claim = (f.get("claim") or "").replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()

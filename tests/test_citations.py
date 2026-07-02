@@ -564,6 +564,55 @@ def test_render_citation_check_skips_malformed_flagged_entry(tmp_path):
     assert "a2024" in section
 
 
+def test_soften_verdict_unresolved_can_soften_to_inconclusive():
+    final, softened = ReportGenerator._soften_verdict("unresolved", "inconclusive", "integrity")
+    assert final == "inconclusive" and softened
+
+
+def test_soften_verdict_ignores_inaccessible_audit():
+    # "inaccessible" carries no information: keep the first verdict, unsoftened.
+    final, softened = ReportGenerator._soften_verdict("contradicted", "inaccessible", "faithfulness")
+    assert final == "contradicted" and not softened
+
+
+def test_render_citation_check_counts_unresolved_and_annotates_inaccessible_audit(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 4, "verified": 2, "metadata_mismatch": 0, "unresolved": 1,
+                    "likely_fabricated": 0, "inconclusive": 1,
+                    "faithfulness": {"checked": 1, "supported": 0, "partially_supported": 0,
+                                     "contradicted": 1, "not_mentioned": 0, "inaccessible": 0},
+                    "faithfulness_scope": "main"},
+        "flagged": [
+            {"key": "u2024", "status": "unresolved", "detail": "web search did not complete",
+             "matched_record": None, "evidence": []},
+            {"key": "i2024", "status": "inconclusive", "detail": "found but not indexed",
+             "matched_record": None, "evidence": []},
+        ],
+        "faithfulness": [
+            {"key": "c2024", "claim": "X causes Y", "source_status": "retrieved",
+             "verdict": "contradicted", "quote": "X does not cause Y",
+             "source": "https://example.org/c2024", "detail": "d"},
+        ],
+        "checked_support": True,
+    }), encoding="utf-8")
+    (out / "evaluation" / "citation_audit.json").write_text(json.dumps({
+        "audited_count": 1,
+        "items": [{"key": "c2024", "kind": "faithfulness",
+                   "audit_verdict": "inaccessible", "note": "paywalled"}],
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    section = gen._render_citation_check(
+        gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert "1 unresolved" in section          # summary line counts it
+    assert "| unresolved |" in section        # flagged table renders it
+    # An inaccessible audit keeps the verdict but is annotated, not silent.
+    assert "contradicted (audit could not retrieve the source)" in section
+    assert "audit softened" not in section
+
+
 def test_load_citation_check_tolerates_markdown_fences(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)
