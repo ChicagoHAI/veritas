@@ -485,6 +485,8 @@ get_provider_auth_flags() {
 # macOS note: Claude Code stores credentials in the Keychain rather than
 # ~/.claude/.credentials.json, so on Darwin we also probe the Keychain.
 # -----------------------------------------------------------------------------
+# Callers run load_provider_auth_env first, so keys set only in .env are
+# already exported here and every [ -n "$VAR" ] check below sees them.
 check_provider_credentials() {
     local provider="$1"
     case "$provider" in
@@ -493,7 +495,7 @@ check_provider_credentials() {
                 return 0
             fi
             echo -e "${RED}Claude credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login claude${NC} (or export ANTHROPIC_API_KEY)" >&2
+            echo -e "Run: ${BOLD}./veritas login claude${NC} (or set ANTHROPIC_API_KEY in your shell or .env)" >&2
             exit 1
             ;;
         codex)
@@ -501,7 +503,7 @@ check_provider_credentials() {
                 return 0
             fi
             echo -e "${RED}Codex credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login codex${NC} (or export OPENAI_API_KEY)" >&2
+            echo -e "Run: ${BOLD}./veritas login codex${NC} (or set OPENAI_API_KEY in your shell or .env)" >&2
             exit 1
             ;;
         gemini)
@@ -509,11 +511,11 @@ check_provider_credentials() {
                 return 0
             fi
             echo -e "${RED}Gemini credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login gemini${NC} (or export GEMINI_API_KEY)" >&2
+            echo -e "Run: ${BOLD}./veritas login gemini${NC} (or set GEMINI_API_KEY in your shell or .env)" >&2
             exit 1
             ;;
         openrouter)
-            if [ -n "$OPENROUTER_API_KEY" ] || [ -n "$(get_env_value OPENROUTER_API_KEY)" ]; then
+            if [ -n "$OPENROUTER_API_KEY" ]; then
                 return 0
             fi
             echo -e "${RED}OpenRouter API key not found.${NC}" >&2
@@ -525,6 +527,26 @@ check_provider_credentials() {
             exit 1
             ;;
     esac
+}
+
+# Provider whose credentials a single-bucket subcommand (evaluate,
+# check-citations) actually needs: an --evaluate-model with a provider prefix
+# overrides the global --provider for the preflight check, since only the
+# evaluate bucket runs there.
+extract_evaluate_provider() {
+    local provider=$(extract_provider "$@")
+    local spec=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --evaluate-model) spec="$2"; shift 2 ;;
+            --evaluate-model=*) spec="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    case "$spec" in
+        claude:*|codex:*|gemini:*|openrouter:*) provider="${spec%%:*}" ;;
+    esac
+    echo "$provider"
 }
 
 # Return 0 if Claude OAuth credentials are present on this host, 1 otherwise.
@@ -1205,6 +1227,8 @@ cmd_replicate() {
 
     # Fast-fail if the requested provider has no credentials on the host.
     # Beats waiting for an inside-container LLM call to hang or error out.
+    # .env-only keys count: load them into the wrapper env first.
+    load_provider_auth_env
     local provider=$(extract_provider "$@")
     check_provider_credentials "$provider"
 
@@ -1244,7 +1268,6 @@ cmd_replicate() {
         model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
     fi
 
-    load_provider_auth_env
     local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
@@ -1295,7 +1318,8 @@ cmd_report() {
 cmd_evaluate() {
     ensure_image
     warn_if_outdated
-    check_provider_credentials "$(extract_provider "$@")"
+    load_provider_auth_env
+    check_provider_credentials "$(extract_evaluate_provider "$@")"
 
     local eval_dir="$1"; shift
     local host_eval_dir
@@ -1309,7 +1333,6 @@ cmd_evaluate() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
-    load_provider_auth_env
     local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
@@ -1334,7 +1357,8 @@ cmd_evaluate() {
 cmd_check_citations() {
     ensure_image
     warn_if_outdated
-    check_provider_credentials "$(extract_provider "$@")"
+    load_provider_auth_env
+    check_provider_credentials "$(extract_evaluate_provider "$@")"
 
     local eval_dir="$1"; shift
     local host_eval_dir
@@ -1374,7 +1398,6 @@ cmd_check_citations() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
-    load_provider_auth_env
     local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \

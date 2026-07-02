@@ -868,3 +868,59 @@ def test_check_citations_existing_runs_check_and_report(tmp_path):
     assert calls["check"] == 1 and calls["report"] == 1
     assert result.success
     assert result.report_path == out / "report" / "r.md"
+
+
+# ---------------------------------------------------------------------------
+# --- settings-aware resume (engine/scope sidecar) ---
+# ---------------------------------------------------------------------------
+
+_CHECK_OUTPUT = (
+    '{"summary": {"total": 0, "verified": 0, "metadata_mismatch": 0, '
+    '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0}, '
+    '"flagged": [], "checked_support": false, "notes": "n"}'
+)
+
+
+def test_check_citations_skips_when_settings_match(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    cfg.citation_check_meta_path.write_text(
+        json.dumps({"engine": "claude", "faithfulness_scope": "main"}),
+        encoding="utf-8",
+    )
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()
+
+
+def test_check_citations_skips_legacy_output_without_meta(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()
+
+
+def test_check_citations_reruns_on_settings_change(tmp_path):
+    # A scope (or engine) change re-runs the check instead of silently
+    # reusing the old output, and drops the now-stale audit.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    cfg.citation_check_meta_path.write_text(
+        json.dumps({"engine": "claude", "faithfulness_scope": "all"}),
+        encoding="utf-8",
+    )
+    cfg.citation_audit_path.write_text('{"items": []}', encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None,
+                    expose_api_keys=False):
+        cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider",
+                      side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.call_count == 1
+    assert not cfg.citation_audit_path.exists()
+    meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
+    assert meta == {"engine": "claude", "faithfulness_scope": "main"}

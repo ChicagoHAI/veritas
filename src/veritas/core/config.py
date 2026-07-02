@@ -119,6 +119,13 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
+# Sidecars recording the settings (engine, and scope for citations) that
+# produced each evaluate-bucket output. A settings change re-runs the output
+# instead of silently reusing it; outputs without a sidecar predate this
+# tracking and are kept as-is.
+EVALUATION_META_FILE = ".contextual_evaluation_meta.json"
+CITATION_CHECK_META_FILE = ".citation_check_meta.json"
+
 # Citation-check submodule filenames (opt-in, advisory; under the evaluation dir).
 CITATION_CHECK_FILE = "citation_check.json"
 CITATION_CHECK_TRANSCRIPT_FILE = "citation_check_transcript.jsonl"
@@ -507,6 +514,10 @@ class Config:
     def evaluation_transcript_path(self) -> Path:
         return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
 
+    @property
+    def evaluation_meta_path(self) -> Path:
+        return self.evaluation_dir / EVALUATION_META_FILE
+
     # Citation-check submodule artifacts (under evaluation/). references_path and
     # resolver_verdicts_path are produced by the agent; resolver_script_path is
     # where the runner stages the standalone resolver for the agent to run.
@@ -517,6 +528,10 @@ class Config:
     @property
     def citation_check_transcript_path(self) -> Path:
         return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
+
+    @property
+    def citation_check_meta_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_META_FILE
 
     @property
     def citation_audit_path(self) -> Path:

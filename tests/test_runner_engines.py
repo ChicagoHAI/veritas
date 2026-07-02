@@ -98,7 +98,11 @@ def test_invoke_default_is_legacy_claude(tmp_path, monkeypatch):
     ]
 
 
-from veritas.core.runner import FINGERPRINT_INVALIDATES, build_config_fingerprint
+from veritas.core.runner import (
+    FINGERPRINT_INVALIDATES,
+    _is_spurious_engine_change,
+    build_config_fingerprint,
+)
 
 
 def _cfg(tmp_path, **kw):
@@ -106,33 +110,88 @@ def _cfg(tmp_path, **kw):
     return Config(repo_path=repo, output_dir=tmp_path / "out", **kw)
 
 
-def test_fingerprint_omits_engines_when_no_knobs(tmp_path):
+def test_fingerprint_always_includes_engines(tmp_path):
     fp = build_config_fingerprint(_cfg(tmp_path))
-    assert not any(k.startswith("engine_") for k in fp)
     assert fp["provider"] == "claude"
+    for bucket in ("analyze", "codegen", "replicate", "assess", "verify", "evaluate"):
+        assert fp[f"engine_{bucket}"] == "claude"
 
 
-def test_fingerprint_includes_engines_when_knob_set(tmp_path):
+def test_fingerprint_resolves_knobs(tmp_path):
     fp = build_config_fingerprint(
         _cfg(tmp_path, verify_model="openrouter:openai/gpt-5.5"))
     assert fp["engine_verify"] == "openrouter:openai/gpt-5.5"
     assert fp["engine_analyze"] == "claude"
 
 
-def test_fingerprint_keeps_engines_once_recorded(tmp_path):
-    # Reverting knobs to default is still detected when the prior run
-    # recorded engines: the fields stay in the fingerprint.
-    recorded = {"provider": "claude", "engine_verify": "openrouter:openai/gpt-5.5"}
-    fp = build_config_fingerprint(_cfg(tmp_path), recorded=recorded)
-    assert fp["engine_verify"] == "claude"
-
-
-def test_old_state_resumes_clean(tmp_path):
-    # Recorded config from an older veritas has no engine keys; with no
-    # knobs set the current fingerprint omits them -> no spurious change.
+def test_spurious_engine_change_uses_provider_baseline(tmp_path):
+    # A recorded config from before engine tracking compares each engine
+    # against the recorded global provider, not against "missing".
     recorded = {"provider": "claude", "mode": "repo-only", "claims_path": None}
-    fp = build_config_fingerprint(_cfg(tmp_path), recorded=recorded)
-    assert set(fp) == {"provider", "mode", "claims_path"}
+    current = build_config_fingerprint(
+        _cfg(tmp_path, verify_model="openrouter:openai/gpt-5.5"))
+    assert _is_spurious_engine_change("engine_analyze", recorded, current) is True
+    assert _is_spurious_engine_change("engine_verify", recorded, current) is False
+    # non-engine fields are never filtered
+    assert _is_spurious_engine_change("provider", recorded, current) is False
+
+
+def test_spurious_filter_off_once_engines_recorded(tmp_path):
+    # Once a config with engine keys is recorded, comparisons are direct:
+    # nothing is treated as spurious, so reverting a knob is detected.
+    recorded = {"provider": "claude", "engine_verify": "openrouter:openai/gpt-5.5"}
+    current = build_config_fingerprint(_cfg(tmp_path))
+    assert current["engine_verify"] == "claude"
+    assert _is_spurious_engine_change("engine_verify", recorded, current) is False
+
+
+def test_first_model_knob_invalidates_only_its_bucket(tmp_path):
+    # Regression: a default run records no engine keys; adding --verify-model
+    # afterwards must invalidate verify alone, not every stage.
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    config = Config(repo_path=repo, output_dir=out,
+                    verify_model="openrouter:openai/gpt-5.5")
+    state = PipelineState(out)
+    state.record_inputs(repo, None)
+    state.record_config({"provider": "claude", "mode": "repo-only",
+                         "claims_path": None})
+    for stage in ("analyze", "plan", "replicate", "assess_fixes", "verify"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+
+    ReplicationRunner(config)._reconcile_with_prior_run(state)
+
+    assert not state.is_stage_completed("verify")
+    for stage in ("analyze", "plan", "replicate", "assess_fixes"):
+        assert state.is_stage_completed(stage), stage
+    # The baseline is upgraded to explicit engine fields.
+    assert state.state["config"]["engine_verify"] == "openrouter:openai/gpt-5.5"
+
+
+def test_legacy_state_resumes_clean_and_upgrades(tmp_path):
+    # No knobs set against a pre-engine-tracking state file: nothing is
+    # invalidated, and the recorded baseline gains explicit engine fields.
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    config = Config(repo_path=repo, output_dir=out)
+    state = PipelineState(out)
+    state.record_inputs(repo, None)
+    state.record_config({"provider": "claude", "mode": "repo-only",
+                         "claims_path": None})
+    for stage in ("analyze", "plan", "replicate", "assess_fixes", "verify"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+
+    ReplicationRunner(config)._reconcile_with_prior_run(state)
+
+    for stage in ("analyze", "plan", "replicate", "assess_fixes", "verify"):
+        assert state.is_stage_completed(stage), stage
+    assert state.state["config"]["engine_verify"] == "claude"
 
 
 def test_invalidation_rows():
@@ -147,22 +206,28 @@ def test_invalidation_rows():
     assert FINGERPRINT_INVALIDATES["engine_evaluate"] == ()
 
 
-def test_stripped_env_exempts_configured_provider_keys(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
-    config = Config(repo_path=repo, output_dir=tmp_path / "out",
-                    verify_model="openrouter:openai/gpt-5.5")
+def test_stripped_env_exempts_only_invoked_provider_keys(monkeypatch):
     monkeypatch.setenv("VERITAS_ENV_FILE_KEYS",
-                       "OPENROUTER_API_KEY,OPENAI_API_KEY,HF_TOKEN")
+                       "OPENROUTER_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,HF_TOKEN")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setenv("HF_TOKEN", "hf-test")
-    runner = ReplicationRunner(config)
-    env = ReplicationRunner._stripped_env(runner._auth_exemptions())
-    # openrouter is a configured provider -> its key survives stripping
+
+    # An openrouter invocation sees only the openrouter key.
+    env = ReplicationRunner._stripped_env(
+        ReplicationRunner._auth_exemptions("openrouter"))
     assert env["OPENROUTER_API_KEY"] == "sk-or-test"
-    # codex is NOT configured -> its key stays stripped
     assert "OPENAI_API_KEY" not in env
-    # plain replication keys stay stripped
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "HF_TOKEN" not in env
+
+    # A claude invocation in the same run sees only claude's vars — the
+    # openrouter key configured for another bucket never reaches it.
+    env = ReplicationRunner._stripped_env(
+        ReplicationRunner._auth_exemptions("claude"))
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert "OPENROUTER_API_KEY" not in env
     assert "HF_TOKEN" not in env
 
 
@@ -196,3 +261,58 @@ def test_auth_check_noop_without_openrouter(tmp_path, monkeypatch):
     config = Config(repo_path=repo, output_dir=tmp_path / "out")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     ReplicationRunner(config)._check_provider_auth()
+
+
+# -- evaluate-bucket settings-aware resume -----------------------------------
+
+def _eval_runner(tmp_path, monkeypatch, **kw):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out", **kw)
+    config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+    config.prompts_dir.mkdir(parents=True, exist_ok=True)
+    runner = ReplicationRunner(config)
+    monkeypatch.setattr(runner.prompt_generator, "generate_evaluation_prompt",
+                        lambda **kwargs: "prompt")
+    return runner, config
+
+
+def test_evaluate_skips_when_engine_unchanged(tmp_path, monkeypatch):
+    runner, config = _eval_runner(tmp_path, monkeypatch)
+    config.evaluation_path.write_text('{"cheating_monitor": {}}', encoding="utf-8")
+    config.evaluation_meta_path.write_text('{"engine": "claude"}', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(ReplicationRunner, "_invoke_provider",
+                        lambda self, *a, **k: calls.append(1) or True)
+    runner._evaluate()
+    assert calls == []
+
+
+def test_evaluate_skips_legacy_output_without_meta(tmp_path, monkeypatch):
+    runner, config = _eval_runner(tmp_path, monkeypatch)
+    config.evaluation_path.write_text('{"cheating_monitor": {}}', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(ReplicationRunner, "_invoke_provider",
+                        lambda self, *a, **k: calls.append(1) or True)
+    runner._evaluate()
+    assert calls == []
+
+
+def test_evaluate_reruns_on_engine_change(tmp_path, monkeypatch):
+    runner, config = _eval_runner(
+        tmp_path, monkeypatch, evaluate_model="claude-sonnet-5")
+    config.evaluation_path.write_text('{"cheating_monitor": {}}', encoding="utf-8")
+    config.evaluation_meta_path.write_text('{"engine": "claude"}', encoding="utf-8")
+    calls = []
+
+    def fake_invoke(self, *args, **kwargs):
+        calls.append(1)
+        config.evaluation_path.write_text(
+            '{"cheating_monitor": {"risk": "low"}}', encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(ReplicationRunner, "_invoke_provider", fake_invoke)
+    runner._evaluate()
+    assert calls == [1]
+    import json as _json
+    meta = _json.loads(config.evaluation_meta_path.read_text(encoding="utf-8"))
+    assert meta == {"engine": "claude:claude-sonnet-5"}

@@ -120,11 +120,11 @@ MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
     "openrouter": ("-m",),
 }
 
-# Auth vars each provider CLI reads. Vars for providers configured in the
-# current run are exempted from .env key-stripping so an API key placed in
-# .env still reaches its provider in every phase. Keys for providers not in
-# use stay stripped. Consequence when claude is configured: an
-# ANTHROPIC_API_KEY present in .env reaches claude in all phases; billing is
+# Auth vars each provider CLI reads. Each invocation's environment exempts
+# only the invoked provider's own vars from .env key-stripping, so an API key
+# placed in .env reaches its provider in every phase while other providers'
+# subprocesses never see it. Consequence when claude runs a phase: an
+# ANTHROPIC_API_KEY present in .env reaches that claude subprocess; billing is
 # expected to follow the key.
 PROVIDER_AUTH_VARS: Dict[str, Tuple[str, ...]] = {
     "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
@@ -152,31 +152,66 @@ def build_provider_command(
     return cmd
 
 
-def build_config_fingerprint(
-    config: Config, recorded: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+def build_config_fingerprint(config: Config) -> Dict[str, Any]:
     """Config fields that affect output content.
 
     Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
     excluded so changing them between runs doesn't trigger needless re-runs.
 
-    ``engine_*`` fields are included only when a model knob is set for this
-    run or the recorded config already tracks engines — state files written
-    by older veritas versions therefore resume without spurious
-    invalidation, while reverting a knob to default is still detected.
+    The resolved engine of every bucket is always included; comparison
+    against state files recorded before engine tracking is handled by
+    ``_is_spurious_engine_change``.
     """
     fingerprint: Dict[str, Any] = {
         'provider': config.provider,
         'mode': config.mode,
         'claims_path': str(config.claims_path) if config.claims_path else None,
     }
-    recorded_has_engines = any(
-        key.startswith('engine_') for key in (recorded or {})
-    )
-    if config.any_model_knob_set or recorded_has_engines:
-        for bucket, engine in config.resolved_engines().items():
-            fingerprint[f'engine_{bucket}'] = engine
+    for bucket, engine in config.resolved_engines().items():
+        fingerprint[f'engine_{bucket}'] = engine
     return fingerprint
+
+
+def _read_engine_meta(meta_path: Path) -> Optional[Dict[str, Any]]:
+    """Sidecar describing the settings that produced an evaluate-bucket
+    output. None when absent or unreadable (outputs from before this
+    tracking, or a corrupt sidecar)."""
+    if not meta_path.exists():
+        return None
+    try:
+        data = json.loads(meta_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_engine_meta(meta_path: Path, meta: Dict[str, Any]) -> None:
+    """Best-effort sidecar write; the phases it serves are advisory and must
+    never fail over bookkeeping."""
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2), encoding='utf-8')
+    except OSError:
+        pass
+
+
+def _is_spurious_engine_change(
+    field: str, recorded: Dict[str, Any], current: Dict[str, Any]
+) -> bool:
+    """True when an engine field only appears changed because the recorded
+    run predates engine tracking.
+
+    A recorded config with no ``engine_*`` keys describes a run whose every
+    bucket resolved to the recorded global provider with no model pin, so
+    the comparison baseline for each engine is that provider string rather
+    than "missing". Without this, the first run that sets any model knob
+    against an older output dir would invalidate every stage instead of
+    only the stages whose engine actually changed.
+    """
+    if not field.startswith('engine_'):
+        return False
+    if any(key.startswith('engine_') for key in recorded):
+        return False
+    return current.get(field) == recorded.get('provider')
 
 
 # Per-field stage invalidation rules. When an input or config field changes
@@ -197,9 +232,10 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Per-bucket engines (resolved provider:model). Scoped: a verify-engine
     # change re-adjudicates an existing run without re-replicating.
     # engine_analyze skips codegen (codegen consumes the paper, never the
-    # claims). engine_evaluate maps to no state-tracked stage: evaluation
-    # output is file-gated, and manager/research engine changes apply to
-    # future loop iterations only.
+    # claims). engine_evaluate maps to no state-tracked stage: the
+    # contextual-evaluation and citation outputs track their producing
+    # settings in sidecar files and re-run on a settings change themselves;
+    # manager/research engine changes apply to future loop iterations only.
     'engine_analyze':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'engine_codegen':   ('codegen', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'engine_replicate': ('replicate', 'assess_fixes', 'verify'),
@@ -1582,12 +1618,28 @@ class ReplicationRunner:
 
         This phase is advisory: its output does NOT alter the Replication Score.
         It runs only when ``config.run_evaluation`` is set, and is idempotent —
-        if the output already exists it is skipped (resume-safe).
+        an existing output produced with the same evaluate engine is skipped
+        (resume-safe); an engine change re-runs it. Outputs without a sidecar
+        predate engine tracking and are kept as-is.
         """
         output_path = self.config.evaluation_path
+        meta_path = self.config.evaluation_meta_path
+        current_meta = {"engine": self.config.resolved_engines()["evaluate"]}
         if output_path.exists() and output_path.read_text(encoding='utf-8').strip():
-            print("[OK] evaluation: skipped (already produced)")
-            return
+            stored_meta = _read_engine_meta(meta_path)
+            if stored_meta == current_meta:
+                print("[OK] evaluation: skipped (already produced with this engine)")
+                return
+            if stored_meta is None:
+                print(
+                    f"[OK] evaluation: skipped (already produced; predates "
+                    f"engine tracking — delete {output_path} to re-run)"
+                )
+                return
+            print(
+                f"  Re-running evaluation: evaluate engine changed "
+                f"({stored_meta.get('engine')} -> {current_meta['engine']})"
+            )
 
         print("Running contextual-evaluation phase (external checker)...")
         self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
@@ -1615,6 +1667,7 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: evaluation agent did not write {output_path}")
             return
+        _write_engine_meta(meta_path, current_meta)
         # Validate it parses; leave the agent's file in place regardless.
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding='utf-8')))
@@ -1649,15 +1702,37 @@ class ReplicationRunner:
         list, runs the staged deterministic resolver (authoritative for
         existence/metadata), and escalates only unresolved references. Advisory:
         the output at ``evaluation/citation_check.json`` does NOT alter the
-        Replication Score. Idempotent (skips if already produced) and never
-        raises into the pipeline.
+        Replication Score. Idempotent for the same settings; a change of the
+        evaluate engine or faithfulness scope re-runs it (and drops the stale
+        audit). Outputs without a sidecar predate settings tracking and are
+        kept as-is. Never raises into the pipeline.
 
         A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
+        meta_path = self.config.citation_check_meta_path
+        current_meta = {
+            "engine": self.config.resolved_engines()["evaluate"],
+            "faithfulness_scope": self.config.faithfulness_scope,
+        }
         if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
-            print("[OK] citation-check: skipped (already produced)")
-            return
+            stored_meta = _read_engine_meta(meta_path)
+            if stored_meta == current_meta:
+                print("[OK] citation-check: skipped (already produced with these settings)")
+                return
+            if stored_meta is None:
+                print(
+                    f"[OK] citation-check: skipped (already produced; predates "
+                    f"settings tracking — delete {output_path} to re-run)"
+                )
+                return
+            print(
+                f"  Re-running citation-check: settings changed "
+                f"({stored_meta} -> {current_meta})"
+            )
+            # The audit re-checks the check's findings; a re-run makes any
+            # existing audit stale by construction.
+            self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this
             print("  citation-check: no paper available; skipping")
@@ -1692,6 +1767,7 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
+        _write_engine_meta(meta_path, current_meta)
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
             s = data.get("summary") or {}
@@ -2048,12 +2124,24 @@ class ReplicationRunner:
             self.config.repo_path, self.config.paper_path, data_path=self.config.data_path,
         )
 
-        current_config = build_config_fingerprint(
-            self.config, recorded=state.state.get('config'))
-        config_changes = state.detect_config_changes(current_config)
+        current_config = build_config_fingerprint(self.config)
+        recorded_config = state.state.get('config') or {}
+        config_changes = [
+            field for field in state.detect_config_changes(current_config)
+            if not _is_spurious_engine_change(field, recorded_config, current_config)
+        ]
+
+        # A legacy baseline (recorded before engine tracking) is upgraded to
+        # the explicit engine fields whenever it is seen, so future resumes
+        # compare directly instead of via the provider baseline.
+        recorded_lacks_engines = not any(
+            key.startswith('engine_') for key in recorded_config
+        )
 
         all_changes = input_changes + config_changes
         if not all_changes:
+            if recorded_lacks_engines:
+                state.record_config(current_config)
             return
 
         affected = set()
@@ -2071,7 +2159,7 @@ class ReplicationRunner:
                 self.config.paper_path,
                 data_path=self.config.data_path,
             )
-        if config_changes:
+        if config_changes or recorded_lacks_engines:
             state.record_config(current_config)
 
     def _load_paper_claims(self) -> PaperClaims:
@@ -2123,12 +2211,14 @@ class ReplicationRunner:
             return os.environ.copy()
         return {k: v for k, v in os.environ.items() if k not in keys_to_strip}
 
-    def _auth_exemptions(self) -> frozenset:
-        """Auth vars of every provider any bucket resolves to."""
-        exempt = set()
-        for provider in self.config.resolved_providers():
-            exempt.update(PROVIDER_AUTH_VARS.get(provider, ()))
-        return frozenset(exempt)
+    @staticmethod
+    def _auth_exemptions(provider: str) -> frozenset:
+        """Auth vars of the provider this invocation runs on.
+
+        Scoped per invocation: each subprocess sees only its own provider's
+        auth vars, so a key configured for one bucket never reaches another
+        bucket's provider."""
+        return frozenset(PROVIDER_AUTH_VARS.get(provider, ()))
 
     def _check_provider_auth(self) -> None:
         """Fail fast when a configured provider cannot authenticate.
@@ -2184,8 +2274,8 @@ class ReplicationRunner:
         ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
         this — paper code it runs needs the keys. All other phases keep
         the default ``False``: their environment strips those keys,
-        except the auth vars of providers this run is configured to use
-        (see ``PROVIDER_AUTH_VARS``), which every phase needs to reach
+        except the invoked provider's own auth vars (see
+        ``PROVIDER_AUTH_VARS``), which the subprocess needs to reach
         its provider.
         """
         provider, model = self.config.engine_for(bucket)
@@ -2204,10 +2294,10 @@ class ReplicationRunner:
         open_mode = "a" if append else "w"
 
         # Default: strip replication API keys (sourced from .env via --env-file)
-        # from non-replicate phases, keeping only the configured providers'
-        # own auth vars (PROVIDER_AUTH_VARS). _replicate opts in via
+        # from non-replicate phases, keeping only the invoked provider's own
+        # auth vars (PROVIDER_AUTH_VARS). _replicate opts in via
         # expose_api_keys=True since the paper code it runs needs the keys.
-        env = None if expose_api_keys else self._stripped_env(self._auth_exemptions())
+        env = None if expose_api_keys else self._stripped_env(self._auth_exemptions(provider))
 
         try:
             process = subprocess.Popen(
