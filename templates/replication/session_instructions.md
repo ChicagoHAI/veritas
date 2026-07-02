@@ -57,6 +57,8 @@ A step is only "unreproducible" once distinct strategies have each failed for a 
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
 
+Write only under the working directory and the output directory above. Other subdirectories of the run output (`analyze/`, `verify/`, ...) belong to other pipeline phases — do not write into them.
+
 ## Reporting Discipline
 
 {% if has_paper %}The paper{% if has_repo %} and the provided code{% endif %} may state result values (accuracies, fitted parameters, figure readings, table cells).{% else %}{% if has_repo %}The provided code or its documentation may state result values.{% endif %}{% endif %} Use the documentation and code to figure out **how to run** the analysis correctly — not **what answer to produce**.
@@ -104,7 +106,7 @@ if [ -f setup.py ] || [ -f pyproject.toml ]; then
     uv pip install -e . 2>&1 || echo "editable install had errors"
 fi
 if [ -f environment.yml ]; then
-    echo "Note: Conda environment.yml found but conda not available; using pip fallback"
+    echo "Note: environment.yml found; if conda is unavailable here, approximate it with pip installs"
 fi
 
 # Record what was installed
@@ -117,7 +119,7 @@ When something fails, actively resolve it:
 
 - **Missing packages** → install them (`uv pip install <package>`)
 - **Deprecated APIs** → patch the code (e.g., rename `cumtrapz` to `cumulative_trapezoid`)
-- **Missing compilers or system tools** → install them. Prefer the package manager your environment already uses: `apt-get install -y g++` on a Debian/Ubuntu host or container, `conda install -y gxx_linux-64` in a conda environment, or `module load gcc` on a managed HPC cluster. If you don't have sudo and `apt-get` isn't available, fall back to conda or pip (`pip install <pkg>`) for Python-side fixes.
+- **Missing compilers or system tools** → check before installing: the veritas container already ships `gcc`/`g++`/`make` (build-essential) and R. For a genuinely missing tool, use a mechanism that works without root — many toolchains install via pip/uv (`cmake`, `ninja`) or via conda where a conda environment exists; on a managed HPC cluster try `module load gcc`. `apt-get install` requires root and fails in the default container — don't burn attempts on it there.
 - **Missing data files** → check for download scripts, look for URLs in the README, check for filename typos
 - **Configuration issues** → adjust paths, environment variables, config files
 - **Version incompatibilities** → pin compatible versions, patch import paths
@@ -185,7 +187,7 @@ Execute the following steps in order. For each step, run the code from `{{ codeb
 
 ## Evidence Collection
 
-After executing all steps, save two files:
+Maintain two files. Update `replication_log.json` after **each completed step** (rewrite the full JSON each time), not only at the end — if the session is cut short, the steps already logged survive, whereas an end-only log is lost entirely.
 
 ### 1. `{{ replication_dir }}/replication_log.json`
 
