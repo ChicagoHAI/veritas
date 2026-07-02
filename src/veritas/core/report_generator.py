@@ -66,27 +66,27 @@ _EMDASH_RE = re.compile(r"\s*—\s*")
 
 
 def read_engines_from_state(output_dir) -> dict:
-	"""Resolved per-bucket engines recorded in the run's pipeline state.
+    """Resolved per-bucket engines recorded in the run's pipeline state.
 
-	Returns ``{bucket: "provider:model"}``; empty when the state file is
-	absent, unreadable, or predates engine tracking.
-	"""
-	if not output_dir:
-		return {}
-	state_path = Path(output_dir) / ".veritas" / "pipeline_state.json"
-	if not state_path.exists():
-		return {}
-	try:
-		config = json.loads(
-			state_path.read_text(encoding="utf-8")).get("config") or {}
-	except (OSError, ValueError):
-		return {}
-	prefix = "engine_"
-	return {
-		key[len(prefix):]: value
-		for key, value in sorted(config.items())
-		if key.startswith(prefix)
-	}
+    Returns ``{bucket: "provider:model"}``; empty when the state file is
+    absent, unreadable, or predates engine tracking.
+    """
+    if not output_dir:
+        return {}
+    state_path = Path(output_dir) / ".veritas" / "pipeline_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        config = json.loads(
+            state_path.read_text(encoding="utf-8")).get("config") or {}
+    except (OSError, ValueError):
+        return {}
+    prefix = "engine_"
+    return {
+        key[len(prefix):]: value
+        for key, value in sorted(config.items())
+        if key.startswith(prefix)
+    }
 
 
 def _scrub_prose(obj):

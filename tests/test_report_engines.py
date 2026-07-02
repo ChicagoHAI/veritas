@@ -33,3 +33,12 @@ def test_corrupt_state_returns_empty(tmp_path):
     (state_dir / "pipeline_state.json").write_text("{not json",
                                                    encoding="utf-8")
     assert read_engines_from_state(tmp_path) == {}
+
+
+def test_state_without_engine_keys_returns_empty(tmp_path):
+    state_dir = tmp_path / ".veritas"
+    state_dir.mkdir()
+    (state_dir / "pipeline_state.json").write_text(json.dumps({
+        "config": {"provider": "claude", "mode": "repo-only"}
+    }), encoding="utf-8")
+    assert read_engines_from_state(tmp_path) == {}
