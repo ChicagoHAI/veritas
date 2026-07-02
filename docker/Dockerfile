@@ -141,6 +141,27 @@ RUN R -e "options(repos=c(CRAN='https://cloud.r-project.org'), Ncpus=4); \
         if (!ok) stop('R toolchain validation failed for: ', p) \
     }"
 
+# GNU Octave for executing MATLAB (.m) code during replication runs. Octave is
+# GPL/free (no license server, unlike MATLAB which would require a paid per-user
+# license — a non-starter for a redistributable tool) and runs headless via
+# `octave-cli`. We bake in the most common Octave-Forge packages so the
+# replication agent can run typical numerical paper code immediately; core
+# numerical/matrix functions need no `pkg load`. Invoke headless with e.g.
+# `cd <dir> && octave-cli --no-gui --norc script.m`. (Placed after the R block
+# so the cached R layer is not invalidated by this addition.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    octave \
+    liboctave-dev \
+    octave-statistics \
+    octave-optim \
+    octave-signal \
+    octave-image \
+    octave-io \
+    octave-control \
+    octave-parallel \
+    && rm -rf /var/lib/apt/lists/* \
+    && octave-cli --no-gui --eval "disp(['Octave ' version]); disp('octave OK')"
+
 # Copy Node.js from builder
 COPY --from=builder /usr/bin/node /usr/bin/
 COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules

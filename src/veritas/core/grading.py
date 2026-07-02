@@ -118,11 +118,34 @@ def _aggregate(statuses: List[str]) -> str:
     return "partial"
 
 
+def _grade_pairs(pairs: List[Tuple[float, float]], tol: GradingTolerances) -> GradeResult:
+    """Grade aligned (replicated, paper) numeric pairs per cell, then aggregate.
+    A NaN replicated value (missing/mutated key) is a no_match cell."""
+    statuses, n_bad = [], 0
+    for r, p in pairs:
+        if r != r:  # NaN -> missing/mutated cell
+            statuses.append("no_match"); n_bad += 1
+            continue
+        s, _ = _grade_one_scalar(r, p, None, tol)
+        statuses.append(s)
+        if s == "no_match":
+            n_bad += 1
+    agg = _aggregate(statuses)
+    return agg, f"{len(pairs)} cell(s), {n_bad} outside tolerance → {agg}"
+
+
 def _grade_scalar(structured: dict, tol: GradingTolerances) -> GradeResult:
     if not structured.get("value_found", True):
         return "not_attempted", "comparator reported no replicated value was produced"
     rep = structured.get("replicated_value")
     paper = structured.get("paper_value")
+    # A "scalar" claim whose value is a flat dict (e.g. {"N50": 0.69, "N200":
+    # 0.65}) is really a small keyed table. Grade it per key rather than bailing
+    # to not_attempted — otherwise a genuine match is silently dropped.
+    if isinstance(rep, dict) and isinstance(paper, dict):
+        pairs = _flatten_table_pairs(rep, paper)
+        if pairs is not None:
+            return _grade_pairs(pairs, tol)
     rep_list = _as_number_list(rep)
     paper_list = _as_number_list(paper)
     if rep_list is None or paper_list is None:
@@ -197,17 +220,7 @@ def _grade_table(structured: dict, tol: GradingTolerances) -> GradeResult:
         # Not a clean flat-dict table we can grade deterministically; defer to
         # the comparator's proposed status (passthrough) rather than guess.
         return "__passthrough__", "table shape not deterministically gradable; kept comparator judgment"
-    statuses, n_bad = [], 0
-    for r, p in pairs:
-        if r != r:  # NaN -> missing/mutated cell
-            statuses.append("no_match"); n_bad += 1
-            continue
-        s, _ = _grade_one_scalar(r, p, None, tol)
-        statuses.append(s)
-        if s == "no_match":
-            n_bad += 1
-    agg = _aggregate(statuses)
-    return agg, f"{len(pairs)} cell(s), {n_bad} outside tolerance → {agg}"
+    return _grade_pairs(pairs, tol)
 
 
 def grade_claim(

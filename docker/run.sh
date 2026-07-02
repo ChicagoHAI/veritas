@@ -1189,12 +1189,22 @@ cmd_replicate() {
         fi
     fi
 
+    # Forward an explicitly-set model override into the container so every
+    # phase's provider CLI pins the same model. Passed as a direct -e (not via
+    # .env / VERITAS_ENV_FILE_KEYS) so it is visible to all phases, not just
+    # replicate. No-op unless the host exports ANTHROPIC_MODEL.
+    local model_flag=""
+    if [ -n "$ANTHROPIC_MODEL" ]; then
+        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
+        $model_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
