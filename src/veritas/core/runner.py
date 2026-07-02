@@ -438,6 +438,7 @@ class ReplicationRunner:
             working_dir=working_dir,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
+            bucket="analyze",
         )
 
         if not success:
@@ -470,6 +471,7 @@ class ReplicationRunner:
                 parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
                 working_dir=working_dir,
+                bucket="analyze",
             )
 
         if claims is None:
@@ -539,6 +541,7 @@ class ReplicationRunner:
             working_dir=codebase_dir,
             log_path=log_path,
             timeout=self.config.codegen_timeout,
+            bucket="codegen",
         )
 
         if not success:
@@ -596,6 +599,7 @@ class ReplicationRunner:
             working_dir=effective_repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
+            bucket="analyze",
         )
 
         if not success:
@@ -624,6 +628,7 @@ class ReplicationRunner:
                 parser=parse_replication_plan_response,
                 timeout=self.config.analyze_timeout,
                 working_dir=effective_repo_path,
+                bucket="analyze",
             )
 
         if plan is None:
@@ -669,6 +674,7 @@ class ReplicationRunner:
         parser,
         timeout: Optional[int],
         working_dir: Path,
+        bucket: str,
     ):
         """Re-prompt the provider to fix invalid JSON output.
 
@@ -695,6 +701,7 @@ class ReplicationRunner:
             working_dir=working_dir,
             log_path=log_path,
             timeout=timeout,
+            bucket=bucket,
             append=True,
         )
 
@@ -769,6 +776,7 @@ class ReplicationRunner:
             working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
+            bucket="replicate",
             expose_api_keys=True,
         )
 
@@ -1142,6 +1150,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=self.config.manager_review_transcript_path,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success:
             print("  Warning: manager review pass did not succeed; defaulting to ACCEPT")
@@ -1300,6 +1309,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=transcript,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success or not out_path.exists():
             print(f"    research [{request.kind}]: no finding produced")
@@ -1374,6 +1384,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=transcript,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if success and out_path.exists():
             try:
@@ -1464,6 +1475,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=log_path,
             timeout=None,
+            bucket="assess",
         )
 
         if not success:
@@ -1526,6 +1538,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=self.config.evaluation_transcript_path,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success:
             print(f"  Warning: evaluation phase did not succeed (transcript: {self.config.evaluation_transcript_path})")
@@ -1585,6 +1598,7 @@ class ReplicationRunner:
             working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.verify_timeout,
+            bucket="verify",
         )
 
         if not success:
@@ -1879,6 +1893,7 @@ class ReplicationRunner:
         working_dir: Path,
         log_path: Path,
         timeout: Optional[int],
+        bucket: str,
         append: bool = False,
         expose_api_keys: bool = False,
     ) -> bool:
@@ -1889,6 +1904,11 @@ class ReplicationRunner:
         replication-plan JSON, per-claim verdict JSON, etc.) to known disk paths during the run.
         ``log_path`` only captures the conversation transcript — it is
         never the source of the agent's answer.
+
+        ``bucket`` names the engine group this call belongs to (see
+        ``config.BUCKETS``); the provider and model are resolved per bucket
+        via ``Config.engine_for``, so different pipeline steps can run on
+        different engines.
 
         Wall-clock timeout enforcement uses a daemon ``threading.Timer``
         that calls ``process.kill()`` after ``timeout`` seconds. A plain
@@ -1907,7 +1927,7 @@ class ReplicationRunner:
         keep the default ``False`` so the keys are not exposed to
         analyze/plan/codegen/assess/verify subprocesses.
         """
-        provider = self.config.provider.lower()
+        provider, model = self.config.engine_for(bucket)
         if provider not in CLI_COMMANDS:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -1917,7 +1937,7 @@ class ReplicationRunner:
             print(f"  {e}")
             return False
 
-        cmd = build_provider_command(cli, provider, None)
+        cmd = build_provider_command(cli, provider, model)
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         open_mode = "a" if append else "w"
