@@ -109,7 +109,7 @@ Populate `structured`: (the grader reads these exact fields)
 **Scalar-range claim** — check whether the replicated value(s) fall within the paper's stated range.
 
 - `match` — every replicated value lies inside `paper_range`.
-- `partial` — a value lands outside the range but within the range widened by 30% of its width, or some values fall inside and others outside.
+- `partial` — a value lands outside the range but within the range widened by 30% of its width on each side, or some values fall inside and others outside.
 - `no_match` — every value falls outside even the widened range.
 - `not_attempted` / `not_applicable` — as for scalar.
 
