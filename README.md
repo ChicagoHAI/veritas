@@ -181,8 +181,8 @@ into the container (a key set only in `.env` is forwarded too; the host environm
 `GEMINI_API_KEY`, `GOOGLE_API_KEY`. For claude/codex/gemini an API key is
 accepted as an alternative to `./veritas login <provider>`; OpenRouter is
 API-key-only (there is no login flow). Note: when an
-`ANTHROPIC_API_KEY` is visible to claude, billing follows the key rather
-than your subscription.
+`ANTHROPIC_API_KEY` is visible to claude, billing is expected to follow
+the key rather than your subscription (verify on your console).
 
 **OpenRouter routes.** `--provider openrouter` runs opencode, which
 reaches any OpenRouter slug. Two pass-through alternatives need no veritas

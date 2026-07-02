@@ -41,7 +41,7 @@ def replicate(
     provider: str = typer.Option(
         "claude",
         "--provider",
-        help="AI provider to use (claude, codex, gemini)",
+        help="AI provider to use (claude, codex, gemini, openrouter)",
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -326,7 +326,7 @@ def evaluate(
         file_okay=False,
     ),
     provider: str = typer.Option(
-        "claude", "--provider", help="AI provider for the evaluation manager."
+        "claude", "--provider", help="AI provider to use (claude, codex, gemini, openrouter)"
     ),
     model: Optional[str] = typer.Option(
         None, "--model",

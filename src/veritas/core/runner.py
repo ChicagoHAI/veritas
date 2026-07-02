@@ -124,8 +124,8 @@ MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
 # current run are exempted from .env key-stripping so an API key placed in
 # .env still reaches its provider in every phase. Keys for providers not in
 # use stay stripped. Consequence when claude is configured: an
-# ANTHROPIC_API_KEY present in .env reaches claude in all phases and billing
-# follows the key.
+# ANTHROPIC_API_KEY present in .env reaches claude in all phases; billing is
+# expected to follow the key.
 PROVIDER_AUTH_VARS: Dict[str, Tuple[str, ...]] = {
     "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
     "codex": ("OPENAI_API_KEY",),
