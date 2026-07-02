@@ -1579,19 +1579,25 @@ class ReplicationRunner:
             return
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
-            s = data.get("summary") or {}
-            f = s.get("faithfulness") or {}
-            print(
-                f"  Citation check written; {s.get('total', '?')} refs "
-                f"({s.get('likely_fabricated', 0)} likely fabricated, "
-                f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
-                f"{s.get('inconclusive', 0)} inconclusive); "
-                f"faithfulness checked {f.get('checked', 0)} "
-                f"({f.get('contradicted', 0)} contradicted, "
-                f"{f.get('partially_supported', 0)} partial)"
-            )
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
+        else:
+            if not isinstance(data, dict):
+                print("  Warning: citation-check output is not a JSON object; left as-is for audit")
+            else:
+                s = data.get("summary")
+                s = s if isinstance(s, dict) else {}
+                f = s.get("faithfulness")
+                f = f if isinstance(f, dict) else {}
+                print(
+                    f"  Citation check written; {s.get('total', '?')} refs "
+                    f"({s.get('likely_fabricated', 0)} likely fabricated, "
+                    f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+                    f"{s.get('inconclusive', 0)} inconclusive); "
+                    f"faithfulness checked {f.get('checked', 0)} "
+                    f"({f.get('contradicted', 0)} contradicted, "
+                    f"{f.get('partially_supported', 0)} partial)"
+                )
 
         # Independent audit pass over the flagged verdicts (advisory; never raises).
         self._audit_citations()
@@ -1628,6 +1634,8 @@ class ReplicationRunner:
             check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
         except (ValueError, json.JSONDecodeError):
             return
+        if not isinstance(check_data, dict):
+            return
         if not self._has_auditable_findings(check_data):
             return
         print("Running citation-audit (independent re-check of flagged verdicts)...")
@@ -1656,7 +1664,7 @@ class ReplicationRunner:
             return
         try:
             data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
-            n = len(data.get("items") or [])
+            n = len(data.get("items") or []) if isinstance(data, dict) else 0
             print(f"  Citation audit written; {n} item(s) re-checked")
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")

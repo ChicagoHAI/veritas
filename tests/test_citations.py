@@ -434,6 +434,26 @@ def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
     assert not cfg.citation_check_path.exists()
 
 
+def test_check_citations_tolerates_non_object_json_output(tmp_path):
+    # Valid JSON that is not an object (e.g. `[]`) must not raise into run().
+    runner, cfg = _citation_runner(tmp_path)
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_check_path.write_text("[]", encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke):
+        runner._check_citations()  # must NOT raise
+
+
+def test_audit_citations_tolerates_non_object_check_json(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text('["not an object"]', encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._audit_citations()  # must NOT raise
+    m.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # --- report rendering ---
 # ---------------------------------------------------------------------------
