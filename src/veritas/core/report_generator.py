@@ -65,6 +65,30 @@ SEVERITY_COLOR = {"minor": "#1a7f37", "major": "#9a6700", "critical": "#cf222e"}
 _EMDASH_RE = re.compile(r"\s*—\s*")
 
 
+def read_engines_from_state(output_dir) -> dict:
+	"""Resolved per-bucket engines recorded in the run's pipeline state.
+
+	Returns ``{bucket: "provider:model"}``; empty when the state file is
+	absent, unreadable, or predates engine tracking.
+	"""
+	if not output_dir:
+		return {}
+	state_path = Path(output_dir) / ".veritas" / "pipeline_state.json"
+	if not state_path.exists():
+		return {}
+	try:
+		config = json.loads(
+			state_path.read_text(encoding="utf-8")).get("config") or {}
+	except (OSError, ValueError):
+		return {}
+	prefix = "engine_"
+	return {
+		key[len(prefix):]: value
+		for key, value in sorted(config.items())
+		if key.startswith(prefix)
+	}
+
+
 def _scrub_prose(obj):
     """Recursively replace em dashes with a comma in every string in a parsed
     JSON structure (the manager's evaluation output). Leaves non-strings as-is."""
@@ -239,7 +263,13 @@ class ReportGenerator:
         output_dir: Optional[Path] = None,
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        report = f"# Replication Report\n\n**Generated:** {now}\n\n---\n\n"
+        report = f"# Replication Report\n\n**Generated:** {now}\n\n"
+        engines = read_engines_from_state(output_dir)
+        if engines:
+            report += "**Models:** " + ", ".join(
+                f"{bucket}: {engine}" for bucket, engine in engines.items()
+            ) + "\n\n"
+        report += "---\n\n"
 
         # Manager / external-checker narrative (advisory; None when --evaluate
         # was not run or the output is malformed — the report stays complete).
