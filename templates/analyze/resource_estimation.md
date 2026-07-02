@@ -67,7 +67,7 @@ Beyond those, include any fields that are useful and available for this paper. E
 
 Add or omit fields as the paper warrants — the schema is a suggestion, not a contract.
 Set numeric fields to null when unknown. Write the file now.
-{% if mode == "paper-only" %}
+{% if mode == "paper-only" and pre_codegen %}
 ## Note: paper-only mode
 
 No repository was provided — the code will be generated from the paper by a separate codegen phase that runs after this estimate. Codegen is a roughly constant cost regardless of paper content (~$1–2 in LLM API calls). Include it as a predicted line item in your output, for example:

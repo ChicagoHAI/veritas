@@ -206,6 +206,10 @@ class ReplicationRunner:
                     try:
                         self._generate_code()
                         state.complete_stage('codegen', success=True)
+                        # Invalidate any plan built before code existed (e.g. from a
+                        # prior --dry-run on the same output dir) so it regenerates
+                        # against the generated codebase.
+                        state.invalidate_stages(['plan'])
                     except Exception:
                         state.complete_stage('codegen', success=False)
                         raise
@@ -232,23 +236,27 @@ class ReplicationRunner:
             else:
                 state.start_stage('resource_estimate')
                 try:
-                    resource_estimate = self._estimate_resources(replication_plan)
+                    resource_estimate = self._estimate_resources(replication_plan, state)
                     state.complete_stage('resource_estimate', success=True)
                 except Exception as e:
                     print(f"Warning: resource estimation failed (continuing): {e}")
                     state.complete_stage('resource_estimate', success=False)
 
             if dry_run:
-                # On resume, resource_estimate is None — read from disk.
-                if resource_estimate is None and self.config.resource_estimate_path.exists():
+                # Always read the full JSON from disk — it contains everything the LLM
+                # wrote (estimated_cost_usd, paper_reported_compute, etc.), not just the
+                # 5 minimal dataclass fields that to_dict() would return.
+                if self.config.resource_estimate_path.exists():
                     try:
                         resource_estimate_data = json.loads(
                             self.config.resource_estimate_path.read_text(encoding="utf-8")
                         )
                     except (json.JSONDecodeError, OSError):
-                        resource_estimate_data = {}
+                        resource_estimate_data = resource_estimate.to_dict() if resource_estimate is not None else {}
+                elif resource_estimate is not None:
+                    resource_estimate_data = resource_estimate.to_dict()
                 else:
-                    resource_estimate_data = resource_estimate.to_dict() if resource_estimate is not None else {}
+                    resource_estimate_data = {}
                 compute_class = resource_estimate_data.get("compute_class", "light")
                 cost_tier = {"light": "< $1", "medium": "$1–$10", "heavy": "$10–$100+"}.get(compute_class, "unknown")
                 reported = resource_estimate_data.get("paper_reported_compute") or resource_estimate_data.get("reported_compute")
@@ -1862,6 +1870,7 @@ class ReplicationRunner:
     def _estimate_resources(
         self,
         replication_plan: Optional[ReplicationPlan],
+        state: Optional["PipelineState"] = None,
     ) -> ResourceEstimate:
         """Combine static code analysis with an LLM pass to produce resource_estimate.json.
 
@@ -1888,6 +1897,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path,
             mode=self.config.mode,
+            pre_codegen=state is not None and not state.is_stage_completed('codegen'),
         )
 
         prompt_path = self.config.prompts_dir / "resource_estimation_prompt.txt"
