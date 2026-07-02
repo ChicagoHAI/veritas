@@ -1323,6 +1323,69 @@ cmd_evaluate() {
 }
 
 # -----------------------------------------------------------------------------
+# Citation check: reference integrity + faithfulness on an existing replication
+# dir (the post-hoc twin of `replicate --check-citations`). Advisory: never
+# changes the Replication Score. Needs provider credentials because the
+# extraction and faithfulness passes are LLM calls. A --paper given here is
+# mounted read-only and its path rewritten; without it the CLI falls back to
+# the paper path saved in the run's config, which for containerized runs is a
+# container path that no longer resolves.
+# -----------------------------------------------------------------------------
+cmd_check_citations() {
+    ensure_image
+    warn_if_outdated
+    check_provider_credentials "$(extract_provider "$@")"
+
+    local eval_dir="$1"; shift
+    local host_eval_dir
+    host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
+    if [ ! -d "$host_eval_dir" ]; then
+        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
+        exit 1
+    fi
+
+    # --paper is the subcommand's only path flag; mount it read-only and
+    # rewrite the argument. Everything else passes through unchanged.
+    local paper_mount=""
+    local args=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper)
+                local host_paper
+                host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -f "$host_paper" ]; then
+                    echo -e "${RED}File not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_paper")
+                paper_mount="-v \"$host_paper:/workspace/inputs/$basename:ro\""
+                args="$args --paper \"/workspace/inputs/$basename\""
+                shift 2
+                ;;
+            *)
+                args="$args \"$1\""
+                shift
+                ;;
+        esac
+    done
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+
+    eval "docker run $tty_flag --rm \
+        $platform_flag \
+        $credential_mounts \
+        $paper_mount \
+        -v \"$host_eval_dir:/workspace/eval\" \
+        -w /workspace \
+        \"$IMAGE_NAME\" \
+        veritas check-citations /workspace/eval $args"
+}
+
+# -----------------------------------------------------------------------------
 # Help
 # -----------------------------------------------------------------------------
 show_help() {
@@ -1340,6 +1403,8 @@ show_help() {
     echo "                  replication dir (replicate once, evaluate later)"
     echo "                  e.g. ./veritas evaluate ./myrepo/replicate"
     echo "  report        Regenerate a report from an existing replication output dir"
+    echo "  check-citations  Verify the paper's references on an existing replication"
+    echo "                  dir (advisory; use --paper <pdf> to re-supply the paper)"
     echo "  shell         Interactive bash inside the container (cwd mounted as /workspace)"
     echo "  config        Edit replication API keys (.env) interactively"
     echo "  login         Log in to an AI provider (claude|codex|gemini)"
@@ -1373,6 +1438,7 @@ main() {
         replicate)     cmd_replicate "$@" ;;
         evaluate)      cmd_evaluate "$@" ;;
         report)        cmd_report "$@" ;;
+        check-citations) cmd_check_citations "$@" ;;
         shell)         cmd_shell "$@" ;;
         setup)         cmd_setup "$@" ;;
         config)        cmd_config "$@" ;;

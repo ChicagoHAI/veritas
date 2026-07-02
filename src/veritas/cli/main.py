@@ -152,6 +152,26 @@ def replicate(
         "--evaluate-timeout",
         help="Timeout in seconds for the contextual-evaluation phase. Default: no timeout.",
     ),
+    check_citations: bool = typer.Option(
+        False,
+        "--check-citations/--no-check-citations",
+        help="Run the opt-in citation-check submodule (verifies the paper's "
+             "references exist and carry correct metadata via free scholarly "
+             "APIs). Advisory; does not change the Replication Score. Requires "
+             "--paper. Default: off.",
+    ),
+    citation_timeout: Optional[int] = typer.Option(
+        None,
+        "--citation-timeout",
+        help="Timeout in seconds for the citation-check phase. Default: no timeout.",
+    ),
+    check_citations_faithfulness: str = typer.Option(
+        "main",
+        "--check-citations-faithfulness",
+        help="Citation faithfulness scope when --check-citations is on: 'main' "
+             "(central attributed claims only, default) or 'all' (every "
+             "claim-bearing citation).",
+    ),
     max_iters: Optional[int] = typer.Option(
         None,
         "--max-iters",
@@ -233,6 +253,9 @@ def replicate(
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
             run_evaluation=evaluate,
+            run_citation_check=check_citations,
+            citation_timeout=citation_timeout,
+            faithfulness_scope=check_citations_faithfulness,
             mode=mode,
             claims_path=claims,
             data_path=data,
@@ -415,6 +438,85 @@ def evaluate(
             console.print(f"PDF: {result.pdf_path}")
     else:
         console.print(f"[bold red]Evaluation failed:[/bold red] {result.error}")
+        raise typer.Exit(1)
+
+
+@app.command(name="check-citations")
+def check_citations(
+    replicate_dir: Path = typer.Argument(
+        ..., help="An existing replication output directory to citation-check.",
+        exists=True, file_okay=False,
+    ),
+    paper: Optional[Path] = typer.Option(
+        None, "--paper", help="Paper PDF (overrides the path recovered from the run's saved config).",
+    ),
+    check_citations_faithfulness: str = typer.Option(
+        "main", "--check-citations-faithfulness",
+        help="Faithfulness scope: 'main' (default) or 'all'.",
+    ),
+    provider: str = typer.Option("claude", "--provider", help="AI provider."),
+    citation_timeout: Optional[int] = typer.Option(
+        None, "--citation-timeout", help="Timeout (seconds) for the citation check.",
+    ),
+    generate_pdf: bool = typer.Option(True, "--pdf/--no-pdf", help="Render the PDF report."),
+):
+    """
+    Run the citation check on an existing replication directory, then refresh the report.
+
+    Recovers the paper path from the run's saved .veritas config (use --paper to
+    override if the file moved). Advisory; does not change the Replication Score.
+    """
+    console.print(f"[blue]Citation-checking replication at:[/blue] {replicate_dir}")
+
+    recovered_paper = paper
+    if recovered_paper is None:
+        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
+        if state_path.exists():
+            try:
+                st = json.loads(state_path.read_text(encoding="utf-8"))
+                inp = st.get("inputs") or {}
+                if inp.get("paper_path"):
+                    recovered_paper = Path(inp["paper_path"])
+            except (OSError, ValueError):
+                pass
+    if recovered_paper is None:
+        console.print(
+            "[bold red]Error:[/bold red] no paper path was found for this run "
+            "(none recorded in the run's saved config). Pass --paper <path> "
+            "(the citation check reads the paper's references)."
+        )
+        raise typer.Exit(1)
+    if not recovered_paper.exists():
+        console.print(
+            f"[bold red]Error:[/bold red] the paper path {recovered_paper} does not "
+            f"exist (the file may have moved). Pass --paper <path> with its current location."
+        )
+        raise typer.Exit(1)
+
+    try:
+        config = Config(
+            paper_path=recovered_paper,
+            output_dir=replicate_dir,
+            provider=provider,
+            mode="auto",
+            run_citation_check=True,
+            faithfulness_scope=check_citations_faithfulness,
+            citation_timeout=citation_timeout,
+            generate_pdf=generate_pdf,
+        )
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    result = ReplicationRunner(config).check_citations_existing()
+    if result.success:
+        console.print("[bold green]Citation check + report complete.[/bold green]")
+        if result.report_path:
+            console.print(f"Report: {result.report_path}")
+        if result.pdf_path:
+            console.print(f"PDF: {result.pdf_path}")
+    else:
+        console.print(f"[bold red]Citation check failed:[/bold red] {result.error}")
         raise typer.Exit(1)
 
 

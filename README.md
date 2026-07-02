@@ -60,6 +60,9 @@ the comparator's judgment.
 ./veritas --paper p.pdf --repo ./myrepo     # full pipeline (the default)
 ./veritas full --paper p.pdf --repo ./myrepo  # same thing, named
 ./veritas replicate --repo ./myrepo         # replication only, for benchmarking
+./veritas replicate --paper p.pdf --repo ./myrepo --check-citations  # opt-in citation check
+./veritas check-citations ./replicate-dir                            # standalone: run on a finished run
+./veritas replicate --paper p.pdf --check-citations --check-citations-faithfulness all  # widen faithfulness scope
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
 ./veritas shell                             # interactive container
@@ -88,6 +91,18 @@ Run `./veritas replicate --help` for the full option list.
 Other inputs: `--claims path.json` supplies hand-authored claims and skips
 extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
 so the agent uses local files instead of fetching from the network.
+
+### Citation check (opt-in)
+
+`--check-citations` runs an advisory reference check after verification: it
+extracts the paper's reference list and confirms each cited work exists and is
+described correctly (authors, venue, year, identifiers) against free scholarly
+databases (Crossref, OpenAlex, Semantic Scholar, DBLP, arXiv). It flags
+fabricated references and metadata errors such as a published paper cited as an
+arXiv preprint. It is advisory and does not change the Replication Score, and it
+requires `--paper`. The method is adapted from the
+[refchecker](https://github.com/markrussinovich/refchecker) project (MIT).
+The check also verifies, for the paper's main claims, whether the cited source supports what the paper attributes to it. Verdicts are `supported`, `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a verbatim quote. An independent audit pass re-checks flagged verdicts and can only soften a flag it cannot confirm (it never escalates), so the report shows the final reconciled verdicts. Use `--check-citations-faithfulness all` to check every claim-bearing citation instead of only the main ones. The check runs inline during `replicate --check-citations`, or standalone on a finished run via `check-citations <replicate-dir>` (which recovers the paper path from the run's saved config).
 
 ## The report
 

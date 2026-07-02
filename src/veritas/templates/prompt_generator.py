@@ -6,6 +6,13 @@ import os
 from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from veritas.core.config import (
+    CITATION_AUDIT_FILE,
+    CITATION_CHECK_FILE,
+    CITATION_REFERENCES_FILE,
+    CITATION_RESOLVER_VERDICTS_FILE,
+    EVALUATION_SUBDIR,
+)
 
 if TYPE_CHECKING:
     from veritas.core.models.replication import ReplicationPlan
@@ -229,6 +236,54 @@ class PromptGenerator:
         }
         if paper_path is not None:
             context["paper_path"] = str(Path(paper_path).absolute())
+        return template.render(**context)
+
+    def generate_citation_check_prompt(
+        self,
+        output_dir: Path,
+        paper_path: Path,
+        resolver_script_path: Path,
+        faithfulness_scope: str = "main",
+    ) -> str:
+        """Render the citation-check subagent prompt.
+
+        A single web-enabled provider invocation: extract the paper's reference
+        list, run the deterministic resolver script (authoritative for
+        existence/metadata), then web-search-escalate only the unresolved
+        references. Does not alter the Replication Score.
+
+        ``faithfulness_scope`` controls how many claim-bearing citations are
+        checked for faithfulness: ``"main"`` checks only the citations central
+        to the paper's core argument; ``"all"`` checks every claim-bearing
+        citation.
+        """
+        eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
+        template = self.env.get_template("evaluation/citation_check.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "paper_path": str(Path(paper_path).absolute()),
+            "resolver_script_path": str(Path(resolver_script_path).absolute()),
+            "references_path": str(eval_dir / CITATION_REFERENCES_FILE),
+            "resolver_verdicts_path": str(eval_dir / CITATION_RESOLVER_VERDICTS_FILE),
+            "citation_check_path": str(eval_dir / CITATION_CHECK_FILE),
+            "faithfulness_scope": faithfulness_scope,
+        }
+        return template.render(**context)
+
+    def generate_citation_audit_prompt(
+        self,
+        output_dir: Path,
+        paper_path: Path,
+    ) -> str:
+        """Render the citation-audit prompt (independent re-check of flagged verdicts)."""
+        eval_dir = Path(output_dir).absolute() / EVALUATION_SUBDIR
+        template = self.env.get_template("evaluation/citation_audit.md")
+        context = {
+            **self._runtime_paths_context(output_dir=output_dir),
+            "paper_path": str(Path(paper_path).absolute()),
+            "citation_check_path": str(eval_dir / CITATION_CHECK_FILE),
+            "citation_audit_path": str(eval_dir / CITATION_AUDIT_FILE),
+        }
         return template.render(**context)
 
     def generate_manager_review_prompt(

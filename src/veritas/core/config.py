@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 
-from veritas.core.config_env import _env_int, _env_opt_int, _env_opt_str
+from veritas.core.config_env import _env_int, _env_opt_int, _env_opt_str, _env_str
 
 
 # All valid AI providers
@@ -119,6 +119,18 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
+# Citation-check submodule filenames (opt-in, advisory; under the evaluation dir).
+CITATION_CHECK_FILE = "citation_check.json"
+CITATION_CHECK_TRANSCRIPT_FILE = "citation_check_transcript.jsonl"
+CITATION_REFERENCES_FILE = "references.json"
+CITATION_RESOLVER_VERDICTS_FILE = "resolver_verdicts.json"
+CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
+
+CITATION_AUDIT_FILE = "citation_audit.json"
+CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
+
+VALID_FAITHFULNESS_SCOPES = ["main", "all"]
+
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
@@ -186,6 +198,20 @@ class Config:
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
 
+    # Opt-in citation-check submodule (post-verify; under the evaluate phase).
+    # Verifies the paper's references exist + carry correct metadata. Advisory:
+    # does not change the Replication Score. Requires --paper.
+    run_citation_check: bool = False
+
+    # Timeout (seconds) for the citation-check phase; None disables it.
+    citation_timeout: Optional[int] = None
+
+    # Citation faithfulness scope: "main" (central attributed claims only) or
+    # "all" (every claim-bearing citation). Default "main".
+    faithfulness_scope: str = field(
+        default_factory=lambda: _env_str("VERITAS_CITATION_FAITHFULNESS_SCOPE", "main")
+    )
+
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
     # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
@@ -204,6 +230,7 @@ class Config:
         "replicate_timeout": "VERITAS_REPLICATE_TIMEOUT",
         "verify_timeout": "VERITAS_VERIFY_TIMEOUT",
         "evaluate_timeout": "VERITAS_EVALUATE_TIMEOUT",
+        "citation_timeout": "VERITAS_CITATION_TIMEOUT",
     }
 
     # Env-var names backing each model field, consulted in __post_init__
@@ -276,6 +303,24 @@ class Config:
                 )
             if not any(self.data_path.iterdir()):
                 print(f"WARNING: --data directory is empty: {self.data_path}")
+
+        # Citation check needs the paper PDF (its reference list). Validate up
+        # front so the run fails with a clear message instead of failing deep in
+        # the citation phase.
+        if self.run_citation_check and not self.has_paper:
+            raise ValueError(
+                "--check-citations requires --paper (it reads the paper's "
+                "reference list); no paper was provided"
+            )
+
+        if self.run_citation_check:
+            scope = (self.faithfulness_scope or "main").strip().lower()
+            if scope not in VALID_FAITHFULNESS_SCOPES:
+                raise ValueError(
+                    f"faithfulness_scope must be one of "
+                    f"{VALID_FAITHFULNESS_SCOPES}; got '{self.faithfulness_scope}'"
+                )
+            self.faithfulness_scope = scope
 
         # The global model is bare by definition — its provider is --provider.
         if self.model is not None:
@@ -461,6 +506,37 @@ class Config:
     @property
     def evaluation_transcript_path(self) -> Path:
         return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
+
+    # Citation-check submodule artifacts (under evaluation/). references_path and
+    # resolver_verdicts_path are produced by the agent; resolver_script_path is
+    # where the runner stages the standalone resolver for the agent to run.
+    @property
+    def citation_check_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_FILE
+
+    @property
+    def citation_check_transcript_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
+
+    @property
+    def citation_audit_path(self) -> Path:
+        return self.evaluation_dir / CITATION_AUDIT_FILE
+
+    @property
+    def citation_audit_transcript_path(self) -> Path:
+        return self.evaluation_dir / CITATION_AUDIT_TRANSCRIPT_FILE
+
+    @property
+    def references_path(self) -> Path:
+        return self.evaluation_dir / CITATION_REFERENCES_FILE
+
+    @property
+    def resolver_verdicts_path(self) -> Path:
+        return self.evaluation_dir / CITATION_RESOLVER_VERDICTS_FILE
+
+    @property
+    def resolver_script_path(self) -> Path:
+        return self.evaluation_dir / CITATION_RESOLVER_SCRIPT_FILE
 
     @property
     def report_md_path(self) -> Path:

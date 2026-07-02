@@ -240,8 +240,8 @@ cmd_replicate() {
 }
 
 cmd_passthrough() {
-    # report / evaluate — no pre/post staging needed; just
-    # forward to the python CLI.
+    # report / evaluate / check-citations — no pre/post staging needed;
+    # just forward to the python CLI.
     local subcmd="$1"; shift
     run_veritas_cli "$subcmd" "$@"
 }
@@ -255,6 +255,7 @@ Subcommands:
   replicate     Replication only, through verify (for benchmarking)
   evaluate      Run the evaluation manager + report on an existing replicate dir
   report        Regenerate report from an existing replicate output dir
+  check-citations  Verify the paper's references on an existing replicate dir
 
 Same flags as the docker \`./veritas\` wrapper. The host wrapper:
   - copies templates/skills to <--output>/veritas-skills
@@ -278,7 +279,7 @@ case "$1" in
         shift
         cmd_replicate "$@"
         ;;
-    report|evaluate)
+    report|evaluate|check-citations)
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

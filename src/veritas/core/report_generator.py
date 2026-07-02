@@ -23,6 +23,8 @@ from veritas.core.config import (
     ANALYZE_SUBDIR,
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
+    CITATION_CHECK_FILE,
+    CITATION_AUDIT_FILE,
     WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.paper_claims import (
@@ -30,6 +32,7 @@ from veritas.core.models.paper_claims import (
     PaperClaims,
     ReplicationScore,
 )
+from veritas.core.replication import _extract_json
 
 
 # Header label for each tier in the report.
@@ -233,6 +236,39 @@ class ReportGenerator:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _load_citation_check(self, replicate_dir: Optional[Path]) -> Optional[dict]:
+        """Load the citation-check output, if the submodule ran.
+
+        Returns the parsed dict, or None when the submodule was not run (opt-in
+        via ``--check-citations``) or its output is absent/malformed. The report
+        degrades gracefully — the score and tables never depend on this.
+        """
+        if replicate_dir is None:
+            return None
+        path = Path(replicate_dir) / EVALUATION_SUBDIR / CITATION_CHECK_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(_extract_json(path.read_text(encoding="utf-8")))
+            # Citation data is structured (keys, urls, counts), not free narrative,
+            # so it is not run through _scrub_prose like the evaluation output.
+            return data if isinstance(data, dict) else None
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _load_citation_audit(self, replicate_dir: Optional[Path]) -> Optional[dict]:
+        """Load the citation-audit output, if the audit pass ran. None if absent/malformed."""
+        if replicate_dir is None:
+            return None
+        path = Path(replicate_dir) / EVALUATION_SUBDIR / CITATION_AUDIT_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(_extract_json(path.read_text(encoding="utf-8")))
+            return data if isinstance(data, dict) else None
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
     def _load_mode(self, replicate_dir: Path) -> Optional[str]:
         """Recover the input mode from pipeline_state.json, if available.
 
@@ -292,6 +328,13 @@ class ReportGenerator:
         if score is not None and score.flags:
             report += self._render_flags(score.flags)
 
+        # Advisory citation check (opt-in via --check-citations). Independent of
+        # the score; rendered when present.
+        report += self._render_citation_check(
+            self._load_citation_check(output_dir),
+            self._load_citation_audit(output_dir),
+        )
+
         # Manager retry-loop trajectory (only when the loop ran, i.e. >1
         # iteration or a hand-off). The Replication Score above is unaffected by
         # the iteration count; this section records what each re-run changed.
@@ -349,6 +392,158 @@ class ReportGenerator:
             "not part of the Replication Score.*\n\n"
         )
         return intro + body
+
+    _INTEGRITY_SEVERITY = {"likely_fabricated": 3, "metadata_mismatch": 2, "inconclusive": 1, "verified": 0}
+    _FAITHFULNESS_SEVERITY = {"contradicted": 3, "not_mentioned": 2, "partially_supported": 1, "supported": 0}
+
+    @staticmethod
+    def _soften_verdict(first: str, audit, kind: str):
+        """Conservative reconciliation: the final verdict is the less severe of the
+        verify (``first``) and ``audit`` verdicts. The audit can only soften, never
+        escalate. Returns (final_verdict, softened_bool). If the audit has no usable
+        verdict for this item, keep ``first`` unchanged.
+        """
+        sev = (ReportGenerator._INTEGRITY_SEVERITY if kind == "integrity"
+               else ReportGenerator._FAITHFULNESS_SEVERITY)
+        if not audit or first not in sev or audit not in sev:
+            return first, False
+        if sev[audit] < sev[first]:
+            return audit, True
+        return first, False
+
+    def _render_citation_check(self, citation: Optional[dict], audit: Optional[dict] = None) -> str:
+        """Render the advisory citation-check section.
+
+        Covers reference integrity (existence/metadata) and, when present, a
+        claim-support (faithfulness) summary. The independent audit can only soften
+        verify verdicts, never escalate them. Advisory: does not affect the
+        Replication Score.
+        """
+        if not citation:
+            return ""
+
+        audit_items = (audit or {}).get("items") or []
+        audit_lookup = {
+            (it.get("key"), it.get("kind")): it.get("audit_verdict")
+            for it in audit_items if isinstance(it, dict) and it.get("key")
+        }
+        softened_count = 0
+
+        s = citation.get("summary") or {}
+        total = s.get("total", 0)
+        section = "## Citation Check\n\n"
+        section += (
+            "_Advisory reference check (does each cited work exist and is its "
+            "metadata correct). This does not affect the Replication Score._\n\n"
+        )
+        section += (
+            f"**{total} references checked.** "
+            f"{s.get('verified', 0)} verified, "
+            f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
+            f"{s.get('likely_fabricated', 0)} likely fabricated, "
+            f"{s.get('inconclusive', 0)} inconclusive.\n\n"
+        )
+        if audit_lookup:
+            section += (
+                "_Counts above are the first-pass result; the independent audit may "
+                "have softened some verdicts, shown below._\n\n"
+            )
+        flagged = citation.get("flagged") or []
+        if not flagged:
+            section += f"No reference issues flagged across {total} references.\n\n"
+        else:
+            section += "| Status | Ref | Detail | Source |\n"
+            section += "|--------|-----|--------|--------|\n"
+            label = {
+                "likely_fabricated": "likely fabricated",
+                "metadata_mismatch": "metadata mismatch",
+                "inconclusive": "inconclusive",
+                "unresolved": "unresolved",
+                "verified": "verified",
+            }
+            for f in flagged:
+                if not isinstance(f, dict):
+                    continue
+                first_status = f.get("status", "")
+                final_status, softened = self._soften_verdict(
+                    first_status, audit_lookup.get((f.get("key"), "integrity")), "integrity")
+                if softened:
+                    softened_count += 1
+                status_label = label.get(final_status, final_status)
+                if softened:
+                    status_label += f" (audit softened from {first_status})"
+                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
+                detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
+                rec = f.get("matched_record") or {}
+                evidence = f.get("evidence") or []
+                src = ""
+                if isinstance(rec, dict) and rec.get("url"):
+                    src = f"[{rec.get('source', 'record')}]({rec['url']})"
+                elif evidence and isinstance(evidence[0], str):
+                    src = f"[evidence]({evidence[0]})"
+                src = src.replace("|", "\\|")
+                section += f"| {status_label} | `{key}` | {detail} | {src} |\n"
+            section += "\n"
+        if citation.get("checked_support") is False:
+            section += (
+                "_Note: this checks that references exist and are described "
+                "correctly. It does not check citation support (whether each "
+                "cited paper actually backs the claim it is cited for)._\n\n"
+            )
+
+        fsum = (citation.get("summary") or {}).get("faithfulness") or {}
+        faith = citation.get("faithfulness") or []
+        if fsum.get("checked"):
+            scope = (citation.get("summary") or {}).get("faithfulness_scope", "main")
+            section += f"\n**Claim support ({scope} claims):** "
+            section += (
+                f"{fsum.get('checked', 0)} checked. "
+                f"{fsum.get('supported', 0)} supported, "
+                f"{fsum.get('partially_supported', 0)} partially supported, "
+                f"{fsum.get('contradicted', 0)} contradicted, "
+                f"{fsum.get('not_mentioned', 0)} not mentioned, "
+                f"{fsum.get('inaccessible', 0)} inaccessible.\n\n"
+            )
+            label_faith = {
+                "supported": "supported",
+                "partially_supported": "partially supported",
+                "contradicted": "contradicted",
+                "not_mentioned": "not mentioned",
+            }
+            for f in faith:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("source_status") == "inaccessible":
+                    verdict_label = "source inaccessible"
+                    softened_faith = False
+                else:
+                    first_verdict = f.get("verdict", "")
+                    final_verdict, softened_faith = self._soften_verdict(
+                        first_verdict, audit_lookup.get((f.get("key"), "faithfulness")), "faithfulness")
+                    if softened_faith:
+                        softened_count += 1
+                    verdict_label = label_faith.get(final_verdict, final_verdict or "?")
+                    if softened_faith:
+                        verdict_label += f" (audit softened from {first_verdict})"
+                key = (f.get("key") or "?").replace("|", "\\|")
+                claim = (f.get("claim") or "").replace("\n", " ").strip()
+                quote = (f.get("quote") or "").replace("\n", " ").strip()
+                src = f.get("source") or ""
+                section += f"- `{key}` ({verdict_label}): {claim}"
+                if quote:
+                    section += f'  \n  Source says: "{quote}"'
+                if src:
+                    section += f"  \n  [source]({src})"
+                section += "\n"
+            section += "\n"
+
+        if softened_count:
+            section += (
+                f"\n_The independent audit softened {softened_count} flagged "
+                f"verdict(s) it could not confirm._\n\n"
+            )
+
+        return section
 
     def _render_limitations(self, fix_assessment, report_block: dict) -> str:
         """Combine the deterministic fix-severity record with the manager's
