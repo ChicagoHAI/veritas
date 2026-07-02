@@ -441,25 +441,36 @@ compute_env_file_keys() {
 # -----------------------------------------------------------------------------
 # Provider auth keys: forwarded so any configured provider can authenticate
 # with an API key in every phase. The host environment wins; a key set only
-# in .env is read from there via get_env_value, so subcommands that do not
-# mount the full .env (evaluate) still deliver provider keys. Values are
-# embedded single-quoted in the eval'd docker command line, so eval performs
-# no dollar, backtick, or glob expansion on them; embedded single quotes are
-# escaped.
+# in .env is exported into the wrapper's own environment first, so
+# subcommands that do not mount the full .env (evaluate) still deliver
+# provider keys. Forwarding uses docker's name-only `-e VAR` form: docker
+# reads the value from the client environment, so no secret ever appears on
+# the docker command line (visible to other users via /proc/<pid>/cmdline
+# for the duration of the run).
 # -----------------------------------------------------------------------------
 PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
 
-get_provider_auth_flags() {
-    local flags=""
+# Export .env-fallback values into the wrapper environment. Must run in the
+# parent shell (NOT inside a $() substitution) so the exports survive to the
+# docker invocation.
+load_provider_auth_env() {
     local var val
     for var in $PROVIDER_AUTH_VARS; do
-        val="${!var}"
-        if [ -z "$val" ]; then
+        if [ -z "${!var}" ]; then
             val="$(get_env_value "$var")"
+            if [ -n "$val" ]; then
+                export "$var=$val"
+            fi
         fi
-        if [ -n "$val" ]; then
-            val="${val//\'/\'\\\'\'}"
-            flags="$flags -e $var='$val'"
+    done
+}
+
+get_provider_auth_flags() {
+    local flags=""
+    local var
+    for var in $PROVIDER_AUTH_VARS; do
+        if [ -n "${!var}" ]; then
+            flags="$flags -e $var"
         fi
     done
     echo "$flags"
@@ -1233,6 +1244,7 @@ cmd_replicate() {
         model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
     fi
 
+    load_provider_auth_env
     local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
@@ -1297,6 +1309,7 @@ cmd_evaluate() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
+    load_provider_auth_env
     local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
