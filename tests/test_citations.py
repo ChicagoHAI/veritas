@@ -454,6 +454,19 @@ def test_audit_citations_tolerates_non_object_check_json(tmp_path):
     m.assert_not_called()
 
 
+def test_check_citations_existing_sanitizes_logs(tmp_path):
+    # The standalone entry point never goes through run(), so it must apply
+    # the API-key redaction pass itself.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")
+    with patch("veritas.core.runner.sanitize_logs_directory") as san, \
+         patch.object(runner, "report_generator") as rg:
+        rg.generate.return_value = (None, None)
+        result = runner.check_citations_existing()
+    assert result.success
+    san.assert_called_once_with(cfg.output_dir)
+
+
 # ---------------------------------------------------------------------------
 # --- report rendering ---
 # ---------------------------------------------------------------------------

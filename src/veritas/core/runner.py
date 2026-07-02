@@ -1914,6 +1914,13 @@ class ReplicationRunner:
             return RunResult(success=True, report_path=report_path, pdf_path=pdf_path)
         except Exception as e:
             return RunResult(success=False, error=str(e))
+        finally:
+            # Same API-key redaction pass run() applies; this entry point writes
+            # prompts and transcripts without going through run().
+            try:
+                sanitize_logs_directory(self.config.output_dir)
+            except Exception:
+                pass
 
     # -- Resume helpers ----------------------------------------------------
 
