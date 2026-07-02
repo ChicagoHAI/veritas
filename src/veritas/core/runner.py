@@ -1779,6 +1779,7 @@ class ReplicationRunner:
 
         phase_transcripts = {
             "analyze":      self.config.paper_claims_transcript_path,
+            "codegen":      self.config.codegen_transcript_path,
             "plan":         self.config.replication_plan_transcript_path,
             "replicate":    self.config.replication_transcript_path,
             "assess_fixes": self.config.fix_severity_transcript_path,
@@ -1843,7 +1844,17 @@ class ReplicationRunner:
             or os.environ.get("OPENAI_MODEL")
             or os.environ.get("GEMINI_MODEL")
         )
-        pricing = KNOWN_MODEL_PRICING.get(model) if model else None
+        # Prefer an exact match; fall back to the longest known id the model
+        # name starts with, so dated ids (e.g. claude-haiku-4-5-20251001) still
+        # price. Longest-first avoids gpt-4o matching a gpt-4o-mini id.
+        pricing = None
+        if model:
+            pricing = KNOWN_MODEL_PRICING.get(model)
+            if pricing is None:
+                for key in sorted(KNOWN_MODEL_PRICING, key=len, reverse=True):
+                    if model.startswith(key):
+                        pricing = KNOWN_MODEL_PRICING[key]
+                        break
         estimated_cost_usd = round(
             usage.total_input_tokens / 1_000_000 * pricing[0] +
             usage.total_output_tokens / 1_000_000 * pricing[1],
