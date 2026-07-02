@@ -79,7 +79,7 @@ def read_engines_from_state(output_dir) -> dict:
     try:
         config = json.loads(
             state_path.read_text(encoding="utf-8")).get("config") or {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         return {}
     prefix = "engine_"
     return {

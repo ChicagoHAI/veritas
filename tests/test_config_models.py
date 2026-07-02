@@ -5,15 +5,6 @@ import pytest
 from veritas.core.config import BUCKETS, Config, parse_model_spec
 
 
-@pytest.fixture(autouse=True)
-def _clear_model_env(monkeypatch):
-    """Isolate tests from VERITAS_* model vars set in the developer's .env."""
-    import os
-    for key in list(os.environ):
-        if key.startswith("VERITAS_") and key.endswith("_MODEL") or key == "VERITAS_MODEL":
-            monkeypatch.delenv(key, raising=False)
-
-
 def _mk_config(tmp_path, **kwargs):
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
