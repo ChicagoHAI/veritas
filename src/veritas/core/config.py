@@ -53,6 +53,19 @@ def parse_model_spec(spec: str) -> Tuple[Optional[str], str]:
     return None, spec
 
 
+# Model slugs whose web access cannot be disabled. On the replicate/codegen
+# buckets these can fetch the paper's published values, defeating the
+# anti-leakage design; veritas warns (never blocks) when one is configured
+# there.
+_WEB_LOCKED_MODELS = ("openrouter/fusion",)
+
+
+def is_web_locked_slug(model: Optional[str]) -> bool:
+    if not model:
+        return False
+    return model in _WEB_LOCKED_MODELS or model.endswith(":online")
+
+
 # Output directory structure — each phase writes into its own subdir.
 ANALYZE_SUBDIR = "analyze"
 REPLICATION_SUBDIR = "replication"

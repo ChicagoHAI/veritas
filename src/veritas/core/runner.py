@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config, OUTPUT_SUBDIRS
+from veritas.core.config import Config, OUTPUT_SUBDIRS, is_web_locked_slug
 from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
@@ -248,6 +248,17 @@ class ReplicationRunner:
                 state.record_config(build_config_fingerprint(self.config))
             else:
                 self._reconcile_with_prior_run(state)
+
+            for leak_bucket in ("codegen", "replicate"):
+                _, leak_model = self.config.engine_for(leak_bucket)
+                if is_web_locked_slug(leak_model):
+                    print(
+                        f"WARNING: the {leak_bucket} bucket is configured with "
+                        f"'{leak_model}', which has always-on web access. The "
+                        f"agent can fetch the paper's published values during "
+                        f"replication, defeating the anti-leakage design. "
+                        f"Proceeding anyway."
+                    )
 
             # analyze (claims extraction only)
             if state.is_stage_completed('analyze'):

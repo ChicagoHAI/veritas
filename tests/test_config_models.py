@@ -128,3 +128,21 @@ def test_bad_env_model_fails_fast(tmp_path, monkeypatch):
     monkeypatch.setenv("VERITAS_VERIFY_MODEL", "openruter:x")
     with pytest.raises(ValueError, match="unknown provider"):
         _mk_config(tmp_path)
+
+
+# -- web-locked models -------------------------------------------------------
+
+from veritas.core.config import is_web_locked_slug
+
+
+def test_web_locked_fusion():
+    assert is_web_locked_slug("openrouter/fusion") is True
+
+def test_web_locked_online_suffix():
+    assert is_web_locked_slug("moonshotai/kimi-k2.6:online") is True
+
+def test_web_locked_normal_model():
+    assert is_web_locked_slug("claude-opus-4-8") is False
+
+def test_web_locked_none():
+    assert is_web_locked_slug(None) is False
