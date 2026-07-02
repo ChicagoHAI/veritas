@@ -613,6 +613,74 @@ def test_render_citation_check_counts_unresolved_and_annotates_inaccessible_audi
     assert "audit softened" not in section
 
 
+def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 3, "verified": 1, "metadata_mismatch": 1, "unresolved": 0,
+                    "likely_fabricated": 1, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "supported": 1, "partially_supported": 0,
+                                     "contradicted": 0, "not_mentioned": 0, "inaccessible": 0},
+                    "faithfulness_scope": "main"},
+        "flagged": [
+            {"key": "f2024", "status": "likely_fabricated", "detail": "no dedicated page",
+             "matched_record": None, "evidence": ["https://example.org/search"]},
+            {"key": "m2024", "status": "metadata_mismatch", "detail": "published at ICLR",
+             "matched_record": {"source": "dblp", "url": "https://dblp.org/x"}, "evidence": []},
+        ],
+        "faithfulness": [
+            {"key": "s2024", "claim": "X improves Y", "source_status": "retrieved",
+             "verdict": "supported", "quote": "X improves Y", "source": "https://example.org/s"},
+        ],
+        "checked_support": True,
+    }), encoding="utf-8")
+    (out / "evaluation" / "citation_audit.json").write_text(json.dumps({
+        "audited_count": 1,
+        "items": [{"key": "f2024", "kind": "integrity", "audit_verdict": "inconclusive", "note": "found a page"}],
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    view = gen._citation_html_view(gen._load_citation_check(out), gen._load_citation_audit(out))
+    assert view["total"] == 3 and view["fabricated"] == 1
+    by_key = {r["key"]: r for r in view["flagged"]}
+    # The audit's milder verdict softened the fabrication flag, same as the md path.
+    assert by_key["f2024"]["status_label"] == "inconclusive (audit softened from likely_fabricated)"
+    assert by_key["m2024"]["url"] == "https://dblp.org/x"
+    assert view["softened_count"] == 1
+    assert view["faith_rows"][0]["verdict_label"] == "supported"
+
+
+def test_citation_html_view_none_when_check_absent(tmp_path):
+    gen = ReportGenerator()
+    assert gen._citation_html_view(None, None) is None
+
+
+def test_html_report_renders_citation_section(tmp_path):
+    out = tmp_path / "out"
+    (out / "evaluation").mkdir(parents=True)
+    (out / "evaluation" / "citation_check.json").write_text(json.dumps({
+        "summary": {"total": 2, "verified": 1, "metadata_mismatch": 0, "unresolved": 0,
+                    "likely_fabricated": 1, "inconclusive": 0},
+        "flagged": [{"key": "f2024", "status": "likely_fabricated",
+                     "detail": "no dedicated page", "matched_record": None, "evidence": []}],
+        "checked_support": False,
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    ctx = gen._build_html_context(
+        None, [], None, None, None, None, "full",
+        citation=gen._load_citation_check(out),
+        citation_audit=gen._load_citation_audit(out),
+    )
+    html = gen._render_html(ctx)
+    assert "Citation check" in html
+    assert "likely fabricated" in html
+    assert "f2024" in html
+    # Absent check -> no section.
+    ctx_none = gen._build_html_context(None, [], None, None, None, None, "full")
+    assert "Citation check" not in gen._render_html(ctx_none)
+
+
 def test_load_citation_check_tolerates_markdown_fences(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)

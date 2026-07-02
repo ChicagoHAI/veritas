@@ -148,6 +148,28 @@
   {% endif %}
   {% endif %}
 
+  <!-- CITATION CHECK (advisory; a plain section so it also lands in the PDF) -->
+  {% if citations %}
+  <h2>Citation check</h2>
+  <p class="sub">Advisory reference check (existence, metadata, and claim support). Does not affect the Replication Score.</p>
+  <p><b>{{ citations.total }}</b> references checked: {{ citations.verified }} verified, {{ citations.mismatch }} metadata mismatch, {{ citations.fabricated }} likely fabricated, {{ citations.inconclusive }} inconclusive, {{ citations.unresolved }} unresolved.</p>
+  {% if citations.flagged %}
+  <table>
+    <thead><tr><th>Status</th><th>Ref</th><th>Detail</th><th>Source</th></tr></thead>
+    <tbody>{% for f in citations.flagged %}<tr><td class="st">{{ f.status_label }}</td><td><code>{{ f.key }}</code></td><td>{{ f.detail }}</td><td>{% if f.url %}<a href="{{ f.url }}">record</a>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% if citations.faith_checked %}
+  <h3>Claim support ({{ citations.faith_scope }} claims, {{ citations.faith_checked }} checked)</h3>
+  <ul>
+    {% for f in citations.faith_rows %}
+    <li><code>{{ f.key }}</code> ({{ f.verdict_label }}): {{ f.claim }}{% if f.quote %}<br><span class="sub">Source says: "{{ f.quote }}"</span>{% endif %}{% if f.source %} <a href="{{ f.source }}">source</a>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if citations.softened_count %}<p class="sub">The independent audit softened {{ citations.softened_count }} flagged verdict(s) it could not confirm.</p>{% endif %}
+  {% endif %}
+
   <!-- DETAILS (collapsible) -->
   <h2>Details</h2>
 
@@ -204,6 +226,7 @@
         <li><code>replication/replication_log.json</code> — step-by-step execution, with the fixes applied.</li>
         <li><code>replication/codebase.diff</code> — every change made to the provided code.</li>
         {% if has_evaluation %}<li><code>evaluation/contextual_evaluation.json</code> — the evaluator's full notes (this report's narrative).</li>{% endif %}
+        {% if citations %}<li><code>evaluation/citation_check.json</code> — the advisory reference check (plus <code>citation_audit.json</code> when the audit ran).</li>{% endif %}
         <li><code>replication/codebase/</code> — the patched code that was actually run.</li>
       </ul>
     </div>
