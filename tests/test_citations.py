@@ -425,6 +425,36 @@ def test_check_citations_idempotent_skip(tmp_path):
     m.assert_not_called()  # already produced -> skip
 
 
+def test_check_citations_skips_when_scope_matches_meta(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)  # default scope: main
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text('{"faithfulness_scope": "main"}', encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()
+
+
+def test_check_citations_reruns_on_scope_change(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)  # current scope: main
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text('{"faithfulness_scope": "all"}', encoding="utf-8")
+    cfg.citation_audit_path.write_text('{"items": []}', encoding="utf-8")  # stale audit
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_check_path.write_text(
+            '{"summary": {"total": 1, "verified": 1}, "flagged": []}', encoding="utf-8"
+        )
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+
+    assert m.called  # scope changed -> re-dispatched
+    assert not cfg.citation_audit_path.exists()  # stale audit invalidated
+    meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
+    assert meta["faithfulness_scope"] == "main"  # meta re-recorded for the new run
+
+
 def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
     with patch.object(ReplicationRunner, "_stage_resolver_script", side_effect=OSError("disk full")), \

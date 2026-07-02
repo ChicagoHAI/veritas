@@ -1535,15 +1535,22 @@ class ReplicationRunner:
         list, runs the staged deterministic resolver (authoritative for
         existence/metadata), and escalates only unresolved references. Advisory:
         the output at ``evaluation/citation_check.json`` does NOT alter the
-        Replication Score. Idempotent (skips if already produced) and never
-        raises into the pipeline.
+        Replication Score. Idempotent (skips when already produced with the
+        current faithfulness scope) and never raises into the pipeline.
 
         A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
         if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
-            print("[OK] citation-check: skipped (already produced)")
-            return
+            if self._citation_check_scope_matches():
+                print("[OK] citation-check: skipped (already produced)")
+                return
+            print(
+                "  citation-check: faithfulness scope changed "
+                f"(now '{self.config.faithfulness_scope}'); re-running"
+            )
+            # The audit re-checks the check's findings, so it is stale too.
+            self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this
             print("  citation-check: no paper available; skipping")
@@ -1578,6 +1585,13 @@ class ReplicationRunner:
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
         try:
+            self.config.citation_check_meta_path.write_text(
+                json.dumps({"faithfulness_scope": self.config.faithfulness_scope}),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            print(f"  Warning: could not record citation-check settings ({e})")
+        try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
@@ -1601,6 +1615,20 @@ class ReplicationRunner:
 
         # Independent audit pass over the flagged verdicts (advisory; never raises).
         self._audit_citations()
+
+    def _citation_check_scope_matches(self) -> bool:
+        """True if the existing citation-check output was produced with the
+        current faithfulness scope. Outputs without a meta sidecar (from before
+        scope tracking) are kept as-is."""
+        meta_path = self.config.citation_check_meta_path
+        if not meta_path.exists():
+            return True
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return True
+        recorded = meta.get("faithfulness_scope") if isinstance(meta, dict) else None
+        return recorded is None or recorded == self.config.faithfulness_scope
 
     @staticmethod
     def _has_auditable_findings(check_data: dict) -> bool:

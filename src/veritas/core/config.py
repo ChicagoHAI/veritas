@@ -71,6 +71,7 @@ EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
 # Citation-check submodule filenames (opt-in, advisory; under the evaluation dir).
 CITATION_CHECK_FILE = "citation_check.json"
+CITATION_CHECK_META_FILE = ".citation_check_meta.json"
 CITATION_CHECK_TRANSCRIPT_FILE = "citation_check_transcript.jsonl"
 CITATION_REFERENCES_FILE = "references.json"
 CITATION_RESOLVER_VERDICTS_FILE = "resolver_verdicts.json"
@@ -379,6 +380,11 @@ class Config:
     @property
     def citation_check_path(self) -> Path:
         return self.evaluation_dir / CITATION_CHECK_FILE
+
+    @property
+    def citation_check_meta_path(self) -> Path:
+        """Sidecar recording the settings that produced citation_check.json."""
+        return self.evaluation_dir / CITATION_CHECK_META_FILE
 
     @property
     def citation_check_transcript_path(self) -> Path:
