@@ -1947,9 +1947,11 @@ class ReplicationRunner:
         ``expose_api_keys=True`` lets the subprocess inherit the
         replication API keys (the vars listed in
         ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
-        this — paper code it runs needs the keys. All other phases must
-        keep the default ``False`` so the keys are not exposed to
-        analyze/plan/codegen/assess/verify subprocesses.
+        this — paper code it runs needs the keys. All other phases keep
+        the default ``False``: their environment strips those keys,
+        except the auth vars of providers this run is configured to use
+        (see ``PROVIDER_AUTH_VARS``), which every phase needs to reach
+        its provider.
         """
         provider, model = self.config.engine_for(bucket)
         if provider not in CLI_COMMANDS:
@@ -1967,7 +1969,8 @@ class ReplicationRunner:
         open_mode = "a" if append else "w"
 
         # Default: strip replication API keys (sourced from .env via --env-file)
-        # so non-replicate phases don't see them. _replicate opts in via
+        # from non-replicate phases, keeping only the configured providers'
+        # own auth vars (PROVIDER_AUTH_VARS). _replicate opts in via
         # expose_api_keys=True since the paper code it runs needs the keys.
         env = None if expose_api_keys else self._stripped_env(self._auth_exemptions())
 
