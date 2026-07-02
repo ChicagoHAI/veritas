@@ -80,6 +80,7 @@ Each claim object has these fields:
 
 - **`scalar`** — a single numerical result with units. `paper_value` is a number or a list of numbers (e.g., per-condition values).
   Examples: "accuracy = 92.3%", "TAMS H mass fractions = [0.27, 0.23, 0.21]".
+  When the paper states an uncertainty (e.g. "0.719 ± 0.085"), keep the ± in `description` — the verifier's tolerance scales to the paper's stated σ when the claim conveys one. When per-condition values carry natural labels, prefer a dict keyed by those labels (e.g. `{"N50": 0.69, "N200": 0.65}`) over a bare list — downstream matching is by key.
 
 - **`scalar_range`** — a numerical range or set of related ranges. `paper_value` is `[min, max]` or a dict keyed by sub-condition.
   Examples: "reduction is ~42-96%", "ratio minima between 0.56-0.07 / 0.58-0.08 / 0.51-0.04".
@@ -93,16 +94,18 @@ Each claim object has these fields:
 
 ## Tier Definitions
 
-- **`headline`** — the paper's central reproducible result. Usually 1-3 per paper, drawn from the abstract or the marquee figure. The lab cares most about getting these right.
+- **`headline`** — the paper's central reproducible result. Usually 1-3 per paper, drawn from the abstract or the marquee figure. These carry the most weight in the final score.
 - **`supporting`** — intermediate measurements, secondary figures, qualitative observations that build toward the headline.
 
 When choosing tier, favor `supporting` unless the claim is clearly the paper's central reproducible result. Extract only `headline` and `supporting` claims. Setup-level configuration (e.g., "the model uses 12 layers") belongs in the replication plan, not in claims.
 
 ## Verification Field — Concrete Examples
 
+The `verification` field tells the verifier what to read and where. For numeric claims (`scalar`, `scalar_range`, `table`) it should locate the replicated value — the file, the field, the units, which run produces it. Do NOT write numeric decision rules into it: pass/fail is decided downstream by a deterministic grader with its own tolerance policy, and an invented tolerance (especially a zero/exact-match one) cannot be honored. For `qualitative` and `figure` claims the verifier judges directly, so there `verification` should describe what a match looks like.
+
 Good `verification` instructions for the verifier:
 
-- For a `scalar` claim: "Read the printed accuracy from the `metrics.json` file produced by `evaluate.py`. The replicated value should be within 5 percentage points of {{ '{{ paper_value }}' }}."
+- For a `scalar` claim: "Read the final accuracy from the `accuracy` field of the `metrics.json` file produced by `evaluate.py`."
 - For a `figure` claim: "Inspect the produced PDF at `expected_output_file`. The figure should show three color-coded trajectories on an HR diagram with iso-radius reference lines."
 - For a `qualitative` claim: "From the HR diagram trajectories: check whether accretors of low-mass binaries make a hot-side excursion (T_eff increases then decreases) post-MS."
 

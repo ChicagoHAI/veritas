@@ -98,7 +98,7 @@ Populate `structured`: (the grader reads these exact fields)
 
     {
       "replicated_value": <number, list, or flat dict {key: number} — what THIS run produced; null if none>,
-      "paper_value": <number or list, copied verbatim from the claim>,
+      "paper_value": <number, list, or flat dict — copied verbatim from the claim>,
       "uncertainty": <the 1σ uncertainty as a single number if the claim conveys
                       one (from a ± marker, an *_sigma/*_err field, or a high/low
                       range), else null>,
