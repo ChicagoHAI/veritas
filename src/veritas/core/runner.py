@@ -152,6 +152,33 @@ def build_provider_command(
     return cmd
 
 
+def build_config_fingerprint(
+    config: Config, recorded: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Config fields that affect output content.
+
+    Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
+    excluded so changing them between runs doesn't trigger needless re-runs.
+
+    ``engine_*`` fields are included only when a model knob is set for this
+    run or the recorded config already tracks engines — state files written
+    by older veritas versions therefore resume without spurious
+    invalidation, while reverting a knob to default is still detected.
+    """
+    fingerprint: Dict[str, Any] = {
+        'provider': config.provider,
+        'mode': config.mode,
+        'claims_path': str(config.claims_path) if config.claims_path else None,
+    }
+    recorded_has_engines = any(
+        key.startswith('engine_') for key in (recorded or {})
+    )
+    if config.any_model_knob_set or recorded_has_engines:
+        for bucket, engine in config.resolved_engines().items():
+            fingerprint[f'engine_{bucket}'] = engine
+    return fingerprint
+
+
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Every output-affecting field currently
@@ -167,6 +194,18 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    # Per-bucket engines (resolved provider:model). Scoped: a verify-engine
+    # change re-adjudicates an existing run without re-replicating.
+    # engine_analyze skips codegen (codegen consumes the paper, never the
+    # claims). engine_evaluate maps to no state-tracked stage: evaluation
+    # output is file-gated, and manager/research engine changes apply to
+    # future loop iterations only.
+    'engine_analyze':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'engine_codegen':   ('codegen', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'engine_replicate': ('replicate', 'assess_fixes', 'verify'),
+    'engine_assess':    ('assess_fixes',),
+    'engine_verify':    ('verify',),
+    'engine_evaluate':  (),
 }
 
 
@@ -206,7 +245,7 @@ class ReplicationRunner:
 
             if state.state.get('inputs') is None:
                 state.record_inputs(self.config.repo_path, self.config.paper_path, data_path=self.config.data_path)
-                state.record_config(self._config_fingerprint())
+                state.record_config(build_config_fingerprint(self.config))
             else:
                 self._reconcile_with_prior_run(state)
 
@@ -1801,20 +1840,6 @@ class ReplicationRunner:
         print(f"WARNING: Found existing pipeline state from {created}. Resuming.")
         print("   Pass --restart to start fresh.")
 
-    def _config_fingerprint(self) -> Dict[str, Any]:
-        """Return config fields that affect output content.
-
-        Only fields that change what the pipeline produces are included.
-        Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
-        excluded so changing them between runs doesn't trigger needless
-        re-runs.
-        """
-        return {
-            'provider': self.config.provider,
-            'mode': self.config.mode,
-            'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
-        }
-
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
         """Detect input/config changes against the recorded run and invalidate
         affected stages so they re-run with the new values.
@@ -1830,7 +1855,8 @@ class ReplicationRunner:
             self.config.repo_path, self.config.paper_path, data_path=self.config.data_path,
         )
 
-        current_config = self._config_fingerprint()
+        current_config = build_config_fingerprint(
+            self.config, recorded=state.state.get('config'))
         config_changes = state.detect_config_changes(current_config)
 
         all_changes = input_changes + config_changes

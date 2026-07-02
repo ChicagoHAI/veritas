@@ -98,6 +98,55 @@ def test_invoke_default_is_legacy_claude(tmp_path, monkeypatch):
     ]
 
 
+from veritas.core.runner import FINGERPRINT_INVALIDATES, build_config_fingerprint
+
+
+def _cfg(tmp_path, **kw):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    return Config(repo_path=repo, output_dir=tmp_path / "out", **kw)
+
+
+def test_fingerprint_omits_engines_when_no_knobs(tmp_path):
+    fp = build_config_fingerprint(_cfg(tmp_path))
+    assert not any(k.startswith("engine_") for k in fp)
+    assert fp["provider"] == "claude"
+
+
+def test_fingerprint_includes_engines_when_knob_set(tmp_path):
+    fp = build_config_fingerprint(
+        _cfg(tmp_path, verify_model="openrouter:openai/gpt-5.5"))
+    assert fp["engine_verify"] == "openrouter:openai/gpt-5.5"
+    assert fp["engine_analyze"] == "claude"
+
+
+def test_fingerprint_keeps_engines_once_recorded(tmp_path):
+    # Reverting knobs to default is still detected when the prior run
+    # recorded engines: the fields stay in the fingerprint.
+    recorded = {"provider": "claude", "engine_verify": "openrouter:openai/gpt-5.5"}
+    fp = build_config_fingerprint(_cfg(tmp_path), recorded=recorded)
+    assert fp["engine_verify"] == "claude"
+
+
+def test_old_state_resumes_clean(tmp_path):
+    # Recorded config from an older veritas has no engine keys; with no
+    # knobs set the current fingerprint omits them -> no spurious change.
+    recorded = {"provider": "claude", "mode": "repo-only", "claims_path": None}
+    fp = build_config_fingerprint(_cfg(tmp_path), recorded=recorded)
+    assert set(fp) == {"provider", "mode", "claims_path"}
+
+
+def test_invalidation_rows():
+    assert FINGERPRINT_INVALIDATES["engine_verify"] == ("verify",)
+    assert FINGERPRINT_INVALIDATES["engine_assess"] == ("assess_fixes",)
+    assert FINGERPRINT_INVALIDATES["engine_replicate"] == (
+        "replicate", "assess_fixes", "verify")
+    assert FINGERPRINT_INVALIDATES["engine_analyze"] == (
+        "analyze", "plan", "replicate", "assess_fixes", "verify")
+    assert FINGERPRINT_INVALIDATES["engine_codegen"] == (
+        "codegen", "plan", "replicate", "assess_fixes", "verify")
+    assert FINGERPRINT_INVALIDATES["engine_evaluate"] == ()
+
+
 def test_stripped_env_exempts_configured_provider_keys(tmp_path, monkeypatch):
     repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
     config = Config(repo_path=repo, output_dir=tmp_path / "out",
