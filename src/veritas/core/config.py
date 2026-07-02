@@ -16,8 +16,8 @@ InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
 
-# Named groups of LLM call sites. Each bucket can run on its own engine
-# (provider + model); call sites pass their bucket to _invoke_provider.
+# Named groups of LLM call sites. Each bucket resolves its own engine
+# (provider + model) via Config.engine_for.
 BUCKETS = ("analyze", "codegen", "replicate", "assess", "verify", "evaluate")
 
 # Text before the first ':' counts as a provider prefix only when it is a
@@ -274,8 +274,8 @@ class Config:
                 )
 
         # Eagerly resolve every bucket so malformed specs (flags or
-        # VERITAS_*_MODEL vars) fail at startup, and openrouter always has
-        # an explicit model to hand to opencode.
+        # VERITAS_*_MODEL vars) fail at startup rather than mid-run, and the
+        # openrouter provider always has an explicit model.
         for bucket in BUCKETS:
             bucket_provider, bucket_model = self.engine_for(bucket)
             if bucket_provider == "openrouter" and bucket_model is None:
@@ -383,8 +383,7 @@ class Config:
         return (self.provider.lower(), self.model)
 
     def resolved_engines(self) -> Dict[str, str]:
-        """Canonical ``bucket -> 'provider:model'`` (or ``'provider'``) map,
-        used for state fingerprinting and report provenance."""
+        """Canonical ``bucket -> 'provider:model'`` (or ``'provider'``) map."""
         engines = {}
         for bucket in BUCKETS:
             provider, model = self.engine_for(bucket)
@@ -392,7 +391,7 @@ class Config:
         return engines
 
     def resolved_providers(self) -> set:
-        """Set of providers any bucket resolves to (auth-exemption scope)."""
+        """Set of providers any bucket resolves to."""
         return {self.engine_for(bucket)[0] for bucket in BUCKETS}
 
     @property
