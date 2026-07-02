@@ -28,6 +28,10 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 # Select provider
 ./veritas replicate --repo ./my-project --provider codex
 
+# Per-bucket engines: [provider:]model per pipeline bucket
+./veritas replicate --repo ./my-project --model claude-opus-4-8 \
+    --verify-model openrouter:openai/gpt-5.5
+
 # Select input mode explicitly (default: auto-detected from inputs)
 ./veritas replicate --paper paper.pdf --mode paper-only  # generate code from paper, then run
 ./veritas replicate --repo ./my-project --mode repo-only # extract claims from README
@@ -79,7 +83,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 
 ### Key modules (`src/veritas/core/`)
 
-- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`).
+- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`, `MODEL_FLAGS`, `PROVIDER_AUTH_VARS`).
 - `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, output-structure constants (`*_SUBDIR`, `*_FILE`), per-phase timeout fields (`analyze_timeout`, `replicate_timeout`, `verify_timeout`).
 - `paper_claims.py` — `parse_paper_claims_response()` reading the analyze-phase LLM output.
 - `verify.py` — `compute_replication_score()`: pure-function tier-weighted aggregation over a list of `ClaimVerdict`s, returning a `ReplicationScore` with per-tier breakdown, missing-verdict list, and edge-case flags.
@@ -122,6 +126,9 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
 - **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped.
 - **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_replicate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys, but the paper code run during replicate does. `./veritas setup` and `./veritas config` subcommands manage the file.
+- **Per-bucket engines.** Every LLM call site belongs to a bucket (`analyze | codegen | replicate | assess | verify | evaluate`); `Config.engine_for` resolves each bucket's `(provider, model)` from `--<bucket>-model` flags / `VERITAS_<BUCKET>_MODEL` vars with the global `--provider`/`--model` as fallback. New call sites must pass their `bucket=` to `_invoke_provider`. Engine changes invalidate only their dependent stages (a `--verify-model` change re-runs verify alone).
+- **Provider auth keys ride the host env, not `.env`.** The wrapper forwards `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` from the host shell; `_stripped_env` exempts the run's configured providers' keys so a `.env`-sourced key also works. Consequence: with claude configured, an `ANTHROPIC_API_KEY` in `.env` reaches claude in every phase and billing follows the key.
+- **`--provider openrouter` = opencode.** Requires `OPENROUTER_API_KEY` and an explicit model. Web-locked slugs (`openrouter/fusion`, `*:online`) trigger a leakage warning on the `replicate`/`codegen` buckets — their always-on web search can fetch the paper's published values. Host mode additionally needs `opencode` on PATH.
 
 ## Testing
 
