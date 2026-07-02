@@ -22,12 +22,10 @@ from veritas.core.citations import (
     title_similarity,
     author_overlap,
     normalize_arxiv_id,
-    best_match,
     classify,
     STATUS_VERIFIED,
     STATUS_METADATA_MISMATCH,
     STATUS_UNRESOLVED,
-    TITLE_MATCH_THRESHOLD,
     AUTHOR_OVERLAP_THRESHOLD,
     parse_crossref,
     parse_openalex,
@@ -121,16 +119,6 @@ def test_normalize_arxiv_id_strips_prefix_and_version():
 
 def _rec(**kw):
     return SourceRecord(**{"source": "dblp", **kw})
-
-
-def test_best_match_picks_highest_title_similarity():
-    ref = Reference(title="Attention Is All You Need", authors=["Vaswani"])
-    recs = [
-        _rec(source="crossref", title="A survey of attention", authors=["X"]),
-        _rec(source="dblp", title="Attention is all you need", authors=["Vaswani"], venue="NeurIPS", year=2017),
-    ]
-    rec, sim = best_match(ref, recs)
-    assert rec.source == "dblp" and sim >= TITLE_MATCH_THRESHOLD
 
 
 def test_classify_verified_when_title_authors_and_venue_agree():

@@ -213,17 +213,6 @@ TITLE_MATCH_THRESHOLD = 0.90   # normalized-title similarity to call it the same
 AUTHOR_OVERLAP_THRESHOLD = 0.60  # below this (with a title match) -> author mismatch
 
 
-def best_match(ref: Reference, records: List[SourceRecord]) -> tuple[Optional[SourceRecord], float]:
-    """Return the record with the highest title similarity to the reference."""
-    best: Optional[SourceRecord] = None
-    best_sim = 0.0
-    for rec in records:
-        sim = title_similarity(ref.title, rec.title)
-        if sim > best_sim:
-            best, best_sim = rec, sim
-    return best, best_sim
-
-
 # Source preference for choosing which same-work record to compare against when
 # several sources return the same paper. Lower number = more preferred for the
 # fields that matter most here (venue/publication status).
