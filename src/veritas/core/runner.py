@@ -197,6 +197,19 @@ class ReplicationRunner:
                     state.complete_stage('analyze', success=False)
                     raise
 
+            # codegen (paper-only mode only)
+            if self.config.mode == "paper-only" and not dry_run:
+                if state.is_stage_completed('codegen'):
+                    print("[OK] codegen: skipped (already completed)")
+                else:
+                    state.start_stage('codegen')
+                    try:
+                        self._generate_code()
+                        state.complete_stage('codegen', success=True)
+                    except Exception:
+                        state.complete_stage('codegen', success=False)
+                        raise
+
             # plan (now its own phase)
             if state.is_stage_completed('plan'):
                 print("[OK] plan: skipped (already completed)")
@@ -246,19 +259,6 @@ class ReplicationRunner:
                 print(f"Estimated cost tier (rough size class): {cost_tier}")
                 print("Run without --dry-run to start replication.")
                 return RunResult(success=True)
-
-            # codegen (paper-only mode only) — runs after dry-run exit so `estimate` never triggers it
-            if self.config.mode == "paper-only":
-                if state.is_stage_completed('codegen'):
-                    print("[OK] codegen: skipped (already completed)")
-                else:
-                    state.start_stage('codegen')
-                    try:
-                        self._generate_code()
-                        state.complete_stage('codegen', success=True)
-                    except Exception:
-                        state.complete_stage('codegen', success=False)
-                        raise
 
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
@@ -1887,6 +1887,7 @@ class ReplicationRunner:
             replication_plan=plan_text,
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path,
+            mode=self.config.mode,
         )
 
         prompt_path = self.config.prompts_dir / "resource_estimation_prompt.txt"

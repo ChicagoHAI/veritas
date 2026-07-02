@@ -331,6 +331,7 @@ class PromptGenerator:
         replication_plan: str,
         output_dir: Path,
         paper_path: Optional[Path] = None,
+        mode: str = "full",
     ) -> str:
         """renders the prompt template that instructs the LLM to read the paper
           and replication plan and write a structured resource estimate JSON."""
@@ -340,5 +341,6 @@ class PromptGenerator:
             "replication_plan": replication_plan,
             "paper_path": str(paper_path) if paper_path else "",
             "has_paper": paper_path is not None,
+            "mode": mode,
         }
         return template.render(**context)
