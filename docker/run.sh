@@ -439,22 +439,27 @@ compute_env_file_keys() {
 }
 
 # -----------------------------------------------------------------------------
-# Provider auth keys: forwarded from the HOST environment (not .env) so any
-# configured provider can authenticate with an API key in every phase. .env
-# stays reserved for replication keys (paper-code credentials); a provider
-# key placed only in .env still works because the Python layer exempts the
-# active providers' keys from phase-scoping.
-# Values are embedded in an eval'd docker command line; keys/URLs contain no
-# whitespace, and each value is double-quoted for safety.
+# Provider auth keys: forwarded so any configured provider can authenticate
+# with an API key in every phase. The host environment wins; a key set only
+# in .env is read from there via get_env_value, so subcommands that do not
+# mount the full .env (evaluate) still deliver provider keys. Values are
+# embedded single-quoted in the eval'd docker command line, so eval performs
+# no dollar, backtick, or glob expansion on them; embedded single quotes are
+# escaped.
 # -----------------------------------------------------------------------------
 PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
 
 get_provider_auth_flags() {
     local flags=""
-    local var
+    local var val
     for var in $PROVIDER_AUTH_VARS; do
-        if [ -n "${!var}" ]; then
-            flags="$flags -e $var=\"${!var}\""
+        val="${!var}"
+        if [ -z "$val" ]; then
+            val="$(get_env_value "$var")"
+        fi
+        if [ -n "$val" ]; then
+            val="${val//\'/\'\\\'\'}"
+            flags="$flags -e $var='$val'"
         fi
     done
     echo "$flags"
