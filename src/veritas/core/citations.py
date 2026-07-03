@@ -157,8 +157,10 @@ def title_similarity(a: str, b: str) -> float:
 
 
 def _last_name(author: str) -> str:
-    """Best-effort surname: last whitespace-separated token, normalized."""
-    parts = normalize_title(author).split()
+    """Best-effort surname, normalized. A comma means "Surname, Given/Initial"
+    order (take the part before it); otherwise "Given Surname" (last token)."""
+    head = author.split(",", 1)[0]
+    parts = normalize_title(head).split()
     return parts[-1] if parts else ""
 
 
@@ -166,7 +168,7 @@ def author_overlap(cited: List[str], record: List[str]) -> float:
     """Fraction of cited authors whose surname appears in the record's authors.
 
     Returns 0.0 if either list is empty. Surname-based so initials vs full
-    given names ("A. Vaswani" vs "Ashish Vaswani") still match.
+    given names ("A. Vaswani", "Vaswani, A.", "Ashish Vaswani") all match.
     """
     cited_names = {n for a in cited if (n := _last_name(a))}
     record_names = {n for a in record if (n := _last_name(a))}
@@ -209,17 +211,6 @@ def normalize_doi(value: str) -> str:
 # Thresholds adapted from refchecker's deterministic pre-filter.
 TITLE_MATCH_THRESHOLD = 0.90   # normalized-title similarity to call it the same work
 AUTHOR_OVERLAP_THRESHOLD = 0.60  # below this (with a title match) -> author mismatch
-
-
-def best_match(ref: Reference, records: List[SourceRecord]) -> tuple[Optional[SourceRecord], float]:
-    """Return the record with the highest title similarity to the reference."""
-    best: Optional[SourceRecord] = None
-    best_sim = 0.0
-    for rec in records:
-        sim = title_similarity(ref.title, rec.title)
-        if sim > best_sim:
-            best, best_sim = rec, sim
-    return best, best_sim
 
 
 # Source preference for choosing which same-work record to compare against when

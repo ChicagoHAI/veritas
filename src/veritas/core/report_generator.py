@@ -133,6 +133,8 @@ class ReportGenerator:
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, None, None, evaluation, mode,
+            citation=self._load_citation_check(replicate_dir),
+            citation_audit=self._load_citation_audit(replicate_dir),
         ))
 
         if output_path is None:
@@ -178,6 +180,8 @@ class ReportGenerator:
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
+            citation=self._load_citation_check(output_dir),
+            citation_audit=self._load_citation_audit(output_dir),
         ))
 
         report_dir = config.report_dir
@@ -393,8 +397,27 @@ class ReportGenerator:
         )
         return intro + body
 
-    _INTEGRITY_SEVERITY = {"likely_fabricated": 3, "metadata_mismatch": 2, "inconclusive": 1, "verified": 0}
+    _INTEGRITY_SEVERITY = {
+        "likely_fabricated": 4, "metadata_mismatch": 3, "unresolved": 2,
+        "inconclusive": 1, "verified": 0,
+    }
+    # "inaccessible" (the audit could not retrieve the source) is deliberately
+    # absent: it carries no information, so it neither softens nor escalates.
     _FAITHFULNESS_SEVERITY = {"contradicted": 3, "not_mentioned": 2, "partially_supported": 1, "supported": 0}
+
+    _INTEGRITY_LABEL = {
+        "likely_fabricated": "likely fabricated",
+        "metadata_mismatch": "metadata mismatch",
+        "inconclusive": "inconclusive",
+        "unresolved": "unresolved",
+        "verified": "verified",
+    }
+    _FAITHFULNESS_LABEL = {
+        "supported": "supported",
+        "partially_supported": "partially supported",
+        "contradicted": "contradicted",
+        "not_mentioned": "not mentioned",
+    }
 
     @staticmethod
     def _soften_verdict(first: str, audit, kind: str):
@@ -441,7 +464,8 @@ class ReportGenerator:
             f"{s.get('verified', 0)} verified, "
             f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
             f"{s.get('likely_fabricated', 0)} likely fabricated, "
-            f"{s.get('inconclusive', 0)} inconclusive.\n\n"
+            f"{s.get('inconclusive', 0)} inconclusive, "
+            f"{s.get('unresolved', 0)} unresolved.\n\n"
         )
         if audit_lookup:
             section += (
@@ -454,13 +478,7 @@ class ReportGenerator:
         else:
             section += "| Status | Ref | Detail | Source |\n"
             section += "|--------|-----|--------|--------|\n"
-            label = {
-                "likely_fabricated": "likely fabricated",
-                "metadata_mismatch": "metadata mismatch",
-                "inconclusive": "inconclusive",
-                "unresolved": "unresolved",
-                "verified": "verified",
-            }
+            label = self._INTEGRITY_LABEL
             for f in flagged:
                 if not isinstance(f, dict):
                     continue
@@ -504,12 +522,7 @@ class ReportGenerator:
                 f"{fsum.get('not_mentioned', 0)} not mentioned, "
                 f"{fsum.get('inaccessible', 0)} inaccessible.\n\n"
             )
-            label_faith = {
-                "supported": "supported",
-                "partially_supported": "partially supported",
-                "contradicted": "contradicted",
-                "not_mentioned": "not mentioned",
-            }
+            label_faith = self._FAITHFULNESS_LABEL
             for f in faith:
                 if not isinstance(f, dict):
                     continue
@@ -518,13 +531,16 @@ class ReportGenerator:
                     softened_faith = False
                 else:
                     first_verdict = f.get("verdict", "")
+                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
                     final_verdict, softened_faith = self._soften_verdict(
-                        first_verdict, audit_lookup.get((f.get("key"), "faithfulness")), "faithfulness")
+                        first_verdict, audit_verdict, "faithfulness")
                     if softened_faith:
                         softened_count += 1
                     verdict_label = label_faith.get(final_verdict, final_verdict or "?")
                     if softened_faith:
                         verdict_label += f" (audit softened from {first_verdict})"
+                    elif audit_verdict == "inaccessible":
+                        verdict_label += " (audit could not retrieve the source)"
                 key = (f.get("key") or "?").replace("|", "\\|")
                 claim = (f.get("claim") or "").replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()
@@ -812,8 +828,94 @@ class ReportGenerator:
         )
         return env.get_template("report/report.html.j2").render(**ctx)
 
+    def _citation_html_view(self, citation: Optional[dict], audit: Optional[dict]) -> Optional[dict]:
+        """Structured citation-check data for the HTML template.
+
+        Applies the same audit reconciliation as the markdown renderer so the
+        two report formats never disagree. None when the check did not run.
+        """
+        if not citation:
+            return None
+        audit_items = (audit or {}).get("items") or []
+        audit_lookup = {
+            (it.get("key"), it.get("kind")): it.get("audit_verdict")
+            for it in audit_items if isinstance(it, dict) and it.get("key")
+        }
+        softened_count = 0
+
+        s = citation.get("summary")
+        s = s if isinstance(s, dict) else {}
+
+        flagged_rows = []
+        for f in citation.get("flagged") or []:
+            if not isinstance(f, dict):
+                continue
+            first_status = f.get("status", "")
+            audit_verdict = audit_lookup.get((f.get("key"), "integrity"))
+            final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
+            if softened:
+                softened_count += 1
+            status_label = self._INTEGRITY_LABEL.get(final_status, final_status)
+            if softened:
+                status_label += f" (audit softened from {first_status})"
+            rec = f.get("matched_record") or {}
+            evidence = f.get("evidence") or []
+            url = rec.get("url") if isinstance(rec, dict) else None
+            if not url and evidence and isinstance(evidence[0], str):
+                url = evidence[0]
+            flagged_rows.append({
+                "status_label": status_label,
+                "key": (f.get("key") or "?"),
+                "detail": (f.get("detail") or "").strip(),
+                "url": url,
+            })
+
+        fsum = s.get("faithfulness")
+        fsum = fsum if isinstance(fsum, dict) else {}
+        faith_rows = []
+        if fsum.get("checked"):
+            for f in citation.get("faithfulness") or []:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("source_status") == "inaccessible":
+                    verdict_label = "source inaccessible"
+                else:
+                    first_verdict = f.get("verdict", "")
+                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
+                    final_verdict, softened = self._soften_verdict(
+                        first_verdict, audit_verdict, "faithfulness")
+                    if softened:
+                        softened_count += 1
+                    verdict_label = self._FAITHFULNESS_LABEL.get(final_verdict, final_verdict or "?")
+                    if softened:
+                        verdict_label += f" (audit softened from {first_verdict})"
+                    elif audit_verdict == "inaccessible":
+                        verdict_label += " (audit could not retrieve the source)"
+                faith_rows.append({
+                    "key": f.get("key") or "?",
+                    "verdict_label": verdict_label,
+                    "claim": (f.get("claim") or "").strip(),
+                    "quote": (f.get("quote") or "").strip(),
+                    "source": f.get("source") or "",
+                })
+
+        return {
+            "total": s.get("total", 0),
+            "verified": s.get("verified", 0),
+            "mismatch": s.get("metadata_mismatch", 0),
+            "fabricated": s.get("likely_fabricated", 0),
+            "inconclusive": s.get("inconclusive", 0),
+            "unresolved": s.get("unresolved", 0),
+            "flagged": flagged_rows,
+            "faith_checked": fsum.get("checked", 0) or 0,
+            "faith_scope": s.get("faithfulness_scope", "main"),
+            "faith_rows": faith_rows,
+            "softened_count": softened_count,
+        }
+
     def _build_html_context(
         self, claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
+        citation=None, citation_audit=None,
     ) -> dict:
         verdict_by_id = {v.claim_id: v for v in verdicts}
         claim_list = claims.claims if claims is not None else []
@@ -914,6 +1016,7 @@ class ReportGenerator:
             "n_minor": n_minor, "n_major": n_major, "n_critical": n_critical,
             "flags": (score.flags if (score is not None and score.flags) else []),
             "has_evaluation": evaluation is not None,
+            "citations": self._citation_html_view(citation, citation_audit),
         }
 
     def _generate_pdf_from_html(self, html_content: str, output_path: Path) -> bool:

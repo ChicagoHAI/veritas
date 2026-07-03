@@ -102,6 +102,9 @@ REPORT_HTML_FILE = "replication_report.html"
 PAPER_CLAIMS_FILE = "paper_claims.json"
 VERDICTS_FILE = "verdicts.json"
 REPLICATION_SCORE_FILE = "replication_score.json"
+RESOURCE_USAGE_FILE = "resource_usage.json"
+RESOURCE_ESTIMATE_FILE = "resource_estimate.json"
+RESOURCE_ESTIMATE_TRANSCRIPT_FILE = "resource_estimate_transcript.jsonl"
 VERIFY_FILE_SUFFIX = ".json"  # per-claim files: ``verify/<claim_id>.json``
 
 PAPER_CLAIMS_TRANSCRIPT_FILE = "paper_claims_transcript.jsonl"
@@ -526,12 +529,13 @@ class Config:
         return self.evaluation_dir / CITATION_CHECK_FILE
 
     @property
-    def citation_check_transcript_path(self) -> Path:
-        return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
+    def citation_check_meta_path(self) -> Path:
+        """Sidecar recording the settings that produced citation_check.json."""
+        return self.evaluation_dir / CITATION_CHECK_META_FILE
 
     @property
-    def citation_check_meta_path(self) -> Path:
-        return self.evaluation_dir / CITATION_CHECK_META_FILE
+    def citation_check_transcript_path(self) -> Path:
+        return self.evaluation_dir / CITATION_CHECK_TRANSCRIPT_FILE
 
     @property
     def citation_audit_path(self) -> Path:
@@ -576,6 +580,18 @@ class Config:
     @property
     def diligence_signals_path(self) -> Path:
         return self.replication_dir / DILIGENCE_SIGNALS_FILE
+
+    @property
+    def resource_usage_path(self) -> Path:
+        return self.output_dir / RESOURCE_USAGE_FILE
+
+    @property
+    def resource_estimate_path(self) -> Path:
+        return self.analyze_dir / RESOURCE_ESTIMATE_FILE
+
+    @property
+    def resource_estimate_transcript_path(self) -> Path:
+        return self.analyze_dir / RESOURCE_ESTIMATE_TRANSCRIPT_FILE
 
     # -- Manager retry-loop artifacts ---------------------------------------
 

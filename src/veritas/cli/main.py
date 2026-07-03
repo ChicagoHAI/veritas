@@ -188,6 +188,11 @@ def replicate(
         "--restart",
         help="Discard previous run state and start fresh.",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Stop after resource estimation and print the estimate without running replication.",
+    ),
 ):
     """
     Run the replication pipeline against a paper and/or its code repository.
@@ -276,7 +281,7 @@ def replicate(
     runner = ReplicationRunner(config)
 
     try:
-        result = runner.run()
+        result = runner.run(dry_run=dry_run)
         if result.success:
             console.print()
             console.print("[bold green]Replication completed successfully![/bold green]")
@@ -286,6 +291,62 @@ def replicate(
         else:
             console.print()
             console.print(f"[bold red]Replication failed:[/bold red] {result.error}")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def estimate(
+    paper: Optional[Path] = typer.Option(None, "--paper", "-p", help="Path to the paper PDF file", exists=True, dir_okay=False),
+    repo: Optional[Path] = typer.Option(None, "--repo", "-r", help="Path to the repository", exists=True, file_okay=False),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    provider: str = typer.Option(
+        "claude", "--provider",
+        help="AI provider (claude, codex, gemini, openrouter)",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the estimate (bare name).",
+    ),
+    analyze_model: Optional[str] = typer.Option(
+        None, "--analyze-model",
+        help="Engine for the analyze bucket (claims, plan, resource estimate), as [provider:]model.",
+    ),
+    mode: str = typer.Option("auto", "--mode"),
+):
+    """
+    Estimate the compute and cost required to replicate a paper, without running replication.
+
+    Runs analyze + plan + resource estimation, prints the estimate, and exits.
+    """
+    console.print("[bold blue]Veritas Resource Estimator[/bold blue]")
+    console.print()
+
+    if output is not None:
+        output_dir = output
+    elif repo is not None:
+        output_dir = repo / "estimate"
+    elif paper is not None:
+        output_dir = paper.parent / "estimate"
+    else:
+        console.print("[bold red]Error:[/bold red] at least one of --paper or --repo is required")
+        raise typer.Exit(1)
+
+    try:
+        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir,
+                        provider=provider, model=model, analyze_model=analyze_model,
+                        mode=mode)
+    except (ValueError, NotImplementedError) as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    runner = ReplicationRunner(config)
+    try:
+        result = runner.run(dry_run=True)
+        if not result.success:
+            console.print(f"[bold red]Estimation failed:[/bold red] {result.error}")
             raise typer.Exit(1)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

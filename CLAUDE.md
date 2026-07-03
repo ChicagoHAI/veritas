@@ -85,7 +85,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a
   verbatim quote from the source. `--check-citations-faithfulness main` (default)
   limits this to the paper's central attributed claims; `all` extends it to every
-  claim-bearing citation. An independent audit pass writes its own verdicts to
+  claim-bearing citation. A scope or evaluate-engine change re-runs the check
+  (the producing settings are recorded in `evaluation/.citation_check_meta.json`);
+  outputs from before this tracking are kept as-is. An independent audit pass writes its own verdicts to
   `evaluation/citation_audit.json`; a deterministic reconciliation softens any flagged
   verdict toward the audit only when the audit is less severe (never escalates).
   No human-review step.

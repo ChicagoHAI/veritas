@@ -151,7 +151,7 @@ Write `{{ citation_check_path }}` as a single JSON object:
     {
       "key": "<ref key>",
       "raw": "<verbatim reference line>",
-      "status": "metadata_mismatch | likely_fabricated | inconclusive",
+      "status": "metadata_mismatch | likely_fabricated | inconclusive | unresolved",
       "detail": "<one plain sentence on what is wrong>",
       "matched_record": "<the resolver's matched_record object, or null for web-escalated refs>",
       "evidence_basis": "provided | fetched_full | fetched_snippet | inaccessible",
@@ -176,8 +176,10 @@ Write `{{ citation_check_path }}` as a single JSON object:
 ```
 
 Rules:
-- The six integrity counts must sum to `total` (as before). List in `flagged` every
-  reference whose integrity status is NOT `verified`.
+- The five integrity counts (`verified`, `metadata_mismatch`, `unresolved`,
+  `likely_fabricated`, `inconclusive`) must sum to `total`. List in `flagged`
+  every reference whose integrity status is NOT `verified`, including any left
+  `unresolved`.
 - `faithfulness` lists every (claim, citation) pair you checked, including
   `supported` ones. Before writing, self-check the faithfulness counts: `summary.faithfulness.checked`
   must equal the number of entries in `faithfulness[]`, and

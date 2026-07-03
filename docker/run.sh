@@ -1175,7 +1175,7 @@ rewrite_paths() {
             --output|-o)
                 saw_output=true
                 local host_path
-                host_path=$(realpath -m "$2")
+                host_path=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$2")
                 mkdir -p "$host_path"
                 # Container runs as veritas (UID 1000). If the host dir is
                 # owned by another UID (e.g. root on a VM), UID 1000 can't
@@ -1412,6 +1412,32 @@ cmd_check_citations() {
 }
 
 # -----------------------------------------------------------------------------
+# Estimate compute/cost for a paper without running replication
+# -----------------------------------------------------------------------------
+cmd_estimate() {
+    ensure_image
+    warn_if_outdated
+    load_provider_auth_env
+    check_provider_credentials "$(extract_provider "$@")"
+    rewrite_paths "$@"
+
+    local tty_flag=$(get_tty_flag)
+    local platform_flag=$(get_platform_flags)
+    local credential_mounts=$(get_cli_credential_mounts)
+    ensure_credential_perms
+    local auth_flags=$(get_provider_auth_flags)
+
+    eval "docker run $tty_flag --rm \\
+        $platform_flag \\
+        $credential_mounts \\
+        $auth_flags \\
+        $MOUNTS \\
+        -w /workspace \\
+        \"$IMAGE_NAME\" \\
+        veritas estimate $ARGS"
+}
+
+# -----------------------------------------------------------------------------
 # Help
 # -----------------------------------------------------------------------------
 show_help() {
@@ -1423,6 +1449,7 @@ show_help() {
     echo "  full          Full pipeline: replicate + evaluate + report (the default)"
     echo "                  e.g. ./veritas --paper p.pdf --repo ./myrepo"
     echo "  replicate     Replication only, through verify (for benchmarking)"
+    echo "  estimate      Estimate compute/cost without running replication"
     echo "                  e.g. ./veritas replicate --paper p.pdf --repo ./myrepo"
     echo "                  add --data ./my-data to pre-position datasets (read-only)"
     echo "  evaluate      Run the evaluation manager + report on an existing"
@@ -1462,6 +1489,7 @@ main() {
     case "$cmd" in
         full)          cmd_replicate --evaluate "$@" ;;
         replicate)     cmd_replicate "$@" ;;
+        estimate)      cmd_estimate "$@" ;;
         evaluate)      cmd_evaluate "$@" ;;
         report)        cmd_report "$@" ;;
         check-citations) cmd_check_citations "$@" ;;

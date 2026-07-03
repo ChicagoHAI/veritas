@@ -200,9 +200,9 @@ def test_invalidation_rows():
     assert FINGERPRINT_INVALIDATES["engine_replicate"] == (
         "replicate", "assess_fixes", "verify")
     assert FINGERPRINT_INVALIDATES["engine_analyze"] == (
-        "analyze", "plan", "replicate", "assess_fixes", "verify")
+        "analyze", "plan", "resource_estimate", "replicate", "assess_fixes", "verify")
     assert FINGERPRINT_INVALIDATES["engine_codegen"] == (
-        "codegen", "plan", "replicate", "assess_fixes", "verify")
+        "codegen", "plan", "resource_estimate", "replicate", "assess_fixes", "verify")
     assert FINGERPRINT_INVALIDATES["engine_evaluate"] == ()
 
 

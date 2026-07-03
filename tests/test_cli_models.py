@@ -15,7 +15,7 @@ def test_replicate_model_flags_reach_config(tmp_path, monkeypatch):
     class FakeRunner:
         def __init__(self, config):
             captured["config"] = config
-        def run(self):
+        def run(self, dry_run=False):
             return SimpleNamespace(success=True, report_path=None,
                                    pdf_path=None, error=None)
 

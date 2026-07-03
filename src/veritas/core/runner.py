@@ -4,12 +4,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import Config, OUTPUT_SUBDIRS, is_web_locked_slug
+from veritas.core.models.resource_estimate import ResourceEstimate
 from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
@@ -214,6 +217,19 @@ def _is_spurious_engine_change(
     return current.get(field) == recorded.get('provider')
 
 
+# Per-million-token pricing for known models (input_price, output_price).
+# Unknown models produce None for estimated_cost_usd_approximate; the
+# resource-estimation prompt instructs the LLM to search for pricing in that
+# case and record it narratively in breakdown_notes.
+KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
+    "claude-sonnet-4-6": (3.00,  15.00),
+    "claude-opus-4-8":   (15.00, 75.00),
+    "claude-haiku-4-5":  (0.80,   4.00),
+    "gpt-4o":            (2.50,  10.00),
+    "gpt-4o-mini":       (0.15,   0.60),
+    "gemini-2.0-flash":  (0.10,   0.40),
+}
+
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Input and provider/mode fields invalidate the
@@ -232,12 +248,13 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Per-bucket engines (resolved provider:model). Scoped: a verify-engine
     # change re-adjudicates an existing run without re-replicating.
     # engine_analyze skips codegen (codegen consumes the paper, never the
-    # claims). engine_evaluate maps to no state-tracked stage: the
+    # claims) and covers resource_estimate (its LLM pass consumes the plan).
+    # engine_evaluate maps to no state-tracked stage: the
     # contextual-evaluation and citation outputs track their producing
     # settings in sidecar files and re-run on a settings change themselves;
     # manager/research engine changes apply to future loop iterations only.
-    'engine_analyze':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'engine_codegen':   ('codegen', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'engine_analyze':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'engine_codegen':   ('codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
     'engine_replicate': ('replicate', 'assess_fixes', 'verify'),
     'engine_assess':    ('assess_fixes',),
     'engine_verify':    ('verify',),
@@ -269,7 +286,7 @@ class ReplicationRunner:
         # manager does the judging.
         self._last_facts: Optional[ExecutionFacts] = None
 
-    def run(self) -> RunResult:
+    def run(self, dry_run: bool = False) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
 
         Resumable: completed phases recorded in ``<output>/.veritas/pipeline_state.json``
@@ -319,7 +336,7 @@ class ReplicationRunner:
                     raise
 
             # codegen (paper-only mode only)
-            if self.config.mode == "paper-only":
+            if self.config.mode == "paper-only" and not dry_run:
                 if state.is_stage_completed('codegen'):
                     print("[OK] codegen: skipped (already completed)")
                 else:
@@ -327,6 +344,10 @@ class ReplicationRunner:
                     try:
                         self._generate_code()
                         state.complete_stage('codegen', success=True)
+                        # Invalidate any plan built before code existed (e.g. from a
+                        # prior --dry-run on the same output dir) so it regenerates
+                        # against the generated codebase.
+                        state.invalidate_stages(['plan'])
                     except Exception:
                         state.complete_stage('codegen', success=False)
                         raise
@@ -345,6 +366,45 @@ class ReplicationRunner:
                 except Exception:
                     state.complete_stage('plan', success=False)
                     raise
+
+            # resource estimation (non-fatal: a failed estimate never aborts replication)
+            resource_estimate = None
+            if state.is_stage_completed('resource_estimate'):
+                print("[OK] resource_estimate: skipped (already completed)")
+            else:
+                state.start_stage('resource_estimate')
+                try:
+                    resource_estimate = self._estimate_resources(replication_plan, state)
+                    state.complete_stage('resource_estimate', success=True)
+                except Exception as e:
+                    print(f"Warning: resource estimation failed (continuing): {e}")
+                    state.complete_stage('resource_estimate', success=False)
+
+            if dry_run:
+                # Always read the full JSON from disk — it contains everything the LLM
+                # wrote (estimated_cost_usd, paper_reported_compute, etc.), not just the
+                # 5 minimal dataclass fields that to_dict() would return.
+                if self.config.resource_estimate_path.exists():
+                    try:
+                        resource_estimate_data = json.loads(
+                            self.config.resource_estimate_path.read_text(encoding="utf-8")
+                        )
+                    except (json.JSONDecodeError, OSError):
+                        resource_estimate_data = resource_estimate.to_dict() if resource_estimate is not None else {}
+                elif resource_estimate is not None:
+                    resource_estimate_data = resource_estimate.to_dict()
+                else:
+                    resource_estimate_data = {}
+                compute_class = resource_estimate_data.get("compute_class", "light")
+                cost_tier = {"light": "< $1", "medium": "$1–$10", "heavy": "$10–$100+"}.get(compute_class, "unknown")
+                reported = resource_estimate_data.get("paper_reported_compute") or resource_estimate_data.get("reported_compute")
+                print("\nResource Estimate:")
+                print(json.dumps(resource_estimate_data, indent=2))
+                if reported:
+                    print(f"\nPaper-reported compute: {reported}")
+                print(f"Estimated cost tier (rough size class): {cost_tier}")
+                print("Run without --dry-run to start replication.")
+                return RunResult(success=True)
 
             # replicate (+ manager retry loop when max_iters > 1)
             evidence, replication_plan = self._replicate_with_manager_loop(
@@ -396,8 +456,14 @@ class ReplicationRunner:
 
             # Optional, opt-in citation-check submodule (reference verification).
             # Advisory only: does not feed the Replication Score. Idempotent.
+            # Runs before usage collection so its transcripts are counted.
             if self.config.run_citation_check:
                 self._check_citations()
+
+            try:
+                self._collect_resource_usage(state)
+            except Exception as e:
+                print(f"  Warning: Could not collect resource usage: {e}")
 
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
@@ -1703,9 +1769,9 @@ class ReplicationRunner:
         existence/metadata), and escalates only unresolved references. Advisory:
         the output at ``evaluation/citation_check.json`` does NOT alter the
         Replication Score. Idempotent for the same settings; a change of the
-        evaluate engine or faithfulness scope re-runs it (and drops the stale
-        audit). Outputs without a sidecar predate settings tracking and are
-        kept as-is. Never raises into the pipeline.
+        faithfulness scope or the evaluate engine re-runs it (and drops the
+        stale audit). Outputs without a sidecar predate settings tracking and
+        are kept as-is. Never raises into the pipeline.
 
         A self-contained method that mirrors the research sub-agent dispatch.
         """
@@ -1716,22 +1782,15 @@ class ReplicationRunner:
             "faithfulness_scope": self.config.faithfulness_scope,
         }
         if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
-            stored_meta = _read_engine_meta(meta_path)
-            if stored_meta == current_meta:
+            if self._citation_check_settings_match(current_meta):
                 print("[OK] citation-check: skipped (already produced with these settings)")
                 return
-            if stored_meta is None:
-                print(
-                    f"[OK] citation-check: skipped (already produced; predates "
-                    f"settings tracking — delete {output_path} to re-run)"
-                )
-                return
             print(
-                f"  Re-running citation-check: settings changed "
-                f"({stored_meta} -> {current_meta})"
+                f"  citation-check: settings changed (now scope "
+                f"'{self.config.faithfulness_scope}', engine "
+                f"'{current_meta['engine']}'); re-running"
             )
-            # The audit re-checks the check's findings; a re-run makes any
-            # existing audit stale by construction.
+            # The audit re-checks the check's findings, so it is stale too.
             self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this
@@ -1770,22 +1829,44 @@ class ReplicationRunner:
         _write_engine_meta(meta_path, current_meta)
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
-            s = data.get("summary") or {}
-            f = s.get("faithfulness") or {}
-            print(
-                f"  Citation check written; {s.get('total', '?')} refs "
-                f"({s.get('likely_fabricated', 0)} likely fabricated, "
-                f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
-                f"{s.get('inconclusive', 0)} inconclusive); "
-                f"faithfulness checked {f.get('checked', 0)} "
-                f"({f.get('contradicted', 0)} contradicted, "
-                f"{f.get('partially_supported', 0)} partial)"
-            )
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
+        else:
+            if not isinstance(data, dict):
+                print("  Warning: citation-check output is not a JSON object; left as-is for audit")
+            else:
+                s = data.get("summary")
+                s = s if isinstance(s, dict) else {}
+                f = s.get("faithfulness")
+                f = f if isinstance(f, dict) else {}
+                print(
+                    f"  Citation check written; {s.get('total', '?')} refs "
+                    f"({s.get('likely_fabricated', 0)} likely fabricated, "
+                    f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+                    f"{s.get('inconclusive', 0)} inconclusive, "
+                    f"{s.get('unresolved', 0)} unresolved); "
+                    f"faithfulness checked {f.get('checked', 0)} "
+                    f"({f.get('contradicted', 0)} contradicted, "
+                    f"{f.get('partially_supported', 0)} partial)"
+                )
 
         # Independent audit pass over the flagged verdicts (advisory; never raises).
         self._audit_citations()
+
+    def _citation_check_settings_match(self, current_meta: Dict[str, Any]) -> bool:
+        """True if the existing citation-check output was produced with the
+        current settings (faithfulness scope and evaluate engine).
+
+        Lenient per field: a sidecar that predates a field (or the sidecar
+        itself) counts as matching, so outputs from before settings tracking
+        are kept as-is."""
+        meta = _read_engine_meta(self.config.citation_check_meta_path)
+        if meta is None:
+            return True
+        return all(
+            meta.get(key) is None or meta.get(key) == value
+            for key, value in current_meta.items()
+        )
 
     @staticmethod
     def _has_auditable_findings(check_data: dict) -> bool:
@@ -1819,6 +1900,8 @@ class ReplicationRunner:
             check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
         except (ValueError, json.JSONDecodeError):
             return
+        if not isinstance(check_data, dict):
+            return
         if not self._has_auditable_findings(check_data):
             return
         print("Running citation-audit (independent re-check of flagged verdicts)...")
@@ -1848,7 +1931,7 @@ class ReplicationRunner:
             return
         try:
             data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
-            n = len(data.get("items") or [])
+            n = len(data.get("items") or []) if isinstance(data, dict) else 0
             print(f"  Citation audit written; {n} item(s) re-checked")
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
@@ -2057,6 +2140,178 @@ class ReplicationRunner:
 
         return score
 
+    def _collect_resource_usage(self, state: PipelineState) -> None:
+        """Combine time per phase, token counts, and disk usage into resource_usage.json."""
+        from veritas.core.models.resource_usage import ResourceUsage, PhaseUsage
+        from veritas.core.config import RESOURCE_USAGE_FILE
+        from veritas.utils.transcripts import sum_tokens_from_transcript
+
+        phase_transcripts = {
+            "analyze":      self.config.paper_claims_transcript_path,
+            "codegen":      self.config.codegen_transcript_path,
+            "plan":         self.config.replication_plan_transcript_path,
+            "replicate":    self.config.replication_transcript_path,
+            "assess_fixes": self.config.fix_severity_transcript_path,
+        }
+        # verify transcripts: one per claim
+        verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))
+
+        usage = ResourceUsage()
+
+        for phase, transcript_path in phase_transcripts.items():
+            stage = state.state.get("stages", {}).get(phase, {})
+            started = stage.get("started_at")
+            completed = stage.get("completed_at")
+            wall = None
+            if started and completed:
+                wall = (datetime.fromisoformat(completed) - datetime.fromisoformat(started)).total_seconds()
+            inp, out = sum_tokens_from_transcript(transcript_path)
+            usage.phases[phase] = PhaseUsage(wall_seconds=wall, input_tokens=inp, output_tokens=out)
+
+        # verify: sum across all claim transcripts
+        verify_stage = state.state.get("stages", {}).get("verify", {})
+        v_started = verify_stage.get("started_at")
+        v_completed = verify_stage.get("completed_at")
+        v_wall = None
+        if v_started and v_completed:
+            v_wall = (datetime.fromisoformat(v_completed) - datetime.fromisoformat(v_started)).total_seconds()
+        v_inp, v_out = 0, 0
+        for t in verify_transcripts:
+            i, o = sum_tokens_from_transcript(t)
+            v_inp += i
+            v_out += o
+        usage.phases["verify"] = PhaseUsage(wall_seconds=v_wall, input_tokens=v_inp, output_tokens=v_out)
+
+        # totals
+        all_phases = list(usage.phases.values())
+        walls = [p.wall_seconds for p in all_phases if p.wall_seconds is not None]
+        usage.total_wall_seconds = sum(walls) if walls else None
+        usage.total_input_tokens = sum(p.input_tokens for p in all_phases)
+        usage.total_output_tokens = sum(p.output_tokens for p in all_phases)
+
+        # disk footprint (-sb is GNU-only; -sk works on both macOS and Linux)
+        try:
+            if sys.platform == "darwin":
+                result = subprocess.run(
+                    ["du", "-sk", str(self.config.output_dir)],
+                    capture_output=True, text=True
+                )
+                usage.disk_bytes = int(result.stdout.split()[0]) * 1024
+            else:
+                result = subprocess.run(
+                    ["du", "-sb", str(self.config.output_dir)],
+                    capture_output=True, text=True
+                )
+                usage.disk_bytes = int(result.stdout.split()[0])
+        except Exception:
+            usage.disk_bytes = None
+
+        # cost estimate: known models use KNOWN_MODEL_PRICING; unknown models
+        # produce None so the field is omitted rather than silently wrong.
+        model = (
+            os.environ.get("ANTHROPIC_MODEL")
+            or os.environ.get("OPENAI_MODEL")
+            or os.environ.get("GEMINI_MODEL")
+        )
+        # Prefer an exact match; fall back to the longest known id the model
+        # name starts with, so dated ids (e.g. claude-haiku-4-5-20251001) still
+        # price. Longest-first avoids gpt-4o matching a gpt-4o-mini id.
+        pricing = None
+        if model:
+            pricing = KNOWN_MODEL_PRICING.get(model)
+            if pricing is None:
+                for key in sorted(KNOWN_MODEL_PRICING, key=len, reverse=True):
+                    if model.startswith(key):
+                        pricing = KNOWN_MODEL_PRICING[key]
+                        break
+        estimated_cost_usd = round(
+            usage.total_input_tokens / 1_000_000 * pricing[0] +
+            usage.total_output_tokens / 1_000_000 * pricing[1],
+            4,
+        ) if pricing else None
+
+        # write
+        out_dict = {
+            "phases": {
+                name: {"wall_seconds": p.wall_seconds, "input_tokens": p.input_tokens, "output_tokens": p.output_tokens}
+                for name, p in usage.phases.items()
+            },
+            "totals": {
+                "wall_seconds": usage.total_wall_seconds,
+                "input_tokens": usage.total_input_tokens,
+                "output_tokens": usage.total_output_tokens,
+                "disk_bytes": usage.disk_bytes,
+                "estimated_cost_usd_approximate": estimated_cost_usd,
+            }
+        }
+        with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
+            json.dump(out_dict, f, indent=2)
+
+    def _estimate_resources(
+        self,
+        replication_plan: Optional[ReplicationPlan],
+        state: Optional["PipelineState"] = None,
+    ) -> ResourceEstimate:
+        """Combine static code analysis with an LLM pass to produce resource_estimate.json.
+
+        The LLM output is written to disk as free-form JSON — the schema is a suggestion,
+        not a contract. We only parse the fields the code needs programmatically; everything
+        else stays in the raw JSON for downstream LLM consumers.
+        """
+        print("Estimating replication resources...")
+
+        # Static analysis: only run if there is a repo to scan (skipped in paper-only
+        # mode before codegen has produced one).
+        static: Dict[str, Any] = {}
+        repo_path = self.config.effective_repo_path
+        if repo_path and repo_path.exists():
+            from veritas.utils.static_analysis import analyze_repo
+            static = analyze_repo(repo_path)
+
+        plan_text = json.dumps(
+            replication_plan.to_dict() if replication_plan else {}, indent=2
+        )
+
+        prompt = self.prompt_generator.generate_resource_estimation_prompt(
+            replication_plan=plan_text,
+            output_dir=self.config.output_dir,
+            paper_path=self.config.paper_path,
+            mode=self.config.mode,
+            pre_codegen=state is not None and not state.is_stage_completed('codegen'),
+        )
+
+        prompt_path = self.config.prompts_dir / "resource_estimation_prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        log_path = self.config.resource_estimate_transcript_path
+        output_path = self.config.resource_estimate_path
+
+        success = self._invoke_provider(
+            prompt=prompt,
+            working_dir=self.config.output_dir,
+            log_path=log_path,
+            timeout=None,
+            bucket="analyze",
+        )
+
+        if not success or not output_path.exists():
+            print("  Warning: Resource estimation did not produce output")
+            return ResourceEstimate(**static)
+
+        try:
+            raw = _extract_json(output_path.read_text(encoding="utf-8"))
+            data = json.loads(raw)
+            # Static analysis fields always win (they are deterministic).
+            data.update(static)
+            # Write the merged free-form JSON back to disk as-is.
+            output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            result = ResourceEstimate.from_dict(data)
+            print(f"  Compute class: {result.compute_class}, GPU: {result.needs_gpu}")
+            return result
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: Could not parse resource estimate: {e}")
+            return ResourceEstimate(**static)
+
     # -- Report ------------------------------------------------------------
 
     def _report(
@@ -2100,6 +2355,13 @@ class ReplicationRunner:
             return RunResult(success=True, report_path=report_path, pdf_path=pdf_path)
         except Exception as e:
             return RunResult(success=False, error=str(e))
+        finally:
+            # Same API-key redaction pass run() applies; this entry point writes
+            # prompts and transcripts without going through run().
+            try:
+                sanitize_logs_directory(self.config.output_dir)
+            except Exception:
+                pass
 
     # -- Resume helpers ----------------------------------------------------
 
