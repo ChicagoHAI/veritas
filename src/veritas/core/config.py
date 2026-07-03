@@ -223,9 +223,9 @@ class Config:
         default_factory=lambda: _env_str("VERITAS_CITATION_FAITHFULNESS_SCOPE", "main")
     )
 
-    # Hard cap on manager-driven retry iterations (reserved for the later
-    # iterative-manager loop phase; no behavior wired yet). Overridable via
-    # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
+    # Hard cap on manager-driven retry iterations. 1 = single pass (the
+    # manager gate is off); >1 enables the post-replicate manager loop.
+    # Overridable via ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs use 1.
     max_iters: int = field(
         default_factory=lambda: _env_int("VERITAS_MAX_ITERS", 3)
     )
@@ -344,16 +344,13 @@ class Config:
                     f"--provider); got '{self.model}'"
                 )
 
-        # Eagerly resolve every bucket so malformed specs (flags or
-        # VERITAS_*_MODEL vars) fail at startup rather than mid-run, and the
-        # openrouter provider always has an explicit model.
+        # Eagerly parse every bucket spec so malformed values (flags or
+        # VERITAS_*_MODEL vars) fail at startup rather than mid-run.
+        # Provisioning requirements (openrouter needs an explicit model and a
+        # key) are checked per run against the buckets that will actually
+        # execute, not here.
         for bucket in BUCKETS:
-            bucket_provider, bucket_model = self.engine_for(bucket)
-            if bucket_provider == "openrouter" and bucket_model is None:
-                raise ValueError(
-                    f"Provider openrouter requires an explicit model for the "
-                    f"'{bucket}' bucket (pass --model or --{bucket}-model)"
-                )
+            self.engine_for(bucket)
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""

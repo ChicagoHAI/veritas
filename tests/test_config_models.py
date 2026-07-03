@@ -105,9 +105,12 @@ def test_prefixed_global_model_raises(tmp_path):
     with pytest.raises(ValueError, match="bare model"):
         _mk_config(tmp_path, model="openrouter:openai/gpt-5.5")
 
-def test_openrouter_provider_requires_model(tmp_path):
-    with pytest.raises(ValueError, match="openrouter requires an explicit model"):
-        _mk_config(tmp_path, provider="openrouter")
+def test_openrouter_provider_without_model_parses(tmp_path):
+    # Provisioning requirements (openrouter needs an explicit model) are
+    # checked per run against the active buckets, not at Config construction
+    # — a knob for a bucket that will not run must not block a run.
+    config = _mk_config(tmp_path, provider="openrouter")
+    assert config.engine_for("verify") == ("openrouter", None)
 
 def test_openrouter_provider_with_model_ok(tmp_path):
     config = _mk_config(

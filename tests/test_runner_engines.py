@@ -468,3 +468,28 @@ def test_manager_plan_rerun_invalidates_resource_estimate(tmp_path):
     assert not state.is_stage_completed("plan")
     assert not state.is_stage_completed("resource_estimate")
     assert state.is_stage_completed("codegen")
+
+
+def test_auth_check_requires_model_for_active_openrouter(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    provider="openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    runner = ReplicationRunner(config)
+    with pytest.raises(RuntimeError, match="explicit model"):
+        runner._check_provider_auth()
+
+
+def test_auth_check_skips_inactive_buckets(tmp_path, monkeypatch):
+    # A lingering verify knob must not block a dry run, which never
+    # invokes the verify bucket.
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    verify_model="openrouter:openai/gpt-5.5")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    runner = ReplicationRunner(config)
+    active = runner._active_buckets(dry_run=True)
+    assert "verify" not in active
+    runner._check_provider_auth(buckets=active)  # must not raise
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        runner._check_provider_auth(buckets=runner._active_buckets())

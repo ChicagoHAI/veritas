@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config, OUTPUT_SUBDIRS, is_web_locked_slug
+from veritas.core.config import BUCKETS, Config, OUTPUT_SUBDIRS, is_web_locked_slug
 from veritas.core.models.resource_estimate import ResourceEstimate
 from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
@@ -305,7 +305,7 @@ class ReplicationRunner:
         are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
         """
         try:
-            self._check_provider_auth()
+            self._check_provider_auth(buckets=self._active_buckets(dry_run))
             self._setup_output_dir()
             state = PipelineState(self.config.output_dir)
 
@@ -315,15 +315,21 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            for leak_bucket in ("codegen", "replicate"):
+            # Buckets whose output reaches the replication agent: the plan
+            # (analyze bucket) and codegen feed it directly, and the manager
+            # directive (evaluate bucket) does when the retry loop is on.
+            leak_buckets = ["analyze", "codegen", "replicate"]
+            if self.config.max_iters > 1:
+                leak_buckets.append("evaluate")
+            for leak_bucket in leak_buckets:
                 _, leak_model = self.config.engine_for(leak_bucket)
                 if is_web_locked_slug(leak_model):
                     print(
                         f"WARNING: the {leak_bucket} bucket is configured with "
-                        f"'{leak_model}', which has always-on web access. The "
-                        f"agent can fetch the paper's published values during "
-                        f"replication, defeating the anti-leakage design. "
-                        f"Proceeding anyway."
+                        f"'{leak_model}', which has always-on web access. Its "
+                        f"output can reach the replication agent, so fetched "
+                        f"paper values can leak into replication, defeating "
+                        f"the anti-leakage design. Proceeding anyway."
                     )
 
             # analyze (claims extraction only)
@@ -2635,24 +2641,42 @@ class ReplicationRunner:
         bucket's provider."""
         return frozenset(PROVIDER_AUTH_VARS.get(provider, ()))
 
+    def _active_buckets(self, dry_run: bool = False) -> set:
+        """Buckets whose engines this run will actually invoke."""
+        buckets = {"analyze"}
+        if not dry_run:
+            if self.config.mode == "paper-only":
+                buckets.add("codegen")
+            buckets.update(("replicate", "assess", "verify"))
+            if (self.config.run_evaluation or self.config.run_citation_check
+                    or self.config.max_iters > 1):
+                buckets.add("evaluate")
+        return buckets
+
     def _check_provider_auth(self, buckets=None) -> None:
-        """Fail fast when a configured provider cannot authenticate.
+        """Fail fast when a configured provider is not provisioned to run.
 
         The wrapper preflight only sees the global --provider; per-bucket
-        engines are validated here so a missing key surfaces before any
-        stage runs instead of mid-pipeline. openrouter is API-key-only;
-        the other providers may authenticate via mounted login state, so
-        only openrouter is checked.
+        engines are validated here so a missing key or model surfaces
+        before any stage runs instead of mid-pipeline. openrouter is
+        API-key-only and has no usable default model; the other providers
+        may authenticate via mounted login state, so only openrouter is
+        checked.
 
-        ``buckets`` restricts the check to the named buckets' providers;
-        the standalone entry points that run a single bucket pass it so a
-        knob configured for a bucket that will not run cannot block them.
+        ``buckets`` restricts the check to the named buckets (callers pass
+        the buckets their entry point will actually run, so a knob
+        configured for an inactive bucket cannot block the run). ``None``
+        checks every bucket.
         """
-        if buckets is None:
-            providers = self.config.resolved_providers()
-        else:
-            providers = {self.config.engine_for(bucket)[0] for bucket in buckets}
-        if "openrouter" in providers:
+        for bucket in (BUCKETS if buckets is None else buckets):
+            provider, model = self.config.engine_for(bucket)
+            if provider != "openrouter":
+                continue
+            if model is None:
+                raise RuntimeError(
+                    f"Provider openrouter requires an explicit model for the "
+                    f"'{bucket}' bucket (pass --model or --{bucket}-model)"
+                )
             if not os.environ.get("OPENROUTER_API_KEY", "").strip():
                 raise RuntimeError(
                     "Provider openrouter requires OPENROUTER_API_KEY. "
