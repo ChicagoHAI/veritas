@@ -1162,3 +1162,54 @@ def test_audit_without_claim_field_still_softens():
     gen = ReportGenerator()
     section = gen._render_citation_check(citation, audit)
     assert "audit softened from contradicted" in section
+
+
+def test_audit_claim_match_tolerates_whitespace_and_case_drift():
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "drift2024", "claim": "The method improves accuracy",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "drift2024", "kind": "faithfulness",
+             "claim": "  the method  improves\naccuracy ",
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_non_string_claim_does_not_crash():
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "odd2024", "claim": ["not", "a", "string"],
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "odd2024", "kind": "faithfulness", "claim": 42,
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "Citation Check" in section

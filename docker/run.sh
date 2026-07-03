@@ -453,7 +453,7 @@ PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN AN
 # Per-bucket engine settings ride the same load/forward mechanism, so
 # subcommands whose containers never mount .env (evaluate, check-citations,
 # estimate) resolve the same engines as the run that produced the output dir.
-FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL"
+FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL VERITAS_CITATION_FAITHFULNESS_SCOPE"
 
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the

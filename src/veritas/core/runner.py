@@ -467,13 +467,19 @@ class ReplicationRunner:
             # Advisory only: does not feed the Replication Score. Idempotent via
             # a file-exists check so it doesn't re-run on resume.
             if self.config.run_evaluation:
-                self._evaluate()
+                try:
+                    self._evaluate()
+                except Exception as e:
+                    print(f"  Warning: contextual evaluation failed (continuing): {e}")
 
             # Optional, opt-in citation-check submodule (reference verification).
             # Advisory only: does not feed the Replication Score. Idempotent.
             # Runs before usage collection so its transcripts are counted.
             if self.config.run_citation_check:
-                self._check_citations()
+                try:
+                    self._check_citations()
+                except Exception as e:
+                    print(f"  Warning: citation check failed (continuing): {e}")
 
             try:
                 self._collect_resource_usage(state)
@@ -1838,7 +1844,7 @@ class ReplicationRunner:
                 output_path.exists()
                 and bool(output_path.read_text(encoding="utf-8").strip())
             )
-        except OSError:
+        except (OSError, ValueError):
             existing_output = False
         if existing_output:
             if self._citation_check_settings_match(current_meta):
@@ -1853,6 +1859,13 @@ class ReplicationRunner:
                 f"'{self.config.faithfulness_scope}', engine "
                 f"'{current_meta['engine']}'); re-running"
             )
+            # Discard the stale trio before re-running: a re-run that then
+            # fails to produce output must not leave the old output stamped
+            # with the new settings, and the audit refers to the output
+            # being discarded.
+            output_path.unlink(missing_ok=True)
+            meta_path.unlink(missing_ok=True)
+            self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this
             print("  citation-check: no paper available; skipping")
@@ -1888,14 +1901,9 @@ class ReplicationRunner:
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
         _write_engine_meta(meta_path, current_meta)
-        # The check just (re)ran, so any audit on disk refers to a prior
-        # output and is stale by construction. Removing it only now — after
-        # the new output landed — keeps the old check/audit pair intact when
-        # a re-run fails.
-        self.config.citation_audit_path.unlink(missing_ok=True)
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
-        except (ValueError, json.JSONDecodeError) as e:
+        except (OSError, ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
         else:
             if not isinstance(data, dict):
@@ -1955,15 +1963,23 @@ class ReplicationRunner:
         """
         check_path = self.config.citation_check_path
         audit_path = self.config.citation_audit_path
-        if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
-            print("[OK] citation-audit: skipped (already produced)")
+        try:
+            if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
+                print("[OK] citation-audit: skipped (already produced)")
+                return
+            check_text = (
+                check_path.read_text(encoding="utf-8") if check_path.exists() else ""
+            )
+        except (OSError, ValueError):
+            # An unreadable artifact counts as absent; the audit is advisory
+            # and must never raise into the pipeline.
             return
-        if not (check_path.exists() and check_path.read_text(encoding="utf-8").strip()):
+        if not check_text.strip():
             return
         if not self.config.has_paper:
             return
         try:
-            check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
+            check_data = json.loads(_extract_json(check_text))
         except (ValueError, json.JSONDecodeError):
             return
         if not isinstance(check_data, dict):

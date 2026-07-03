@@ -104,31 +104,49 @@ def _scrub_prose(obj):
     return obj
 
 
+def _normalize_audit_claim(claim) -> str:
+    """Whitespace-collapsed, case-folded claim text for audit matching; empty
+    for a missing or non-string claim."""
+    if not isinstance(claim, str):
+        return ""
+    return " ".join(claim.split()).casefold()
+
+
 def _build_audit_lookup(audit) -> dict:
-    """Index audit items by ``(key, kind, claim)``; items without a claim
-    (integrity items, and audits from before claim tracking) index by
-    ``(key, kind)``. Keying faithfulness verdicts by their claim keeps one
-    audit item from softening every row that cites the same reference."""
+    """Index audit items as ``(key, kind) -> [(normalized_claim, verdict)]``.
+
+    Faithfulness verdicts are matched claim-first so one audit item cannot
+    soften every row citing the same reference; normalization keeps the
+    match tolerant of whitespace and case drift in the audit's copy of the
+    claim text."""
     lookup = {}
     for it in (audit or {}).get("items") or []:
         if not (isinstance(it, dict) and it.get("key")):
             continue
-        claim = (it.get("claim") or "").strip()
-        if claim:
-            lookup[(it.get("key"), it.get("kind"), claim)] = it.get("audit_verdict")
-        else:
-            lookup[(it.get("key"), it.get("kind"))] = it.get("audit_verdict")
+        lookup.setdefault((it.get("key"), it.get("kind")), []).append(
+            (_normalize_audit_claim(it.get("claim")), it.get("audit_verdict"))
+        )
     return lookup
 
 
 def _audit_verdict_for(lookup: dict, key, kind, claim=None):
-    """Claim-exact match first; ``(key, kind)`` covers items without a claim."""
-    claim = (claim or "").strip()
-    if claim:
-        verdict = lookup.get((key, kind, claim))
-        if verdict is not None:
-            return verdict
-    return lookup.get((key, kind))
+    """Exact normalized-claim match first. A sole claim-less item for
+    ``(key, kind)`` applies regardless — that covers integrity items and
+    audits recorded before claim tracking. An item that names a claim only
+    ever applies to that claim's row; when nothing matches, no verdict
+    applies (conservative: better to keep the first-pass verdict than to
+    soften the wrong row)."""
+    items = lookup.get((key, kind))
+    if not items:
+        return None
+    normalized = _normalize_audit_claim(claim)
+    if normalized:
+        for item_claim, verdict in items:
+            if item_claim == normalized:
+                return verdict
+    if len(items) == 1 and not items[0][0]:
+        return items[0][1]
+    return None
 
 
 class ReportGenerator:
@@ -566,7 +584,8 @@ class ReportGenerator:
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
                 key = (f.get("key") or "?").replace("|", "\\|")
-                claim = (f.get("claim") or "").replace("\n", " ").strip()
+                claim = f.get("claim") if isinstance(f.get("claim"), str) else ""
+                claim = claim.replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()
                 src = f.get("source") or ""
                 section += f"- `{key}` ({verdict_label}): {claim}"
@@ -915,7 +934,7 @@ class ReportGenerator:
                 faith_rows.append({
                     "key": f.get("key") or "?",
                     "verdict_label": verdict_label,
-                    "claim": (f.get("claim") or "").strip(),
+                    "claim": (f.get("claim") if isinstance(f.get("claim"), str) else "").strip(),
                     "quote": (f.get("quote") or "").strip(),
                     "source": f.get("source") or "",
                 })

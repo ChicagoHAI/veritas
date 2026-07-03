@@ -165,12 +165,13 @@ def replicate(
         "--citation-timeout",
         help="Timeout in seconds for the citation-check phase. Default: no timeout.",
     ),
-    check_citations_faithfulness: str = typer.Option(
-        "main",
+    check_citations_faithfulness: Optional[str] = typer.Option(
+        None,
         "--check-citations-faithfulness",
         help="Citation faithfulness scope when --check-citations is on: 'main' "
              "(central attributed claims only, default) or 'all' (every "
-             "claim-bearing citation).",
+             "claim-bearing citation). Default: VERITAS_CITATION_FAITHFULNESS_SCOPE "
+             "or 'main'.",
     ),
     max_iters: Optional[int] = typer.Option(
         None,
@@ -260,11 +261,12 @@ def replicate(
             run_evaluation=evaluate,
             run_citation_check=check_citations,
             citation_timeout=citation_timeout,
-            faithfulness_scope=check_citations_faithfulness,
             mode=mode,
             claims_path=claims,
             data_path=data,
         )
+        if check_citations_faithfulness is not None:
+            config_kwargs["faithfulness_scope"] = check_citations_faithfulness
         if resolved_max_iters is not None:
             config_kwargs["max_iters"] = resolved_max_iters
         config = Config(**config_kwargs)
@@ -514,9 +516,10 @@ def check_citations(
     paper: Optional[Path] = typer.Option(
         None, "--paper", help="Paper PDF (overrides the path recovered from the run's saved config).",
     ),
-    check_citations_faithfulness: str = typer.Option(
-        "main", "--check-citations-faithfulness",
-        help="Faithfulness scope: 'main' (default) or 'all'.",
+    check_citations_faithfulness: Optional[str] = typer.Option(
+        None, "--check-citations-faithfulness",
+        help="Faithfulness scope: 'main' or 'all'. Default: "
+             "VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
     provider: str = typer.Option(
         "claude", "--provider",
@@ -569,6 +572,9 @@ def check_citations(
         raise typer.Exit(1)
 
     try:
+        citation_kwargs = {}
+        if check_citations_faithfulness is not None:
+            citation_kwargs["faithfulness_scope"] = check_citations_faithfulness
         config = Config(
             paper_path=recovered_paper,
             output_dir=replicate_dir,
@@ -577,9 +583,9 @@ def check_citations(
             evaluate_model=evaluate_model,
             mode="auto",
             run_citation_check=True,
-            faithfulness_scope=check_citations_faithfulness,
             citation_timeout=citation_timeout,
             generate_pdf=generate_pdf,
+            **citation_kwargs,
         )
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
