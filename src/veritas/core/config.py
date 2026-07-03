@@ -290,8 +290,10 @@ class Config:
                 "Cannot determine output directory: provide --output, --repo, or --paper"
             )
 
-        # Validate provider
-        if self.provider.lower() not in VALID_PROVIDERS:
+        # Validate and canonicalize the provider (stored lowercase so
+        # fingerprints, engine strings, and wrapper checks all agree).
+        self.provider = self.provider.lower()
+        if self.provider not in VALID_PROVIDERS:
             raise ValueError(
                 f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}"
             )

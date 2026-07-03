@@ -175,6 +175,16 @@ def build_config_fingerprint(config: Config) -> Dict[str, Any]:
     return fingerprint
 
 
+def _coerce_manager_target(target: str) -> str:
+    """Map a manager re-run target onto a phase the retry loop can run.
+
+    The loop body re-runs plan and replicate only; regenerating code is not
+    reachable from inside the loop, so a codegen target downgrades to plan
+    (the closest phase whose re-run the loop supports) and the codegen stage
+    and its sentinel stay intact."""
+    return "plan" if target == "codegen" else target
+
+
 def _read_engine_meta(meta_path: Path) -> Optional[Dict[str, Any]]:
     """Sidecar describing the settings that produced an evaluate-bucket
     output. None when absent or unreadable (outputs from before this
@@ -238,12 +248,14 @@ KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
     'repo_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
-    'data_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
-    # Config
-    'provider':      ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'data_path':     ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    # Config. The provider row invalidates nothing itself: a provider change
+    # always shows up in the per-bucket engine fields below, which scope the
+    # invalidation to the stages each bucket feeds.
+    'provider':      (),
+    'mode':          ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
     'claims_path':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
     # Per-bucket engines (resolved provider:model). Scoped: a verify-engine
     # change re-adjudicates an existing run without re-replicating.
@@ -340,6 +352,7 @@ class ReplicationRunner:
                 if state.is_stage_completed('codegen'):
                     print("[OK] codegen: skipped (already completed)")
                 else:
+                    self._clear_stale_codegen_sentinel(state)
                     state.start_stage('codegen')
                     try:
                         self._generate_code()
@@ -433,6 +446,7 @@ class ReplicationRunner:
                 print("[OK] verify: skipped (already completed)")
                 verdicts = self._load_verify_artifacts(claims)
             else:
+                self._clear_stale_verify_artifacts(state)
                 if state.get_stage_status('verify') != 'in_progress':
                     state.start_stage('verify')
                     if already_done:
@@ -1107,7 +1121,13 @@ class ReplicationRunner:
                 return evidence, replication_plan
 
             # --- Re-run: archive, invalidate, inject guidance, replicate ---
-            target = verdict.target_phase or "replicate"
+            requested_target = verdict.target_phase or "replicate"
+            target = _coerce_manager_target(requested_target)
+            if target != requested_target:
+                print(
+                    f"  Manager targeted '{requested_target}'; the retry loop "
+                    f"re-runs plan+replicate only — using '{target}'."
+                )
             guidance = ManagerGuidance.from_verdict(verdict, iteration=iteration + 1)
 
             # Phase 3: if the manager requested methodology/resource research,
@@ -1174,28 +1194,42 @@ class ReplicationRunner:
         ordering so a re-run cleanly discards stale downstream state (assess /
         verify) and they recompute against the new attempt.
         """
-        order = ['analyze', 'codegen', 'plan', 'resource_estimate',
+        order = ['analyze', 'plan', 'resource_estimate',
                  'replicate', 'assess_fixes', 'verify']
         if target_phase not in order:
             target_phase = 'replicate'
         idx = order.index(target_phase)
         to_invalidate = order[idx:]
         state.invalidate_stages(to_invalidate)
-        self._clear_stage_resume_artifacts(to_invalidate)
 
-    def _clear_stage_resume_artifacts(self, stages: List[str]) -> None:
-        """Remove the on-disk resume primitives of invalidated stages.
+    def _clear_stale_verify_artifacts(self, state: PipelineState) -> None:
+        """Remove leftover per-claim verdict files when verify has no stage
+        record (fresh dir, --restart, or invalidation).
 
-        Stage invalidation only drops pipeline-state entries, but verify
-        resumes per claim on verdict-file existence and codegen on its
-        sentinel file. Without clearing those, an invalidated stage would
-        silently reuse its prior outputs (and attribute them to the current
-        engine) instead of re-running.
+        Verify resumes per claim on verdict-file existence, so files from a
+        discarded attempt would otherwise be silently reused and attributed
+        to the current engine. Runs at verify entry — never at reconcile
+        time — so a dry run or an aborted resume cannot destroy a completed
+        run's verdicts and score. A present record (in_progress) means a
+        legitimate partial resume: files are kept.
         """
-        if 'verify' in stages and self.config.verify_dir.exists():
-            for verdict_file in self.config.verify_dir.glob('*.json'):
-                verdict_file.unlink(missing_ok=True)
-        if 'codegen' in stages:
+        if state.get_stage_status('verify') is not None:
+            return
+        if not self.config.verify_dir.exists():
+            return
+        for verdict_file in self.config.verify_dir.glob('*.json'):
+            verdict_file.unlink(missing_ok=True)
+
+    def _clear_stale_codegen_sentinel(self, state: PipelineState) -> None:
+        """Remove the codegen sentinel when codegen has no stage record
+        (fresh dir, --restart, or invalidation).
+
+        The sentinel is codegen's resume primitive; one left over from a
+        discarded attempt would make ``_generate_code`` skip regeneration.
+        A present record (in_progress) means a crash between the sentinel
+        write and the stage completion: the sentinel stays authoritative.
+        """
+        if state.get_stage_status('codegen') is None:
             self.config.codegen_complete_sentinel_path.unlink(missing_ok=True)
 
     def _workflow_replicate_record(
@@ -2507,7 +2541,6 @@ class ReplicationRunner:
         print(f"WARNING: detected changes since prior run: {all_changes}")
         print(f"  Invalidating stages: {affected_sorted}")
         state.invalidate_stages(affected_sorted)
-        self._clear_stage_resume_artifacts(affected_sorted)
 
         if input_changes:
             state.record_inputs(
