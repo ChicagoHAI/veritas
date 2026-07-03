@@ -493,3 +493,28 @@ def test_auth_check_skips_inactive_buckets(tmp_path, monkeypatch):
     runner._check_provider_auth(buckets=active)  # must not raise
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         runner._check_provider_auth(buckets=runner._active_buckets())
+
+
+def test_replicate_entry_refreshes_codebase_when_invalidated(tmp_path):
+    # A replicate re-run in a repo-backed mode starts from a pristine copy
+    # of the repo, not the previous attempt's patched tree.
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    (repo / "main.py").write_text("original", encoding="utf-8")
+    out = tmp_path / "out"
+    config = Config(repo_path=repo, output_dir=out)
+    state = PipelineState(out)
+    codebase = config.replication_dir / "codebase"
+    codebase.mkdir(parents=True, exist_ok=True)
+    (codebase / "main.py").write_text("patched-by-old-engine", encoding="utf-8")
+    runner = ReplicationRunner(config)
+
+    runner._refresh_codebase_if_stale(state)
+    assert (codebase / "main.py").read_text(encoding="utf-8") == "original"
+
+    # in_progress record -> partial attempt, left in place
+    (codebase / "main.py").write_text("partial-work", encoding="utf-8")
+    state.start_stage("replicate")
+    runner._refresh_codebase_if_stale(state)
+    assert (codebase / "main.py").read_text(encoding="utf-8") == "partial-work"

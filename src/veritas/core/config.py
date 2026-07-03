@@ -39,7 +39,7 @@ def parse_model_spec(spec: str) -> Tuple[Optional[str], str]:
     head, sep, tail = spec.partition(":")
     if not sep:
         return None, spec
-    head_lower = head.lower()
+    head_lower = head.strip().lower()
     if head_lower in VALID_PROVIDERS:
         if not tail.strip():
             raise ValueError(
@@ -462,12 +462,6 @@ class Config:
         """Set of providers any bucket resolves to."""
         return {self.engine_for(bucket)[0] for bucket in BUCKETS}
 
-    @property
-    def any_model_knob_set(self) -> bool:
-        return any(
-            getattr(self, field_name) is not None
-            for field_name in self._MODEL_ENV_VARS
-        )
 
     # -- Output subdirectories ----------------------------------------------
 

@@ -1039,6 +1039,7 @@ class ReplicationRunner:
                     evidence, replication_plan
                 )
         else:
+            self._refresh_codebase_if_stale(state)
             state.start_stage('replicate')
             try:
                 evidence = self._replicate(replication_plan)
@@ -1213,6 +1214,36 @@ class ReplicationRunner:
         idx = order.index(target_phase)
         to_invalidate = order[idx:]
         state.invalidate_stages(to_invalidate)
+
+    def _refresh_codebase_if_stale(self, state: PipelineState) -> None:
+        """Re-stage ``replication/codebase`` from the source repo when
+        replicate has no stage record (fresh dir, --restart, or
+        invalidation) and a repo is available.
+
+        Wrapper staging skips a non-empty codebase, so without this a
+        replicate re-run (e.g. after an engine change) would start from the
+        previous attempt's patched tree instead of a pristine copy. Only in
+        repo-backed modes: in paper-only mode the codebase is codegen's
+        output and codegen manages its own regeneration. Not reached inside
+        the manager loop, which deliberately continues on the patched tree.
+        An in_progress record is a partial attempt and is left in place.
+        """
+        if state.get_stage_status('replicate') is not None:
+            return
+        if self.config.mode == "paper-only" or not self.config.has_repo:
+            return
+        codebase_dir = self.config.replication_dir / "codebase"
+        if not codebase_dir.exists() or not any(codebase_dir.iterdir()):
+            return
+        resolved = codebase_dir.resolve()
+        output_root = self.config.output_dir.resolve()
+        if output_root not in resolved.parents:
+            raise RuntimeError(
+                f"refusing to reset {resolved}: not under the output tree {output_root}"
+            )
+        print("  Re-staging replication/codebase from the repo for a fresh attempt")
+        shutil.rmtree(codebase_dir)
+        shutil.copytree(self.config.repo_path, codebase_dir, symlinks=True)
 
     def _clear_stale_verify_artifacts(self, state: PipelineState) -> None:
         """Remove leftover per-claim verdict files when verify has no stage
@@ -2274,6 +2305,20 @@ class ReplicationRunner:
             v_out += o
         usage.phases["verify"] = PhaseUsage(wall_seconds=v_wall, input_tokens=v_inp, output_tokens=v_out)
 
+        # manager review + research sub-agents (present only when the retry
+        # loop ran); no wall time — their stages are not state-tracked.
+        loop_transcripts = [self.config.manager_review_transcript_path]
+        loop_transcripts += sorted(
+            self.config.replication_dir.glob("research_*_transcript.jsonl"))
+        m_inp, m_out = 0, 0
+        for t in loop_transcripts:
+            i, o = sum_tokens_from_transcript(t)
+            m_inp += i
+            m_out += o
+        if m_inp or m_out:
+            usage.phases["manager_loop"] = PhaseUsage(
+                wall_seconds=None, input_tokens=m_inp, output_tokens=m_out)
+
         # totals
         all_phases = list(usage.phases.values())
         walls = [p.wall_seconds for p in all_phases if p.wall_seconds is not None]
@@ -2313,7 +2358,7 @@ class ReplicationRunner:
             "resource_estimate": "analyze", "replicate": "replicate",
             "assess_fixes": "assess", "verify": "verify",
             "evaluation": "evaluate", "citation_check": "evaluate",
-            "citation_audit": "evaluate",
+            "citation_audit": "evaluate", "manager_loop": "evaluate",
         }
 
         def _price_for(model_name):
@@ -2331,6 +2376,7 @@ class ReplicationRunner:
 
         estimated_cost_usd = 0.0
         priced_any = False
+        unpriced_phases = []
         for phase, p in usage.phases.items():
             if not p.input_tokens and not p.output_tokens:
                 continue
@@ -2340,15 +2386,19 @@ class ReplicationRunner:
                 phase_model = os.environ.get(env_var) if env_var else None
             pricing = _price_for(phase_model)
             if pricing is None:
-                estimated_cost_usd = None
-                break
+                unpriced_phases.append(phase)
+                continue
             priced_any = True
             estimated_cost_usd += (
                 p.input_tokens / 1_000_000 * pricing[0]
                 + p.output_tokens / 1_000_000 * pricing[1]
             )
-        if estimated_cost_usd is not None:
-            estimated_cost_usd = round(estimated_cost_usd, 4) if priced_any else None
+        if unpriced_phases or not priced_any:
+            # A partial sum would read as the run's cost; report None and
+            # name the phases that could not be priced.
+            estimated_cost_usd = None
+        else:
+            estimated_cost_usd = round(estimated_cost_usd, 4)
 
         # write
         out_dict = {
@@ -2362,6 +2412,7 @@ class ReplicationRunner:
                 "output_tokens": usage.total_output_tokens,
                 "disk_bytes": usage.disk_bytes,
                 "estimated_cost_usd_approximate": estimated_cost_usd,
+                **({"unpriced_phases": unpriced_phases} if unpriced_phases else {}),
             }
         }
         with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
@@ -2467,6 +2518,7 @@ class ReplicationRunner:
             self._check_provider_auth(buckets=("evaluate",))
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
+            self._collect_usage_if_tracked()
             report_path, pdf_path = self.report_generator.generate(
                 replicate_dir=self.config.output_dir,
                 generate_pdf=self.config.generate_pdf,
@@ -2496,6 +2548,7 @@ class ReplicationRunner:
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self.config.prompts_dir.mkdir(parents=True, exist_ok=True)
             self._evaluate()
+            self._collect_usage_if_tracked()
             report_path, pdf_path = self.report_generator.generate(
                 replicate_dir=self.config.output_dir,
                 generate_pdf=self.config.generate_pdf,
@@ -2640,6 +2693,18 @@ class ReplicationRunner:
         auth vars, so a key configured for one bucket never reaches another
         bucket's provider."""
         return frozenset(PROVIDER_AUTH_VARS.get(provider, ()))
+
+    def _collect_usage_if_tracked(self) -> None:
+        """Best-effort resource_usage refresh for standalone entry points,
+        so their transcripts count toward the run's totals. Skipped when the
+        directory has no pipeline state (nothing established the baseline)."""
+        state_file = self.config.veritas_state_dir / "pipeline_state.json"
+        if not state_file.exists():
+            return
+        try:
+            self._collect_resource_usage(PipelineState(self.config.output_dir))
+        except Exception as e:
+            print(f"  Warning: Could not collect resource usage: {e}")
 
     def _active_buckets(self, dry_run: bool = False) -> set:
         """Buckets whose engines this run will actually invoke."""

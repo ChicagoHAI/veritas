@@ -48,13 +48,11 @@ def test_default_engines_follow_global_provider(tmp_path):
     config = _mk_config(tmp_path)
     for bucket in BUCKETS:
         assert config.engine_for(bucket) == ("claude", None)
-    assert config.any_model_knob_set is False
 
 def test_global_model_applies_to_all_buckets(tmp_path):
     config = _mk_config(tmp_path, model="claude-opus-4-8")
     assert config.engine_for("verify") == ("claude", "claude-opus-4-8")
     assert config.engine_for("replicate") == ("claude", "claude-opus-4-8")
-    assert config.any_model_knob_set is True
 
 def test_bucket_spec_overrides_global(tmp_path):
     config = _mk_config(
