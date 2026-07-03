@@ -549,6 +549,9 @@ extract_bucket_provider() {
             *) shift ;;
         esac
     done
+    # Provider prefixes parse case-insensitively on the Python side; match
+    # the same way here (tr, not ${var,,}: macOS ships bash 3.2).
+    spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
     case "$spec" in
         claude:*|codex:*|gemini:*|openrouter:*) provider="${spec%%:*}" ;;
     esac

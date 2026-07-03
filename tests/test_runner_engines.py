@@ -379,3 +379,49 @@ def test_spurious_filter_handles_capitalized_legacy_provider(tmp_path):
     recorded = {"provider": "Claude", "mode": "repo-only", "claims_path": None}
     current = build_config_fingerprint(_cfg(tmp_path))
     assert _is_spurious_engine_change("engine_analyze", recorded, current) is True
+
+
+def test_manager_rerun_covers_codegen_and_resource_estimate(tmp_path):
+    # A manager-requested codegen re-run must invalidate codegen itself (not
+    # silently downgrade to replicate) plus everything downstream, including
+    # the plan-dependent resource estimate and the codegen sentinel.
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    config = Config(repo_path=repo, output_dir=out)
+    state = PipelineState(out)
+    for stage in ("analyze", "codegen", "plan", "resource_estimate",
+                  "replicate", "assess_fixes", "verify"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+    sentinel = config.codegen_complete_sentinel_path
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("done", encoding="utf-8")
+
+    ReplicationRunner(config)._invalidate_for_rerun(state, "codegen")
+
+    for stage in ("codegen", "plan", "resource_estimate", "replicate",
+                  "assess_fixes", "verify"):
+        assert not state.is_stage_completed(stage), stage
+    assert not sentinel.exists()
+    assert state.is_stage_completed("analyze")
+
+
+def test_manager_plan_rerun_invalidates_resource_estimate(tmp_path):
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    config = Config(repo_path=repo, output_dir=out)
+    state = PipelineState(out)
+    for stage in ("analyze", "codegen", "plan", "resource_estimate",
+                  "replicate", "assess_fixes", "verify"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+
+    ReplicationRunner(config)._invalidate_for_rerun(state, "plan")
+
+    assert not state.is_stage_completed("plan")
+    assert not state.is_stage_completed("resource_estimate")
+    assert state.is_stage_completed("codegen")

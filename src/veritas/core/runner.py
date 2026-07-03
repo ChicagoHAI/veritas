@@ -1174,7 +1174,8 @@ class ReplicationRunner:
         ordering so a re-run cleanly discards stale downstream state (assess /
         verify) and they recompute against the new attempt.
         """
-        order = ['analyze', 'plan', 'replicate', 'assess_fixes', 'verify']
+        order = ['analyze', 'codegen', 'plan', 'resource_estimate',
+                 'replicate', 'assess_fixes', 'verify']
         if target_phase not in order:
             target_phase = 'replicate'
         idx = order.index(target_phase)
