@@ -200,11 +200,13 @@ def _read_engine_meta(meta_path: Path) -> Optional[Dict[str, Any]]:
 
 def _write_engine_meta(meta_path: Path, meta: Dict[str, Any]) -> None:
     """Best-effort sidecar write; the phases it serves are advisory and must
-    never fail over bookkeeping."""
+    never fail over bookkeeping. A failed write is loud because an output
+    without a sidecar is treated as pre-tracking and never re-run on a
+    settings change."""
     try:
         meta_path.write_text(json.dumps(meta, indent=2), encoding='utf-8')
-    except OSError:
-        pass
+    except OSError as e:
+        print(f"  Warning: could not record settings sidecar {meta_path} ({e})")
 
 
 def _is_spurious_engine_change(
