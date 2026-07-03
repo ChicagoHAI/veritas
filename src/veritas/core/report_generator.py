@@ -104,6 +104,33 @@ def _scrub_prose(obj):
     return obj
 
 
+def _build_audit_lookup(audit) -> dict:
+    """Index audit items by ``(key, kind, claim)``; items without a claim
+    (integrity items, and audits from before claim tracking) index by
+    ``(key, kind)``. Keying faithfulness verdicts by their claim keeps one
+    audit item from softening every row that cites the same reference."""
+    lookup = {}
+    for it in (audit or {}).get("items") or []:
+        if not (isinstance(it, dict) and it.get("key")):
+            continue
+        claim = (it.get("claim") or "").strip()
+        if claim:
+            lookup[(it.get("key"), it.get("kind"), claim)] = it.get("audit_verdict")
+        else:
+            lookup[(it.get("key"), it.get("kind"))] = it.get("audit_verdict")
+    return lookup
+
+
+def _audit_verdict_for(lookup: dict, key, kind, claim=None):
+    """Claim-exact match first; ``(key, kind)`` covers items without a claim."""
+    claim = (claim or "").strip()
+    if claim:
+        verdict = lookup.get((key, kind, claim))
+        if verdict is not None:
+            return verdict
+    return lookup.get((key, kind))
+
+
 class ReportGenerator:
     """Generate the Replication Report."""
 
@@ -445,11 +472,7 @@ class ReportGenerator:
         if not citation:
             return ""
 
-        audit_items = (audit or {}).get("items") or []
-        audit_lookup = {
-            (it.get("key"), it.get("kind")): it.get("audit_verdict")
-            for it in audit_items if isinstance(it, dict) and it.get("key")
-        }
+        audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
 
         s = citation.get("summary") or {}
@@ -484,7 +507,7 @@ class ReportGenerator:
                     continue
                 first_status = f.get("status", "")
                 final_status, softened = self._soften_verdict(
-                    first_status, audit_lookup.get((f.get("key"), "integrity")), "integrity")
+                    first_status, _audit_verdict_for(audit_lookup, f.get("key"), "integrity"), "integrity")
                 if softened:
                     softened_count += 1
                 status_label = label.get(final_status, final_status)
@@ -531,7 +554,8 @@ class ReportGenerator:
                     softened_faith = False
                 else:
                     first_verdict = f.get("verdict", "")
-                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
+                    audit_verdict = _audit_verdict_for(
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened_faith = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened_faith:
@@ -836,11 +860,7 @@ class ReportGenerator:
         """
         if not citation:
             return None
-        audit_items = (audit or {}).get("items") or []
-        audit_lookup = {
-            (it.get("key"), it.get("kind")): it.get("audit_verdict")
-            for it in audit_items if isinstance(it, dict) and it.get("key")
-        }
+        audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
 
         s = citation.get("summary")
@@ -851,7 +871,7 @@ class ReportGenerator:
             if not isinstance(f, dict):
                 continue
             first_status = f.get("status", "")
-            audit_verdict = audit_lookup.get((f.get("key"), "integrity"))
+            audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
                 softened_count += 1
@@ -881,7 +901,8 @@ class ReportGenerator:
                     verdict_label = "source inaccessible"
                 else:
                     first_verdict = f.get("verdict", "")
-                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
+                    audit_verdict = _audit_verdict_for(
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened:

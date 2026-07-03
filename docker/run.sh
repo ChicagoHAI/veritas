@@ -450,12 +450,17 @@ compute_env_file_keys() {
 # -----------------------------------------------------------------------------
 PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
 
+# Per-bucket engine settings ride the same load/forward mechanism, so
+# subcommands whose containers never mount .env (evaluate, check-citations,
+# estimate) resolve the same engines as the run that produced the output dir.
+FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL"
+
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the
 # docker invocation.
 load_provider_auth_env() {
     local var val
-    for var in $PROVIDER_AUTH_VARS; do
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS; do
         if [ -z "${!var}" ]; then
             val="$(get_env_value "$var")"
             if [ -n "$val" ]; then
@@ -468,7 +473,7 @@ load_provider_auth_env() {
 get_provider_auth_flags() {
     local flags=""
     local var
-    for var in $PROVIDER_AUTH_VARS; do
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS; do
         if [ -n "${!var}" ]; then
             flags="$flags -e $var"
         fi
@@ -529,17 +534,18 @@ check_provider_credentials() {
     esac
 }
 
-# Provider whose credentials a single-bucket subcommand (evaluate,
-# check-citations) actually needs: an --evaluate-model with a provider prefix
-# overrides the global --provider for the preflight check, since only the
-# evaluate bucket runs there.
-extract_evaluate_provider() {
+# Provider whose credentials a single-bucket subcommand actually needs: the
+# bucket's model flag ($1, e.g. --evaluate-model for evaluate/check-citations
+# or --analyze-model for estimate) with a provider prefix overrides the
+# global --provider for the preflight check, since only that bucket runs.
+extract_bucket_provider() {
+    local flag="$1"; shift
     local provider=$(extract_provider "$@")
     local spec=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --evaluate-model) spec="$2"; shift 2 ;;
-            --evaluate-model=*) spec="${1#*=}"; shift ;;
+            "$flag") spec="$2"; shift 2 ;;
+            "$flag"=*) spec="${1#*=}"; shift ;;
             *) shift ;;
         esac
     done
@@ -1319,7 +1325,7 @@ cmd_evaluate() {
     ensure_image
     warn_if_outdated
     load_provider_auth_env
-    check_provider_credentials "$(extract_evaluate_provider "$@")"
+    check_provider_credentials "$(extract_bucket_provider --evaluate-model "$@")"
 
     local eval_dir="$1"; shift
     local host_eval_dir
@@ -1358,7 +1364,7 @@ cmd_check_citations() {
     ensure_image
     warn_if_outdated
     load_provider_auth_env
-    check_provider_credentials "$(extract_evaluate_provider "$@")"
+    check_provider_credentials "$(extract_bucket_provider --evaluate-model "$@")"
 
     local eval_dir="$1"; shift
     local host_eval_dir
@@ -1418,7 +1424,7 @@ cmd_estimate() {
     ensure_image
     warn_if_outdated
     load_provider_auth_env
-    check_provider_credentials "$(extract_provider "$@")"
+    check_provider_credentials "$(extract_bucket_provider --analyze-model "$@")"
     rewrite_paths "$@"
 
     local tty_flag=$(get_tty_flag)

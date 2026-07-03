@@ -137,3 +137,9 @@ def test_web_locked_normal_model():
 
 def test_web_locked_none():
     assert is_web_locked_slug(None) is False
+
+
+def test_parse_provider_prefix_is_case_insensitive():
+    assert parse_model_spec("Claude:claude-opus-4-8") == ("claude", "claude-opus-4-8")
+    with pytest.raises(ValueError, match="unknown provider"):
+        parse_model_spec("OpenRuter:x")

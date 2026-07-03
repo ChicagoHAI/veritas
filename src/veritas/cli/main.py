@@ -282,7 +282,10 @@ def replicate(
 
     try:
         result = runner.run(dry_run=dry_run)
-        if result.success:
+        if result.success and dry_run:
+            console.print()
+            console.print("[bold green]Dry run complete.[/bold green] No replication was run.")
+        elif result.success:
             console.print()
             console.print("[bold green]Replication completed successfully![/bold green]")
             console.print(f"Report saved to: {result.report_path}")
@@ -491,7 +494,7 @@ def evaluate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    result = ReplicationRunner(config).run()
+    result = ReplicationRunner(config).evaluate_existing()
     if result.success:
         console.print("[bold green]Evaluation + report complete.[/bold green]")
         console.print(f"Report: {result.report_path}")

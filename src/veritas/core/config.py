@@ -39,13 +39,14 @@ def parse_model_spec(spec: str) -> Tuple[Optional[str], str]:
     head, sep, tail = spec.partition(":")
     if not sep:
         return None, spec
-    if head in VALID_PROVIDERS:
+    head_lower = head.lower()
+    if head_lower in VALID_PROVIDERS:
         if not tail.strip():
             raise ValueError(
                 f"Model spec '{spec}': provider prefix requires a model"
             )
-        return head, tail.strip()
-    if _PROVIDER_PREFIX_RE.match(head):
+        return head_lower, tail.strip()
+    if _PROVIDER_PREFIX_RE.match(head_lower):
         raise ValueError(
             f"Model spec '{spec}': unknown provider '{head}'. "
             f"Valid providers: {VALID_PROVIDERS}"

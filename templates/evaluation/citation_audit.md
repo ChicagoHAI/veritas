@@ -44,6 +44,7 @@ Write `{{ citation_audit_path }}` as a single JSON object:
     {
       "key": "<ref key, matching the first-pass entry>",
       "kind": "integrity | faithfulness",
+      "claim": "<for faithfulness items: the claim text, copied verbatim from the first-pass entry; omit for integrity items>",
       "audit_verdict": "<your independent verdict from the vocabulary above>",
       "note": "<one plain sentence on your judgment, with a verbatim quote if relevant>"
     }
@@ -54,6 +55,9 @@ Write `{{ citation_audit_path }}` as a single JSON object:
 - `audited_count` is how many flagged items you re-checked.
 - `items` has one entry per re-checked item, with your independent verdict. Do not
   reconcile or decide which pass is right. The automatic step does that.
+- `claim` ties a faithfulness verdict to the specific claim it audits — two
+  claims can cite the same reference, and your verdict must apply to exactly
+  the one you re-checked.
 - Print the JSON to stdout as well.
 
 Begin now.

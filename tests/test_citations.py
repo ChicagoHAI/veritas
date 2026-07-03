@@ -1104,3 +1104,61 @@ def test_check_citations_reruns_on_settings_change(tmp_path):
     assert not cfg.citation_audit_path.exists()
     meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
     assert meta == {"engine": "claude", "faithfulness_scope": "main"}
+
+
+def test_audit_softening_is_claim_specific():
+    # Two distinct claims cite the same reference key; an audit item that
+    # names one claim must soften only that row.
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness", "claim": "claim one text",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    section = gen._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
+
+
+def test_audit_without_claim_field_still_softens():
+    # Audits from before claim tracking carry no claim field; their verdict
+    # applies by (key, kind) as before.
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "solo2024", "claim": "only claim",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "solo2024", "kind": "faithfulness",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    section = gen._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
