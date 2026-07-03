@@ -211,12 +211,16 @@ extract_provider() {
     local provider="claude"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --provider) provider="$2"; shift 2 ;;
+            --provider)
+                [ $# -ge 2 ] || break
+                provider="$2"; shift 2 ;;
             --provider=*) provider="${1#*=}"; shift ;;
             *) shift ;;
         esac
     done
-    echo "$provider"
+    # Providers are case-insensitive throughout; canonicalize like the
+    # Python layer does.
+    printf '%s\n' "$provider" | tr '[:upper:]' '[:lower:]'
 }
 
 # -----------------------------------------------------------------------------
@@ -226,9 +230,17 @@ extract_provider() {
 # Read the current value of an env var from .env (uncommented lines only).
 get_env_value() {
     local var_name="$1"
+    local val=""
     if [ -f "$PROJECT_ROOT/.env" ]; then
-        grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//"
+        val=$(grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//")
     fi
+    # Strip one pair of matching surrounding quotes (dotenv-style values);
+    # a quoted engine spec must not reach the model parser quote-headed.
+    case "$val" in
+        \"*\") val="${val#\"}"; val="${val%\"}" ;;
+        \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    printf '%s\n' "$val"
 }
 
 # Mask a secret for display (first 4 + last 4 chars; values <=8 chars show ****).
@@ -544,7 +556,9 @@ extract_bucket_provider() {
     local spec=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            "$flag") spec="$2"; shift 2 ;;
+            "$flag")
+                [ $# -ge 2 ] || break
+                spec="$2"; shift 2 ;;
             "$flag"=*) spec="${1#*=}"; shift ;;
             *) shift ;;
         esac
@@ -1338,6 +1352,37 @@ cmd_evaluate() {
         exit 1
     fi
 
+    # --paper is the subcommand's only path flag; mount it read-only and
+    # rewrite the argument. Everything else passes through unchanged.
+    local paper_mount=""
+    local args=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper=*)
+                set -- --paper "${1#*=}" "${@:2}"
+                continue
+                ;;
+            --paper)
+                [ $# -ge 2 ] || break
+                local host_paper
+                host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
+                if [ ! -f "$host_paper" ]; then
+                    echo -e "${RED}File not found:${NC} $2" >&2
+                    exit 1
+                fi
+                local basename
+                basename=$(basename "$host_paper")
+                paper_mount="-v \"$host_paper:/workspace/inputs/$basename:ro\""
+                args="$args --paper \"/workspace/inputs/$basename\""
+                shift 2
+                ;;
+            *)
+                args="$args \"$1\""
+                shift
+                ;;
+        esac
+    done
+
     local tty_flag=$(get_tty_flag)
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
@@ -1347,11 +1392,11 @@ cmd_evaluate() {
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
-        $auth_flags \
+        $auth_flags \n        $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas evaluate /workspace/eval $@"
+        veritas evaluate /workspace/eval $args"
 }
 
 # -----------------------------------------------------------------------------
@@ -1383,7 +1428,12 @@ cmd_check_citations() {
     local args=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --paper=*)
+                set -- --paper "${1#*=}" "${@:2}"
+                continue
+                ;;
             --paper)
+                [ $# -ge 2 ] || break
                 local host_paper
                 host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
                 if [ ! -f "$host_paper" ]; then

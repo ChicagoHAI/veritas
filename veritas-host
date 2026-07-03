@@ -130,6 +130,44 @@ run_veritas_cli() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Load .env values without executing the file: KEY=VALUE lines only, one pair
+# of surrounding quotes stripped, comments and malformed lines skipped. An
+# already-exported shell var wins (host environment beats .env, matching the
+# docker wrapper), and values with spaces, #, or $ stay literal instead of
+# breaking a `set -a` source.
+# -----------------------------------------------------------------------------
+load_env_file() {
+    [ -f "$VERITAS_REPO/.env" ] || return 0
+    chmod 600 "$VERITAS_REPO/.env" 2>/dev/null || true
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        val="${line#*=}"
+        case "$key" in
+            [A-Za-z_]*) ;;
+            *) continue ;;
+        esac
+        case "$key" in
+            *[!A-Za-z0-9_]*) continue ;;
+        esac
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            '*') val="${val#'}"; val="${val%'}" ;;
+        esac
+        if [ -z "${!key}" ]; then
+            export "$key=$val"
+        fi
+    done < "$VERITAS_REPO/.env"
+}
+
 cmd_replicate() {
     # Tool check is provider-aware: python+uv are always needed, but the
     # agent CLI is only required for the provider the user actually picked.
@@ -152,20 +190,13 @@ cmd_replicate() {
     mkdir -p "$output_dir"
 
     # Load $VERITAS_REPO/.env if present and set VERITAS_ENV_FILE_KEYS so
-    # the Python runner exposes those vars only during the replicate
-    # phase. Mirrors the docker wrapper's `--env-file` + `-e
-    # VERITAS_ENV_FILE_KEYS=...` plumbing — without this, papers that
-    # call OpenAI/Anthropic from inside their own code would lose their
-    # keys silently on a cluster while working fine in docker (Filbert
-    # caught this in review).
+    # the Python runner scopes those vars per phase. Mirrors the docker
+    # wrapper's `--env-file` + `-e VERITAS_ENV_FILE_KEYS=...` plumbing —
+    # without this, papers that call OpenAI/Anthropic from inside their own
+    # code would lose their keys silently on a cluster while working fine
+    # in docker.
     if [ -f "$VERITAS_REPO/.env" ]; then
-        # `set -a` exports every var assigned by the sourced file, so the
-        # subsequent python subprocess inherits them. Restrict perms first
-        # since .env holds raw keys.
-        chmod 600 "$VERITAS_REPO/.env" 2>/dev/null || true
-        set -a
-        . "$VERITAS_REPO/.env"
-        set +a
+        load_env_file
         local keys
         keys="$(compute_env_file_keys)"
         if [ -n "$keys" ]; then
@@ -241,8 +272,16 @@ cmd_replicate() {
 
 cmd_passthrough() {
     # report / evaluate / estimate / check-citations — no pre/post staging
-    # needed; just forward to the python CLI.
+    # needed; load .env (provider keys + engine settings, host env wins)
+    # and forward to the python CLI. VERITAS_ENV_FILE_KEYS keeps the
+    # Python-side per-phase key scoping working for these entry points too.
     local subcmd="$1"; shift
+    load_env_file
+    local keys
+    keys="$(compute_env_file_keys)"
+    if [ -n "$keys" ]; then
+        export VERITAS_ENV_FILE_KEYS="$keys"
+    fi
     run_veritas_cli "$subcmd" "$@"
 }
 

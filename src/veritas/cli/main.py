@@ -414,6 +414,10 @@ def evaluate(
         exists=True,
         file_okay=False,
     ),
+    paper: Optional[Path] = typer.Option(
+        None, "--paper",
+        help="Paper PDF (overrides the path recovered from the run's saved config).",
+    ),
     provider: str = typer.Option(
         "claude", "--provider",
         help="AI provider for the evaluation manager (claude, codex, gemini, openrouter).",
@@ -447,21 +451,32 @@ def evaluate(
     # patched codebase so evaluation works even if the source inputs moved.
     state_path = replicate_dir / ".veritas" / "pipeline_state.json"
     mode = "auto"
-    paper = repo = data = None
+    repo = data = None
+    recovered_paper = None
     if state_path.exists():
         try:
             st = json.loads(state_path.read_text(encoding="utf-8"))
             cfg = st.get("config") or {}
             inp = st.get("inputs") or {}
             mode = cfg.get("mode", "auto")
-            paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
+            recovered_paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
             repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
             data = Path(inp["data_path"]) if inp.get("data_path") else None
         except (OSError, ValueError):
             pass
 
-    if paper is not None and not paper.exists():
-        paper = None
+    if paper is None:
+        paper = recovered_paper
+        if paper is not None and not paper.exists():
+            console.print(
+                f"[yellow]Note:[/yellow] the run's recorded paper path {paper} "
+                f"does not resolve here; evaluating without the paper "
+                f"(pass --paper to supply it)."
+            )
+            paper = None
+    elif not paper.exists():
+        console.print(f"[bold red]Error:[/bold red] --paper file not found: {paper}")
+        raise typer.Exit(1)
     if repo is not None and not repo.exists():
         repo = None
     if repo is None:
