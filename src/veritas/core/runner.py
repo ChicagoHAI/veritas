@@ -1960,11 +1960,13 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
-        _write_engine_meta(meta_path, current_meta)
         # Any audit on disk now refers to a superseded check output (covers
         # re-runs that entered through the output-absent path, where the
-        # settings gate never removed an orphaned audit).
+        # settings gate never removed an orphaned audit). Removed before the
+        # meta stamp so an interruption between the two re-audits on resume
+        # instead of pairing the old audit with the new output.
         self.config.citation_audit_path.unlink(missing_ok=True)
+        _write_engine_meta(meta_path, current_meta)
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
         except (OSError, ValueError, json.JSONDecodeError) as e:

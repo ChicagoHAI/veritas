@@ -95,7 +95,7 @@ A re-run must be different from a blank repeat. Your `directive` must state
 **specific new instructions** — the strategy to change, the step to redo and how,
 the missing artifact to produce — not "try harder". Put what was already tried in
 `already_tried` so the agent does not repeat it. Pick the `target_phase`:
-`replicate` (almost always), `plan` (only if the plan itself was wrong), or
+`replicate` (almost always) or `plan` (only if the plan itself was wrong).
 
 ## Optional: request methodology/resource research (NOT answers)
 
