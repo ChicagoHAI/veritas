@@ -9,6 +9,36 @@ from rich.console import Console
 from veritas.core.runner import ReplicationRunner
 from veritas.core.config import Config
 
+def _recovered_engine_kwargs(replicate_dir, provider, explicit):
+    """Engine kwargs for a standalone pass over an existing run.
+
+    Recovers the run's recorded provider and per-bucket engines from its
+    pipeline state, so post-hoc passes and usage pricing run on the engines
+    that produced the directory instead of silent defaults. Flags the user
+    passed explicitly win; recorded engines without a model pin (bare
+    provider strings) are covered by the recovered provider.
+    """
+    recorded = {}
+    state_path = replicate_dir / ".veritas" / "pipeline_state.json"
+    if state_path.exists():
+        try:
+            recorded = (json.loads(state_path.read_text(encoding="utf-8"))
+                        .get("config") or {})
+        except (OSError, ValueError):
+            recorded = {}
+    kwargs = {"provider": provider or recorded.get("provider") or "claude"}
+    for bucket in ("analyze", "codegen", "replicate", "assess", "verify",
+                   "evaluate"):
+        field = f"{bucket}_model"
+        if explicit.get(field) is not None:
+            kwargs[field] = explicit[field]
+            continue
+        engine = recorded.get(f"engine_{bucket}")
+        if isinstance(engine, str) and ":" in engine:
+            kwargs[field] = engine
+    return kwargs
+
+
 app = typer.Typer(
     name="veritas",
     help="Veritas: A replication agent for evaluating scientific reproducibility",
@@ -418,9 +448,10 @@ def evaluate(
         None, "--paper",
         help="Paper PDF (overrides the path recovered from the run's saved config).",
     ),
-    provider: str = typer.Option(
-        "claude", "--provider",
-        help="AI provider for the evaluation manager (claude, codex, gemini, openrouter).",
+    provider: Optional[str] = typer.Option(
+        None, "--provider",
+        help="AI provider for the evaluation manager (claude, codex, gemini, "
+             "openrouter). Default: the run's recorded provider.",
     ),
     model: Optional[str] = typer.Option(
         None, "--model",
@@ -428,7 +459,8 @@ def evaluate(
     ),
     evaluate_model: Optional[str] = typer.Option(
         None, "--evaluate-model",
-        help="Engine for the evaluate bucket, as [provider:]model.",
+        help="Engine for the evaluate bucket, as [provider:]model. Default: "
+             "the run's recorded engine.",
     ),
     evaluate_timeout: Optional[int] = typer.Option(
         None, "--evaluate-timeout",
@@ -494,18 +526,19 @@ def evaluate(
         raise typer.Exit(1)
 
     try:
+        engine_kwargs = _recovered_engine_kwargs(
+            replicate_dir, provider, {"evaluate_model": evaluate_model})
         config = Config(
             paper_path=paper,
             repo_path=repo,
             output_dir=replicate_dir,
-            provider=provider,
             model=model,
-            evaluate_model=evaluate_model,
             mode=mode,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
             generate_pdf=generate_pdf,
             data_path=data if (data and data.exists()) else None,
+            **engine_kwargs,
         )
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -536,9 +569,10 @@ def check_citations(
         help="Faithfulness scope: 'main' or 'all'. Default: "
              "VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
-    provider: str = typer.Option(
-        "claude", "--provider",
-        help="AI provider for the citation check (claude, codex, gemini, openrouter).",
+    provider: Optional[str] = typer.Option(
+        None, "--provider",
+        help="AI provider for the citation check (claude, codex, gemini, "
+             "openrouter). Default: the run's recorded provider.",
     ),
     model: Optional[str] = typer.Option(
         None, "--model",
@@ -590,12 +624,12 @@ def check_citations(
         citation_kwargs = {}
         if check_citations_faithfulness is not None:
             citation_kwargs["faithfulness_scope"] = check_citations_faithfulness
+        citation_kwargs.update(_recovered_engine_kwargs(
+            replicate_dir, provider, {"evaluate_model": evaluate_model}))
         config = Config(
             paper_path=recovered_paper,
             output_dir=replicate_dir,
-            provider=provider,
             model=model,
-            evaluate_model=evaluate_model,
             mode="auto",
             run_citation_check=True,
             citation_timeout=citation_timeout,

@@ -763,6 +763,14 @@ class ReplicationRunner:
         sentinel.parent.mkdir(parents=True, exist_ok=True)
         sentinel.touch()
 
+        # Snapshot the pristine generated tree so a later replicate re-run in
+        # paper-only mode can start from unpatched code (repo-backed modes
+        # re-stage from the repo instead).
+        snapshot = self.config.veritas_state_dir / "codegen_snapshot"
+        if snapshot.exists():
+            shutil.rmtree(snapshot)
+        shutil.copytree(codebase_dir, snapshot, symlinks=True)
+
     def _generate_replication_plan(
         self,
         claims: PaperClaims,
@@ -1218,21 +1226,34 @@ class ReplicationRunner:
         state.invalidate_stages(to_invalidate)
 
     def _refresh_codebase_if_stale(self, state: PipelineState) -> None:
-        """Re-stage ``replication/codebase`` from the source repo when
-        replicate has no stage record (fresh dir, --restart, or
-        invalidation) and a repo is available.
+        """Re-stage ``replication/codebase`` from its pristine source when a
+        prior replicate attempt was discarded (no stage record, but attempt
+        artifacts show one ran).
 
-        Wrapper staging skips a non-empty codebase, so without this a
-        replicate re-run (e.g. after an engine change) would start from the
-        previous attempt's patched tree instead of a pristine copy. Only in
-        repo-backed modes: in paper-only mode the codebase is codegen's
-        output and codegen manages its own regeneration. Not reached inside
-        the manager loop, which deliberately continues on the patched tree.
-        An in_progress record is a partial attempt and is left in place.
+        The source is the repo in repo-backed modes and the codegen
+        snapshot in paper-only mode. Without this, a replicate re-run
+        (e.g. after an engine change) would start from the previous
+        attempt's patched tree. Fresh runs skip — their staged tree is
+        already pristine, and re-copying it would only burn time. An
+        in_progress record is a partial attempt and is left in place. Not
+        reached inside the manager loop, which deliberately continues on
+        the patched tree.
         """
         if state.get_stage_status('replicate') is not None:
             return
-        if self.config.mode == "paper-only" or not self.config.has_repo:
+        prior_attempt = (
+            self.config.replication_transcript_path.exists()
+            or (self.config.replication_dir / "codebase.diff").exists()
+        )
+        if not prior_attempt:
+            return
+        if self.config.mode == "paper-only":
+            source = self.config.veritas_state_dir / "codegen_snapshot"
+            if not source.exists():
+                return
+        elif self.config.has_repo:
+            source = self.config.repo_path
+        else:
             return
         codebase_dir = self.config.replication_dir / "codebase"
         if not codebase_dir.exists() or not any(codebase_dir.iterdir()):
@@ -1243,9 +1264,9 @@ class ReplicationRunner:
             raise RuntimeError(
                 f"refusing to reset {resolved}: not under the output tree {output_root}"
             )
-        print("  Re-staging replication/codebase from the repo for a fresh attempt")
+        print("  Re-staging replication/codebase from its pristine source for a fresh attempt")
         shutil.rmtree(codebase_dir)
-        shutil.copytree(self.config.repo_path, codebase_dir, symlinks=True)
+        shutil.copytree(source, codebase_dir, symlinks=True)
 
     def _clear_stale_verify_artifacts(self, state: PipelineState) -> None:
         """Remove leftover per-claim verdict files when verify has no stage
@@ -1940,6 +1961,10 @@ class ReplicationRunner:
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
         _write_engine_meta(meta_path, current_meta)
+        # Any audit on disk now refers to a superseded check output (covers
+        # re-runs that entered through the output-absent path, where the
+        # settings gate never removed an orphaned audit).
+        self.config.citation_audit_path.unlink(missing_ok=True)
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
         except (OSError, ValueError, json.JSONDecodeError) as e:
@@ -2307,11 +2332,25 @@ class ReplicationRunner:
             v_out += o
         usage.phases["verify"] = PhaseUsage(wall_seconds=v_wall, input_tokens=v_inp, output_tokens=v_out)
 
+        # Prior loop iterations live in archived attempt trees; the current
+        # iteration's files in replication/ are counted by the phase loop.
+        archived_attempts = sorted(
+            self.config.output_dir.glob("replication.attempt-*"))
+        for attempt_dir in archived_attempts:
+            i, o = sum_tokens_from_transcript(
+                attempt_dir / "replication_transcript.jsonl")
+            usage.phases["replicate"].input_tokens += i
+            usage.phases["replicate"].output_tokens += o
+
         # manager review + research sub-agents (present only when the retry
         # loop ran); no wall time — their stages are not state-tracked.
         loop_transcripts = [self.config.manager_review_transcript_path]
         loop_transcripts += sorted(
             self.config.replication_dir.glob("research_*_transcript.jsonl"))
+        for attempt_dir in archived_attempts:
+            loop_transcripts.append(attempt_dir / "manager_review_transcript.jsonl")
+            loop_transcripts += sorted(
+                attempt_dir.glob("research_*_transcript.jsonl"))
         m_inp, m_out = 0, 0
         for t in loop_transcripts:
             i, o = sum_tokens_from_transcript(t)

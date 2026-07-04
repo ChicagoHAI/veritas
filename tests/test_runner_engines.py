@@ -497,7 +497,8 @@ def test_auth_check_skips_inactive_buckets(tmp_path, monkeypatch):
 
 def test_replicate_entry_refreshes_codebase_when_invalidated(tmp_path):
     # A replicate re-run in a repo-backed mode starts from a pristine copy
-    # of the repo, not the previous attempt's patched tree.
+    # of the repo, not the previous attempt's patched tree. Fresh runs (no
+    # prior attempt artifacts) keep the already-staged tree untouched.
     from veritas.core.pipeline_state import PipelineState
 
     repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
@@ -507,9 +508,16 @@ def test_replicate_entry_refreshes_codebase_when_invalidated(tmp_path):
     state = PipelineState(out)
     codebase = config.replication_dir / "codebase"
     codebase.mkdir(parents=True, exist_ok=True)
-    (codebase / "main.py").write_text("patched-by-old-engine", encoding="utf-8")
+    (codebase / "main.py").write_text("staged-fresh", encoding="utf-8")
     runner = ReplicationRunner(config)
 
+    # fresh run: no prior attempt evidenced -> no re-staging
+    runner._refresh_codebase_if_stale(state)
+    assert (codebase / "main.py").read_text(encoding="utf-8") == "staged-fresh"
+
+    # a prior attempt ran (transcript exists) and was invalidated -> refresh
+    (codebase / "main.py").write_text("patched-by-old-engine", encoding="utf-8")
+    config.replication_transcript_path.write_text("x", encoding="utf-8")
     runner._refresh_codebase_if_stale(state)
     assert (codebase / "main.py").read_text(encoding="utf-8") == "original"
 
@@ -518,3 +526,24 @@ def test_replicate_entry_refreshes_codebase_when_invalidated(tmp_path):
     state.start_stage("replicate")
     runner._refresh_codebase_if_stale(state)
     assert (codebase / "main.py").read_text(encoding="utf-8") == "partial-work"
+
+
+def test_replicate_entry_restores_codegen_snapshot_in_paper_only(tmp_path):
+    # Paper-only mode restores the pristine codegen output from its
+    # snapshot instead of copying a (nonexistent) repo.
+    from veritas.core.pipeline_state import PipelineState
+
+    paper = tmp_path / "paper.pdf"; paper.write_text("x", encoding="utf-8")
+    out = tmp_path / "out"
+    config = Config(paper_path=paper, output_dir=out, mode="paper-only")
+    state = PipelineState(out)
+    codebase = config.replication_dir / "codebase"
+    codebase.mkdir(parents=True, exist_ok=True)
+    (codebase / "gen.py").write_text("patched", encoding="utf-8")
+    snapshot = config.veritas_state_dir / "codegen_snapshot"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / "gen.py").write_text("pristine-generated", encoding="utf-8")
+    config.replication_transcript_path.write_text("x", encoding="utf-8")
+
+    ReplicationRunner(config)._refresh_codebase_if_stale(state)
+    assert (codebase / "gen.py").read_text(encoding="utf-8") == "pristine-generated"

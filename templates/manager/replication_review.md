@@ -96,7 +96,6 @@ A re-run must be different from a blank repeat. Your `directive` must state
 the missing artifact to produce — not "try harder". Put what was already tried in
 `already_tried` so the agent does not repeat it. Pick the `target_phase`:
 `replicate` (almost always), `plan` (only if the plan itself was wrong), or
-`codegen` (paper-only mode, generated code was the problem).
 
 ## Optional: request methodology/resource research (NOT answers)
 
@@ -128,7 +127,7 @@ Write **only** a single JSON object to
   "diligence_sufficient": true,
   "deficiency_is_genuine": "deficient | diligent-but-divergent | irreducible",
   "decision": "accept | revise",
-  "target_phase": "replicate | plan | codegen | null",
+  "target_phase": "replicate | plan | null",
   "reason": "<where it fell short or why it is acceptable — specific, cite the trace/signals>",
   "directive": "<specific NEW instructions for the re-run; empty if accept>",
   "already_tried": "<what the agent already attempted, so the re-run doesn't repeat it>",

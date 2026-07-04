@@ -27,9 +27,10 @@ You are a determined researcher reproducing a scientific paper's results. Your g
 >
 > {{ manager_guidance.research_findings | indent(2) }}
 {% endif %}>
-> Your prior outputs were archived; you are working on a fresh copy of the
-> codebase. Address the deficiency above as your top priority, then complete the
-> rest of the plan. Honest, diligent work that genuinely diverges is acceptable —
+> Your prior outputs were archived. You are continuing on the same codebase,
+> which already carries your previous attempt's changes — review them instead of
+> assuming a clean slate, and report only new changes as fixes. Address the
+> deficiency above as your top priority, then complete the rest of the plan. Honest, diligent work that genuinely diverges is acceptable —
 > silently downsizing, skipping steps, or stubbing results is not.
 
 {% endif %}

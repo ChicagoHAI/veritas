@@ -72,3 +72,49 @@ def test_check_citations_model_flags_reach_config(tmp_path, monkeypatch):
     assert config.evaluate_model == "openrouter:openai/gpt-5.5"
     assert config.engine_for("evaluate") == ("openrouter", "openai/gpt-5.5")
     assert config.run_citation_check is True
+
+
+def test_check_citations_recovers_run_engines(tmp_path, monkeypatch):
+    # A plain standalone pass inherits the engines that produced the run, so
+    # the settings sidecar matches and usage pricing stays correct; explicit
+    # flags still win.
+    import json as _json
+
+    replicate_dir = tmp_path / "run"
+    (replicate_dir / ".veritas").mkdir(parents=True)
+    (replicate_dir / ".veritas" / "pipeline_state.json").write_text(_json.dumps({
+        "config": {
+            "provider": "codex",
+            "engine_evaluate": "codex:gpt-5.5",
+            "engine_verify": "openrouter:openai/gpt-5.5",
+        },
+        "inputs": {},
+    }), encoding="utf-8")
+    paper = tmp_path / "paper.pdf"
+    paper.write_bytes(b"%PDF-1.4 stub")
+    captured = {}
+
+    class FakeRunner:
+        def __init__(self, config):
+            captured["config"] = config
+        def check_citations_existing(self):
+            return SimpleNamespace(success=True, report_path=None,
+                                   pdf_path=None, error=None)
+
+    monkeypatch.setattr(cli_main, "ReplicationRunner", FakeRunner)
+    result = CliRunner().invoke(cli_main.app, [
+        "check-citations", str(replicate_dir), "--paper", str(paper),
+    ])
+    assert result.exit_code == 0, result.output
+    config = captured["config"]
+    assert config.provider == "codex"
+    assert config.engine_for("evaluate") == ("codex", "gpt-5.5")
+    assert config.engine_for("verify") == ("openrouter", "openai/gpt-5.5")
+
+    # explicit flag wins over the recorded engine
+    result = CliRunner().invoke(cli_main.app, [
+        "check-citations", str(replicate_dir), "--paper", str(paper),
+        "--evaluate-model", "claude:claude-opus-4-8",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["config"].engine_for("evaluate") == ("claude", "claude-opus-4-8")

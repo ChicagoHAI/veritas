@@ -1392,7 +1392,8 @@ cmd_evaluate() {
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
-        $auth_flags \n        $paper_mount \
+        $auth_flags \
+        $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
