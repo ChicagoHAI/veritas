@@ -106,6 +106,14 @@ def test_author_overlap_handles_surname_first_order():
     assert author_overlap(["Vaswani, A."], ["John Doe"]) == 0.0
 
 
+def test_author_overlap_skips_generational_suffixes():
+    # A suffix before the comma must not be mistaken for the surname.
+    assert author_overlap(["Smith Jr., John"], ["John Smith"]) == 1.0
+    # Suffixes are skipped on the record side too.
+    assert author_overlap(["Smith Jr., John"], ["John Smith Jr."]) == 1.0
+    assert author_overlap(["Davis III, R."], ["Richard Davis"]) == 1.0
+
+
 def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("arXiv:1706.03762v5") == "1706.03762"
     assert normalize_arxiv_id("1706.03762") == "1706.03762"

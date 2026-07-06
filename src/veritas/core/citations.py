@@ -156,11 +156,18 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
+# Generational suffixes that can trail a surname ("Smith Jr.", "Davis III").
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+
 def _last_name(author: str) -> str:
     """Best-effort surname, normalized. A comma means "Surname, Given/Initial"
-    order (take the part before it); otherwise "Given Surname" (last token)."""
+    order (take the part before it); otherwise "Given Surname" (last token).
+    Trailing generational suffixes (Jr/Sr/II-IV) are skipped on both sides."""
     head = author.split(",", 1)[0]
     parts = normalize_title(head).split()
+    while len(parts) > 1 and parts[-1] in _NAME_SUFFIXES:
+        parts.pop()
     return parts[-1] if parts else ""
 
 
