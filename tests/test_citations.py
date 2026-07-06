@@ -678,6 +678,19 @@ def test_citation_html_view_none_when_check_absent(tmp_path):
     assert gen._citation_html_view(None, None) is None
 
 
+def test_citation_html_view_normalizes_whitespace_keys():
+    # Same key normalization as the markdown path: whitespace-only -> "?".
+    gen = ReportGenerator()
+    view = gen._citation_html_view({
+        "summary": {"total": 1},
+        "flagged": [{"key": "   ", "status": "inconclusive", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+        "checked_support": False,
+    }, None)
+    assert view["flagged"][0]["key"] == "?"
+    assert view["support_not_checked"] is True
+
+
 def test_html_report_renders_citation_section(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)
@@ -699,6 +712,8 @@ def test_html_report_renders_citation_section(tmp_path):
     assert "Citation check" in html
     assert "likely fabricated" in html
     assert "f2024" in html
+    # checked_support is False in the fixture -> same disclaimer as the md report.
+    assert "does not check citation support" in html
     # Absent check -> no section.
     ctx_none = gen._build_html_context(None, [], None, None, None, None, "full")
     assert "Citation check" not in gen._render_html(ctx_none)

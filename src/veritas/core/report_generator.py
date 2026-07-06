@@ -511,7 +511,7 @@ class ReportGenerator:
                         verdict_label += f" (audit softened from {first_verdict})"
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
-                key = (f.get("key") or "?").replace("|", "\\|")
+                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
                 claim = (f.get("claim") or "").replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()
                 src = f.get("source") or ""
@@ -835,7 +835,7 @@ class ReportGenerator:
                 url = evidence[0]
             flagged_rows.append({
                 "status_label": status_label,
-                "key": (f.get("key") or "?"),
+                "key": ((f.get("key") or "").strip() or "?"),
                 "detail": (f.get("detail") or "").strip(),
                 "url": url,
             })
@@ -862,7 +862,7 @@ class ReportGenerator:
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
                 faith_rows.append({
-                    "key": f.get("key") or "?",
+                    "key": ((f.get("key") or "").strip() or "?"),
                     "verdict_label": verdict_label,
                     "claim": (f.get("claim") or "").strip(),
                     "quote": (f.get("quote") or "").strip(),
@@ -877,6 +877,7 @@ class ReportGenerator:
             "inconclusive": s.get("inconclusive", 0),
             "unresolved": s.get("unresolved", 0),
             "flagged": flagged_rows,
+            "support_not_checked": citation.get("checked_support") is False,
             "faith_checked": fsum.get("checked", 0) or 0,
             "faith_scope": s.get("faithfulness_scope", "main"),
             "faith_rows": faith_rows,

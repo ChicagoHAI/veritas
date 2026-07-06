@@ -159,6 +159,9 @@
     <tbody>{% for f in citations.flagged %}<tr><td class="st">{{ f.status_label }}</td><td><code>{{ f.key }}</code></td><td>{{ f.detail }}</td><td>{% if f.url %}<a href="{{ f.url }}">record</a>{% endif %}</td></tr>{% endfor %}</tbody>
   </table>
   {% endif %}
+  {% if citations.support_not_checked %}
+  <p class="sub">Note: this checks that references exist and are described correctly. It does not check citation support (whether each cited paper actually backs the claim it is cited for).</p>
+  {% endif %}
   {% if citations.faith_checked %}
   <h3>Claim support ({{ citations.faith_scope }} claims, {{ citations.faith_checked }} checked)</h3>
   <ul>
