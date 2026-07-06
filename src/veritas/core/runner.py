@@ -1614,7 +1614,13 @@ class ReplicationRunner:
                 "  citation-check: faithfulness scope changed "
                 f"(now '{self.config.faithfulness_scope}'); re-running"
             )
-            # The audit re-checks the check's findings, so it is stale too.
+            # Discard the stale outputs before re-running: provider success is
+            # only the subprocess exit code, so a re-run that exits cleanly
+            # without writing must not leave the old output to be stamped with
+            # the new scope. The audit re-checks the check's findings, so it
+            # is stale too.
+            output_path.unlink(missing_ok=True)
+            self.config.citation_check_meta_path.unlink(missing_ok=True)
             self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this

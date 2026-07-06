@@ -455,6 +455,21 @@ def test_check_citations_reruns_on_scope_change(tmp_path):
     assert meta["faithfulness_scope"] == "main"  # meta re-recorded for the new run
 
 
+def test_check_citations_scope_rerun_never_mislabels_stale_output(tmp_path):
+    # Provider success is only the exit code. If the re-run exits cleanly but
+    # never writes the file, the old-scope output must not survive to be
+    # stamped as produced by the new scope.
+    runner, cfg = _citation_runner(tmp_path)  # current scope: main
+    cfg.citation_check_path.write_text('{"summary": {"total": 7}}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text('{"faithfulness_scope": "all"}', encoding="utf-8")
+
+    with patch.object(ReplicationRunner, "_invoke_provider", return_value=True):
+        runner._check_citations()
+
+    assert not cfg.citation_check_path.exists()  # stale output cleared, not re-served
+    assert not cfg.citation_check_meta_path.exists()  # no meta claiming a fresh main-scope run
+
+
 def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
     with patch.object(ReplicationRunner, "_stage_resolver_script", side_effect=OSError("disk full")), \
