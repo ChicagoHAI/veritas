@@ -121,6 +121,26 @@ def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("10.1145/3292500") == ""  # a DOI, not an arXiv id
 
 
+def test_normalize_arxiv_id_handles_old_style_ids():
+    # Pre-2007 ids: archive(/subject-class)/YYMMNNN, optionally versioned.
+    assert normalize_arxiv_id("hep-ph/9905221") == "hep-ph/9905221"
+    assert normalize_arxiv_id("arXiv:hep-ph/9905221v2") == "hep-ph/9905221"
+    assert normalize_arxiv_id("math.GT/0309136") == "math.GT/0309136"
+    assert normalize_arxiv_id("https://arxiv.org/abs/hep-th/0603001") == "hep-th/0603001"
+
+
+def test_author_overlap_ignores_et_al_and_folds_diacritics():
+    # "et al." transcribed as an author entry must not count as an unmatched name.
+    assert author_overlap(["A. Vaswani", "et al."], ["Ashish Vaswani", "Noam Shazeer"]) == 1.0
+    assert author_overlap(["Smith, J.", "and others"], ["Jane Smith", "Bob Lee"]) == 1.0
+    # Transliterated bibliography surnames match the record's accented form.
+    assert author_overlap(["J. Muller"], ["Jürgen Müller"]) == 1.0
+
+
+def test_normalize_title_folds_diacritics():
+    assert normalize_title("Schrödinger's Cat") == "schrodinger s cat"
+
+
 # ---------------------------------------------------------------------------
 # --- record matching + verdict classification ---
 # ---------------------------------------------------------------------------
@@ -199,6 +219,17 @@ def test_classify_verified_when_both_are_preprints():
     assert v.status == STATUS_VERIFIED
 
 
+def test_classify_no_year_mismatch_across_preprint_published_boundary():
+    # A published citation matched only by a preprint record legitimately
+    # differs in year (preprint predates the venue); the venue check owns
+    # that comparison, so no year flag on a correct citation.
+    ref = Reference(title="A Cross Boundary Work", authors=["A"], year=2019, venue="NeurIPS")
+    recs = [_rec(source="arxiv", title="A Cross Boundary Work", authors=["A"],
+                 year=2017, venue="arXiv")]
+    v = classify(ref, recs, sources_queried=["arxiv"])
+    assert v.status == STATUS_VERIFIED
+
+
 def test_classify_doi_prefix_forms_are_not_a_mismatch():
     ref = Reference(title="Paper With Prefixed DOI", authors=["A"], doi="doi:10.1145/3292500")
     recs = [_rec(title="Paper With Prefixed DOI", authors=["A"], doi="10.1145/3292500")]
@@ -252,6 +283,32 @@ def test_parse_semantic_scholar_extracts_record():
     recs = parse_semantic_scholar(payload)
     assert recs[0].source == "s2" and recs[0].arxiv_id == "2301.00001"
     assert recs[0].doi == "10.9/z" and recs[0].venue == "ACL"
+
+
+def test_parsers_coerce_string_years():
+    # OpenAlex/S2 year fields are coerced like the other adapters, so classify's
+    # numeric comparison can never see a string year.
+    oa = parse_openalex({"results": [{"title": "T", "publication_year": "2020",
+                                      "authorships": [], "primary_location": {}}]})
+    assert oa[0].year == 2020
+    s2 = parse_semantic_scholar({"data": [{"title": "T", "year": "2019",
+                                           "authors": [], "externalIds": {}}]})
+    assert s2[0].year == 2019
+
+
+def test_fetchers_swallow_http_client_exceptions(monkeypatch):
+    # IncompleteRead/BadStatusLine are HTTPException, not OSError; a mid-body
+    # connection drop must degrade the source, not kill the resolver script.
+    import http.client
+    import urllib.request
+    from veritas.core import citations as cit
+
+    def boom(*args, **kwargs):
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert cit.fetch_json("https://example.org/api") is None
+    assert cit.fetch_text("https://example.org/api") is None
 
 
 def test_parse_dblp_extracts_record():
