@@ -21,18 +21,22 @@ from veritas.core.config import (
     REPLICATION_SCORE_FILE,
     PAPER_CLAIMS_FILE,
     ANALYZE_SUBDIR,
+    ASSESS_SUBDIR,
+    REPLICATION_SUBDIR,
+    FIX_SEVERITY_FILE,
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
     CITATION_CHECK_FILE,
     CITATION_AUDIT_FILE,
     WORKFLOW_LOG_FILE,
 )
+from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
     PaperClaims,
     ReplicationScore,
 )
-from veritas.core.replication import _extract_json
+from veritas.core.replication import _extract_json, gather_evidence
 
 
 # Header label for each tier in the report.
@@ -158,17 +162,24 @@ class ReportGenerator:
         score = self._load_score(replicate_dir)
         mode = self._load_mode(replicate_dir)
         evaluation = self._load_evaluation(replicate_dir)
+        # Reconstituted from artifacts so a from-disk re-render (report /
+        # check-citations refresh) keeps the evidence and fixes sections the
+        # original run rendered from in-memory data.
+        evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        fix_assessment = self._load_fix_assessment(replicate_dir)
+        citation = self._load_citation_check(replicate_dir)
+        citation_audit = self._load_citation_audit(replicate_dir)
 
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
-            evidence=None, fix_assessment=None,
+            evidence=evidence, fix_assessment=fix_assessment,
             mode=mode,
             output_dir=replicate_dir,
+            citation=citation, citation_audit=citation_audit,
         )
         html_content = self._render_html(self._build_html_context(
-            claims, verdicts, score, None, None, evaluation, mode,
-            citation=self._load_citation_check(replicate_dir),
-            citation_audit=self._load_citation_audit(replicate_dir),
+            claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
+            citation=citation, citation_audit=citation_audit,
         ))
 
         if output_path is None:
@@ -206,16 +217,18 @@ class ReportGenerator:
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """Render the report from live in-memory data."""
         evaluation = self._load_evaluation(output_dir)
+        citation = self._load_citation_check(output_dir)
+        citation_audit = self._load_citation_audit(output_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=config.mode,
             output_dir=output_dir,
+            citation=citation, citation_audit=citation_audit,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
-            citation=self._load_citation_check(output_dir),
-            citation_audit=self._load_citation_audit(output_dir),
+            citation=citation, citation_audit=citation_audit,
         ))
 
         report_dir = config.report_dir
@@ -324,6 +337,20 @@ class ReportGenerator:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _load_fix_assessment(self, replicate_dir: Path) -> Optional[FixSeverityAssessment]:
+        """Load assess/fix_severity.json for a from-artifacts re-render.
+
+        None when the assess phase didn't run or its output is malformed; the
+        report then simply omits the fixes table.
+        """
+        path = replicate_dir / ASSESS_SUBDIR / FIX_SEVERITY_FILE
+        if not path.exists():
+            return None
+        try:
+            return FixSeverityAssessment.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+
     # -- Rendering ----------------------------------------------------------
 
     def _render(
@@ -335,6 +362,8 @@ class ReportGenerator:
         fix_assessment=None,
         mode: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        citation: Optional[dict] = None,
+        citation_audit: Optional[dict] = None,
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report = f"# Replication Report\n\n**Generated:** {now}\n\n---\n\n"
@@ -361,11 +390,9 @@ class ReportGenerator:
             report += self._render_flags(score.flags)
 
         # Advisory citation check (opt-in via --check-citations). Independent of
-        # the score; rendered when present.
-        report += self._render_citation_check(
-            self._load_citation_check(output_dir),
-            self._load_citation_audit(output_dir),
-        )
+        # the score; rendered when present. Loaded once by the caller and
+        # shared with the HTML context.
+        report += self._render_citation_check(citation, citation_audit)
 
         # Manager retry-loop trajectory (only when the loop ran, i.e. >1
         # iteration or a hand-off). The Replication Score above is unaffected by

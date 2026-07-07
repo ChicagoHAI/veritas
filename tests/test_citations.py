@@ -969,6 +969,36 @@ def test_html_report_renders_citation_section(tmp_path):
     assert "Citation check" not in gen._render_html(ctx_none)
 
 
+def test_generate_from_artifacts_keeps_evidence_and_fixes(tmp_path):
+    # A from-disk re-render (report subcommand / check-citations refresh) must
+    # keep the replication-evidence and fix-severity sections the original run
+    # rendered from in-memory data, not silently drop them.
+    run = tmp_path / "run"
+    (run / "replication").mkdir(parents=True)
+    (run / "assess").mkdir()
+    (run / "replication" / "replication_log.json").write_text(json.dumps({
+        "step_outcomes": [{
+            "step_id": 1, "description": "train the model",
+            "command_executed": "python train.py", "exit_code": 0,
+            "duration_seconds": 4.0,
+        }],
+    }), encoding="utf-8")
+    (run / "assess" / "fix_severity.json").write_text(json.dumps({
+        "fixes": [{"fix_description": "pinned numpy", "severity": "minor",
+                   "rationale": "r", "reproducibility_impact": "low"}],
+        "summary": "one environment fix", "total_fixes": 1,
+        "minor_count": 1, "major_count": 0, "critical_count": 0,
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    md_path, _ = gen.generate(run, generate_pdf=False)
+    md = md_path.read_text(encoding="utf-8")
+    assert "train the model" in md          # evidence section survived
+    assert "pinned numpy" in md             # fixes table survived
+    html = (run / "report" / "replication_report.html").read_text(encoding="utf-8")
+    assert "train the model" in html and "pinned numpy" in html
+
+
 def test_renderers_tolerate_hostile_agent_json():
     # Every string field the wrong type, plus unsafe URL schemes: the report
     # must degrade field-by-field, never crash, and never emit non-http links.
