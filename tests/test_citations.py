@@ -265,6 +265,20 @@ def test_parse_dblp_extracts_record():
     assert recs[0].authors == ["First Author", "Second Author"]
 
 
+def test_parse_dblp_single_hit_dict():
+    # DBLP returns a bare dict for hits.hit when exactly one result matches —
+    # the common case for a distinctive title. Must parse, not crash.
+    payload = {"result": {"hits": {"hit": {"info": {
+        "title": "Lone Hit Paper", "year": "2023", "venue": "NeurIPS",
+        "authors": {"author": [{"text": "Only Author"}]},
+        "url": "https://dblp.org/rec/3",
+    }}}}}
+    recs = parse_dblp(payload)
+    assert len(recs) == 1
+    assert recs[0].title == "Lone Hit Paper" and recs[0].year == 2023
+    assert recs[0].authors == ["Only Author"]
+
+
 def test_parse_dblp_single_author_dict_and_list_venue():
     payload = {"result": {"hits": {"hit": [{"info": {
         "title": "Single Author Paper.",

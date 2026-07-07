@@ -405,6 +405,10 @@ def parse_dblp(payload: Dict[str, Any]) -> List[SourceRecord]:
     """Parse a DBLP search JSON payload into SourceRecords."""
     out: List[SourceRecord] = []
     hits = (((payload.get("result") or {}).get("hits") or {}).get("hit")) or []
+    if isinstance(hits, dict):
+        # DBLP returns a bare dict (not a one-element list) when exactly one
+        # hit matches, same as the nested author field below.
+        hits = [hits]
     for hit in hits:
         info = hit.get("info", {}) or {}
         author_field = (info.get("authors") or {}).get("author") or []
