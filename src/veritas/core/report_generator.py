@@ -97,7 +97,7 @@ def _build_audit_lookup(audit) -> dict:
     claim text."""
     lookup = {}
     for it in (audit or {}).get("items") or []:
-        if not (isinstance(it, dict) and it.get("key")):
+        if not (isinstance(it, dict) and isinstance(it.get("key"), str) and it.get("key")):
             continue
         lookup.setdefault((it.get("key"), it.get("kind")), []).append(
             (_normalize_audit_claim(it.get("claim")), it.get("audit_verdict"))
@@ -112,6 +112,8 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
     ever applies to that claim's row; when nothing matches, no verdict
     applies (conservative: better to keep the first-pass verdict than to
     soften the wrong row)."""
+    if not isinstance(key, str):
+        return None
     items = lookup.get((key, kind))
     if not items:
         return None
@@ -123,6 +125,17 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
     if len(items) == 1 and not items[0][0]:
         return items[0][1]
     return None
+
+
+def _txt(value) -> str:
+    """Agent-JSON string field, coerced: non-strings render as empty."""
+    return value if isinstance(value, str) else ""
+
+
+def _safe_url(value) -> str:
+    """Only http(s) URLs are emitted as links; other schemes render unlinked."""
+    url = value if isinstance(value, str) else ""
+    return url if url.startswith(("https://", "http://")) else ""
 
 
 class ReportGenerator:
@@ -463,7 +476,8 @@ class ReportGenerator:
         audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
 
-        s = citation.get("summary") or {}
+        s = citation.get("summary")
+        s = s if isinstance(s, dict) else {}
         total = s.get("total", 0)
         section = "## Citation Check\n\n"
         section += (
@@ -493,7 +507,7 @@ class ReportGenerator:
             for f in flagged:
                 if not isinstance(f, dict):
                     continue
-                first_status = f.get("status", "")
+                first_status = _txt(f.get("status"))
                 final_status, softened = self._soften_verdict(
                     first_status, _audit_verdict_for(audit_lookup, f.get("key"), "integrity"), "integrity")
                 if softened:
@@ -501,15 +515,18 @@ class ReportGenerator:
                 status_label = label.get(final_status, final_status)
                 if softened:
                     status_label += f" (audit softened from {first_status})"
-                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
-                detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
-                rec = f.get("matched_record") or {}
-                evidence = f.get("evidence") or []
+                key = (_txt(f.get("key")).strip() or "?").replace("|", "\\|")
+                detail = _txt(f.get("detail")).replace("|", "\\|").replace("\n", " ").strip()
+                rec = f.get("matched_record")
+                rec = rec if isinstance(rec, dict) else {}
+                evidence = f.get("evidence")
+                evidence = evidence if isinstance(evidence, list) else []
                 src = ""
-                if isinstance(rec, dict) and rec.get("url"):
-                    src = f"[{rec.get('source', 'record')}]({rec['url']})"
-                elif evidence and isinstance(evidence[0], str):
-                    src = f"[evidence]({evidence[0]})"
+                rec_url = _safe_url(rec.get("url"))
+                if rec_url:
+                    src = f"[{_txt(rec.get('source')) or 'record'}]({rec_url})"
+                elif evidence and _safe_url(evidence[0]):
+                    src = f"[evidence]({_safe_url(evidence[0])})"
                 src = src.replace("|", "\\|")
                 section += f"| {status_label} | `{key}` | {detail} | {src} |\n"
             section += "\n"
@@ -520,10 +537,11 @@ class ReportGenerator:
                 "cited paper actually backs the claim it is cited for)._\n\n"
             )
 
-        fsum = (citation.get("summary") or {}).get("faithfulness") or {}
+        fsum = s.get("faithfulness")
+        fsum = fsum if isinstance(fsum, dict) else {}
         faith = citation.get("faithfulness") or []
         if fsum.get("checked"):
-            scope = (citation.get("summary") or {}).get("faithfulness_scope", "main")
+            scope = s.get("faithfulness_scope", "main")
             section += f"\n**Claim support ({scope} claims):** "
             section += (
                 f"{fsum.get('checked', 0)} checked. "
@@ -539,9 +557,8 @@ class ReportGenerator:
                     continue
                 if f.get("source_status") == "inaccessible":
                     verdict_label = "source inaccessible"
-                    softened_faith = False
                 else:
-                    first_verdict = f.get("verdict", "")
+                    first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
                         audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened_faith = self._soften_verdict(
@@ -553,11 +570,10 @@ class ReportGenerator:
                         verdict_label += f" (audit softened from {first_verdict})"
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
-                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
-                claim = f.get("claim") if isinstance(f.get("claim"), str) else ""
-                claim = claim.replace("\n", " ").strip()
-                quote = (f.get("quote") or "").replace("\n", " ").strip()
-                src = f.get("source") or ""
+                key = (_txt(f.get("key")).strip() or "?").replace("|", "\\|")
+                claim = _txt(f.get("claim")).replace("\n", " ").strip()
+                quote = _txt(f.get("quote")).replace("\n", " ").strip()
+                src = _safe_url(f.get("source"))
                 section += f"- `{key}` ({verdict_label}): {claim}"
                 if quote:
                     section += f'  \n  Source says: "{quote}"'
@@ -859,7 +875,7 @@ class ReportGenerator:
         for f in citation.get("flagged") or []:
             if not isinstance(f, dict):
                 continue
-            first_status = f.get("status", "")
+            first_status = _txt(f.get("status"))
             audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
@@ -867,15 +883,17 @@ class ReportGenerator:
             status_label = self._INTEGRITY_LABEL.get(final_status, final_status)
             if softened:
                 status_label += f" (audit softened from {first_status})"
-            rec = f.get("matched_record") or {}
-            evidence = f.get("evidence") or []
-            url = rec.get("url") if isinstance(rec, dict) else None
-            if not url and evidence and isinstance(evidence[0], str):
-                url = evidence[0]
+            rec = f.get("matched_record")
+            rec = rec if isinstance(rec, dict) else {}
+            evidence = f.get("evidence")
+            evidence = evidence if isinstance(evidence, list) else []
+            url = _safe_url(rec.get("url"))
+            if not url and evidence:
+                url = _safe_url(evidence[0])
             flagged_rows.append({
                 "status_label": status_label,
-                "key": ((f.get("key") or "").strip() or "?"),
-                "detail": (f.get("detail") or "").strip(),
+                "key": (_txt(f.get("key")).strip() or "?"),
+                "detail": _txt(f.get("detail")).strip(),
                 "url": url,
             })
 
@@ -889,7 +907,7 @@ class ReportGenerator:
                 if f.get("source_status") == "inaccessible":
                     verdict_label = "source inaccessible"
                 else:
-                    first_verdict = f.get("verdict", "")
+                    first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
                         audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened = self._soften_verdict(
@@ -902,11 +920,11 @@ class ReportGenerator:
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
                 faith_rows.append({
-                    "key": ((f.get("key") or "").strip() or "?"),
+                    "key": (_txt(f.get("key")).strip() or "?"),
                     "verdict_label": verdict_label,
-                    "claim": (f.get("claim") if isinstance(f.get("claim"), str) else "").strip(),
-                    "quote": (f.get("quote") or "").strip(),
-                    "source": f.get("source") or "",
+                    "claim": _txt(f.get("claim")).strip(),
+                    "quote": _txt(f.get("quote")).strip(),
+                    "source": _safe_url(f.get("source")),
                 })
 
         return {

@@ -911,6 +911,51 @@ def test_html_report_renders_citation_section(tmp_path):
     assert "Citation check" not in gen._render_html(ctx_none)
 
 
+def test_renderers_tolerate_hostile_agent_json():
+    # Every string field the wrong type, plus unsafe URL schemes: the report
+    # must degrade field-by-field, never crash, and never emit non-http links.
+    citation = {
+        "summary": {"total": 2, "verified": 0, "metadata_mismatch": 0, "unresolved": 0,
+                    "likely_fabricated": 2, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1}},
+        "flagged": [
+            {"key": 12, "status": 7, "detail": 42, "matched_record": "not a dict",
+             "evidence": {"not": "a list"}},
+            {"key": "js2024", "status": "likely_fabricated", "detail": "d",
+             "matched_record": {"source": "dblp", "url": "javascript:alert(1)"},
+             "evidence": ["javascript:alert(2)"]},
+        ],
+        "faithfulness": [
+            {"key": None, "claim": ["not", "a", "string"], "verdict": 3, "quote": 9,
+             "source": "javascript:alert(3)", "source_status": "retrieved"},
+        ],
+        "checked_support": False,
+    }
+    audit = {"items": [
+        {"key": ["unhashable"], "kind": "integrity", "audit_verdict": []},
+        {"key": "js2024", "kind": "integrity", "audit_verdict": "inconclusive"},
+    ]}
+
+    gen = ReportGenerator()
+    md = gen._render_citation_check(citation, audit)  # must not raise
+    assert "js2024" in md
+    assert "javascript:" not in md
+    view = gen._citation_html_view(citation, audit)   # must not raise
+    by_key = {r["key"]: r for r in view["flagged"]}
+    assert by_key["js2024"]["url"] == ""              # unsafe scheme never linked
+    html = gen._render_html(gen._build_html_context(
+        None, [], None, None, None, None, "full",
+        citation=citation, citation_audit=audit))
+    assert "javascript:" not in html
+
+
+def test_renderers_tolerate_non_dict_summary():
+    citation = {"summary": ["oops"], "flagged": [], "checked_support": True}
+    gen = ReportGenerator()
+    assert "Citation Check" in gen._render_citation_check(citation, None)
+    assert gen._citation_html_view(citation, None)["total"] == 0
+
+
 def test_load_citation_check_tolerates_markdown_fences(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)
