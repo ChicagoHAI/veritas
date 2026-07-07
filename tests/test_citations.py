@@ -650,6 +650,105 @@ def test_render_citation_check_counts_unresolved_and_annotates_inaccessible_audi
     assert "audit softened" not in section
 
 
+def test_audit_softening_is_claim_specific():
+    # Two distinct claims cite the same reference key; an audit item that
+    # names one claim must soften only that row.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness", "claim": "claim one text",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
+
+
+def test_audit_without_claim_field_still_softens():
+    # Audits from before claim tracking carry no claim field; their verdict
+    # applies by (key, kind) as before.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "solo2024", "claim": "only claim",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "solo2024", "kind": "faithfulness",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_claim_match_tolerates_whitespace_and_case_drift():
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "drift2024", "claim": "The method improves accuracy",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "drift2024", "kind": "faithfulness",
+             "claim": "  the method  improves\naccuracy ",
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_non_string_claim_does_not_crash():
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "odd2024", "claim": ["not", "a", "string"],
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "odd2024", "kind": "faithfulness", "claim": 42,
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "Citation Check" in section
+
+
 def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)

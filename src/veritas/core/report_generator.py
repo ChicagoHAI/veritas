@@ -80,6 +80,51 @@ def _scrub_prose(obj):
     return obj
 
 
+def _normalize_audit_claim(claim) -> str:
+    """Whitespace-collapsed, case-folded claim text for audit matching; empty
+    for a missing or non-string claim."""
+    if not isinstance(claim, str):
+        return ""
+    return " ".join(claim.split()).casefold()
+
+
+def _build_audit_lookup(audit) -> dict:
+    """Index audit items as ``(key, kind) -> [(normalized_claim, verdict)]``.
+
+    Faithfulness verdicts are matched claim-first so one audit item cannot
+    soften every row citing the same reference; normalization keeps the
+    match tolerant of whitespace and case drift in the audit's copy of the
+    claim text."""
+    lookup = {}
+    for it in (audit or {}).get("items") or []:
+        if not (isinstance(it, dict) and it.get("key")):
+            continue
+        lookup.setdefault((it.get("key"), it.get("kind")), []).append(
+            (_normalize_audit_claim(it.get("claim")), it.get("audit_verdict"))
+        )
+    return lookup
+
+
+def _audit_verdict_for(lookup: dict, key, kind, claim=None):
+    """Exact normalized-claim match first. A sole claim-less item for
+    ``(key, kind)`` applies regardless — that covers integrity items and
+    audits recorded before claim tracking. An item that names a claim only
+    ever applies to that claim's row; when nothing matches, no verdict
+    applies (conservative: better to keep the first-pass verdict than to
+    soften the wrong row)."""
+    items = lookup.get((key, kind))
+    if not items:
+        return None
+    normalized = _normalize_audit_claim(claim)
+    if normalized:
+        for item_claim, verdict in items:
+            if item_claim == normalized:
+                return verdict
+    if len(items) == 1 and not items[0][0]:
+        return items[0][1]
+    return None
+
+
 class ReportGenerator:
     """Generate the Replication Report."""
 
@@ -415,11 +460,7 @@ class ReportGenerator:
         if not citation:
             return ""
 
-        audit_items = (audit or {}).get("items") or []
-        audit_lookup = {
-            (it.get("key"), it.get("kind")): it.get("audit_verdict")
-            for it in audit_items if isinstance(it, dict) and it.get("key")
-        }
+        audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
 
         s = citation.get("summary") or {}
@@ -454,7 +495,7 @@ class ReportGenerator:
                     continue
                 first_status = f.get("status", "")
                 final_status, softened = self._soften_verdict(
-                    first_status, audit_lookup.get((f.get("key"), "integrity")), "integrity")
+                    first_status, _audit_verdict_for(audit_lookup, f.get("key"), "integrity"), "integrity")
                 if softened:
                     softened_count += 1
                 status_label = label.get(final_status, final_status)
@@ -501,7 +542,8 @@ class ReportGenerator:
                     softened_faith = False
                 else:
                     first_verdict = f.get("verdict", "")
-                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
+                    audit_verdict = _audit_verdict_for(
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened_faith = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened_faith:
@@ -512,7 +554,8 @@ class ReportGenerator:
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
                 key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
-                claim = (f.get("claim") or "").replace("\n", " ").strip()
+                claim = f.get("claim") if isinstance(f.get("claim"), str) else ""
+                claim = claim.replace("\n", " ").strip()
                 quote = (f.get("quote") or "").replace("\n", " ").strip()
                 src = f.get("source") or ""
                 section += f"- `{key}` ({verdict_label}): {claim}"
@@ -806,11 +849,7 @@ class ReportGenerator:
         """
         if not citation:
             return None
-        audit_items = (audit or {}).get("items") or []
-        audit_lookup = {
-            (it.get("key"), it.get("kind")): it.get("audit_verdict")
-            for it in audit_items if isinstance(it, dict) and it.get("key")
-        }
+        audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
 
         s = citation.get("summary")
@@ -821,7 +860,7 @@ class ReportGenerator:
             if not isinstance(f, dict):
                 continue
             first_status = f.get("status", "")
-            audit_verdict = audit_lookup.get((f.get("key"), "integrity"))
+            audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
                 softened_count += 1
@@ -851,7 +890,8 @@ class ReportGenerator:
                     verdict_label = "source inaccessible"
                 else:
                     first_verdict = f.get("verdict", "")
-                    audit_verdict = audit_lookup.get((f.get("key"), "faithfulness"))
+                    audit_verdict = _audit_verdict_for(
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened:
@@ -864,7 +904,7 @@ class ReportGenerator:
                 faith_rows.append({
                     "key": ((f.get("key") or "").strip() or "?"),
                     "verdict_label": verdict_label,
-                    "claim": (f.get("claim") or "").strip(),
+                    "claim": (f.get("claim") if isinstance(f.get("claim"), str) else "").strip(),
                     "quote": (f.get("quote") or "").strip(),
                     "source": f.get("source") or "",
                 })
