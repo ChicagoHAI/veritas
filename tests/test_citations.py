@@ -447,6 +447,28 @@ def test_check_citations_idempotent_skip(tmp_path):
     m.assert_not_called()  # already produced -> skip
 
 
+def test_check_citations_skip_path_still_runs_missing_audit(tmp_path):
+    # A prior run's check succeeded but its audit didn't (e.g. interrupted).
+    # The idempotency fast-path must still give the audit its pass instead of
+    # returning before it.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(json.dumps({
+        "summary": {"total": 1},
+        "flagged": [{"key": "f2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+    }), encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+
+    assert m.call_count == 1  # the audit dispatch, not a re-run of the check
+    assert cfg.citation_audit_path.exists()
+
+
 def test_check_citations_skips_when_scope_matches_meta(tmp_path):
     runner, cfg = _citation_runner(tmp_path)  # default scope: main
     cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")

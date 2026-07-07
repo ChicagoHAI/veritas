@@ -1609,6 +1609,10 @@ class ReplicationRunner:
         if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
             if self._citation_check_scope_matches():
                 print("[OK] citation-check: skipped (already produced)")
+                # A missing or previously failed audit still gets its pass
+                # (idempotent: no-op when the audit exists or nothing needs
+                # auditing).
+                self._audit_citations()
                 return
             print(
                 "  citation-check: faithfulness scope changed "
