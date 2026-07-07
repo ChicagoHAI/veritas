@@ -504,6 +504,64 @@ def test_check_citations_idempotent_skip(tmp_path):
     m.assert_not_called()  # already produced -> skip
 
 
+def test_check_citations_reruns_over_malformed_output(tmp_path):
+    # A truncated/invalid check output must not satisfy the resume gate, or
+    # the feature goes permanently dead on it.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text("{truncated", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_check_path.write_text('{"summary": {"total": 1}, "flagged": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.called
+    meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
+    assert meta["faithfulness_scope"] == "main"
+
+
+def test_check_citations_meta_only_stamped_for_valid_output(tmp_path):
+    # A fresh run whose agent writes malformed JSON must not be stamped as
+    # produced; the next invocation re-runs instead of resuming over it.
+    runner, cfg = _citation_runner(tmp_path)
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_check_path.write_text("[1, 2", encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke):
+        runner._check_citations()
+    assert not cfg.citation_check_meta_path.exists()
+
+
+def test_check_citations_reruns_on_corrupt_meta(tmp_path):
+    # A meta sidecar that exists but cannot be parsed is damaged tracking
+    # data: re-run rather than trust output of unknown scope.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text("{truncated", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.called
+
+
+def test_check_citations_existing_fails_when_check_produces_nothing(tmp_path):
+    # The standalone subcommand's whole purpose is the check; a run where it
+    # produced nothing must exit non-zero and leave the report untouched.
+    runner, cfg = _citation_runner(tmp_path)
+    with patch.object(ReplicationRunner, "_invoke_provider", return_value=False), \
+         patch.object(runner, "report_generator") as rg:
+        result = runner.check_citations_existing()
+    assert not result.success
+    rg.generate.assert_not_called()
+
+
 def test_check_citations_skip_path_still_runs_missing_audit(tmp_path):
     # A prior run's check succeeded but its audit didn't (e.g. interrupted).
     # The idempotency fast-path must still give the audit its pass instead of
@@ -1312,6 +1370,10 @@ def test_check_citations_existing_runs_check_and_report(tmp_path):
 
     def fake_check():
         calls["check"] += 1
+        cfg.evaluation_dir.mkdir(parents=True, exist_ok=True)
+        cfg.citation_check_path.write_text(
+            '{"summary": {"total": 0}, "flagged": []}', encoding="utf-8"
+        )
 
     def fake_generate(replicate_dir, output_path=None, generate_pdf=True, generate_md=True):
         calls["report"] += 1

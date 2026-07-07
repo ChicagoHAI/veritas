@@ -7,7 +7,13 @@ from typing import Optional
 from rich.console import Console
 
 from veritas.core.runner import ReplicationRunner
-from veritas.core.config import Config
+from veritas.core.config import (
+    Config,
+    EVALUATION_SUBDIR,
+    CITATION_CHECK_FILE,
+    CITATION_CHECK_META_FILE,
+    CITATION_AUDIT_FILE,
+)
 
 app = typer.Typer(
     name="veritas",
@@ -184,6 +190,14 @@ def replicate(
         if state_file.exists():
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
+        # The citation check resumes on its own output files, outside pipeline
+        # state; discard those too so --restart truly starts fresh.
+        for stale in (
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_META_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_FILE,
+        ):
+            stale.unlink(missing_ok=True)
 
     # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
     # (only when explicitly set in the environment) -> 1 (single-pass default for

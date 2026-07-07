@@ -318,9 +318,13 @@ class ReplicationRunner:
 
             # Optional, opt-in citation-check submodule (reference verification).
             # Advisory only: does not feed the Replication Score. Idempotent.
-            # Runs before usage collection so its transcripts are counted.
+            # The guard makes the advisory contract structural: no failure in
+            # the citation phase can flip the run itself to failed.
             if self.config.run_citation_check:
-                self._check_citations()
+                try:
+                    self._check_citations()
+                except Exception as e:
+                    print(f"  Warning: citation check failed ({e}); continuing without it")
 
             try:
                 self._collect_resource_usage(state)
@@ -1606,7 +1610,7 @@ class ReplicationRunner:
         A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
-        if output_path.exists() and output_path.read_text(encoding="utf-8").strip():
+        if self._load_existing_citation_check(output_path) is not None:
             if self._citation_check_scope_matches():
                 print("[OK] citation-check: skipped (already produced)")
                 # A missing or previously failed audit still gets its pass
@@ -1659,6 +1663,16 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
+        data = self._load_existing_citation_check(output_path)
+        if data is None:
+            # Not stamped with a meta sidecar: the resume gate treats unusable
+            # output as not-produced, so the next invocation re-runs the check
+            # instead of silently going dead on it.
+            print(
+                f"  Warning: citation-check output at {output_path} is not a "
+                "valid JSON object; the check will re-run on the next invocation"
+            )
+            return
         try:
             self.config.citation_check_meta_path.write_text(
                 json.dumps({"faithfulness_scope": self.config.faithfulness_scope}),
@@ -1666,45 +1680,56 @@ class ReplicationRunner:
             )
         except OSError as e:
             print(f"  Warning: could not record citation-check settings ({e})")
-        try:
-            data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
-        except (ValueError, json.JSONDecodeError) as e:
-            print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
-        else:
-            if not isinstance(data, dict):
-                print("  Warning: citation-check output is not a JSON object; left as-is for audit")
-            else:
-                s = data.get("summary")
-                s = s if isinstance(s, dict) else {}
-                f = s.get("faithfulness")
-                f = f if isinstance(f, dict) else {}
-                print(
-                    f"  Citation check written; {s.get('total', '?')} refs "
-                    f"({s.get('likely_fabricated', 0)} likely fabricated, "
-                    f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
-                    f"{s.get('inconclusive', 0)} inconclusive, "
-                    f"{s.get('unresolved', 0)} unresolved); "
-                    f"faithfulness checked {f.get('checked', 0)} "
-                    f"({f.get('contradicted', 0)} contradicted, "
-                    f"{f.get('partially_supported', 0)} partial)"
-                )
+        s = data.get("summary")
+        s = s if isinstance(s, dict) else {}
+        f = s.get("faithfulness")
+        f = f if isinstance(f, dict) else {}
+        print(
+            f"  Citation check written; {s.get('total', '?')} refs "
+            f"({s.get('likely_fabricated', 0)} likely fabricated, "
+            f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+            f"{s.get('inconclusive', 0)} inconclusive, "
+            f"{s.get('unresolved', 0)} unresolved); "
+            f"faithfulness checked {f.get('checked', 0)} "
+            f"({f.get('contradicted', 0)} contradicted, "
+            f"{f.get('partially_supported', 0)} partial)"
+        )
 
         # Independent audit pass over the flagged verdicts (advisory; never raises).
-        self._audit_citations()
+        self._audit_citations(data)
+
+    @staticmethod
+    def _load_existing_citation_check(output_path: Path) -> Optional[dict]:
+        """Parse an existing citation_check.json. None when the file is absent,
+        empty, unreadable, or not a JSON object — all treated as not-produced,
+        so the check re-runs instead of resuming on top of unusable output."""
+        try:
+            raw = output_path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return None
+        if not raw.strip():
+            return None
+        try:
+            data = json.loads(_extract_json(raw))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def _citation_check_scope_matches(self) -> bool:
         """True if the existing citation-check output was produced with the
-        current faithfulness scope. Outputs without a meta sidecar (from before
-        scope tracking) are kept as-is."""
+        current faithfulness scope. Only a missing meta sidecar (an output from
+        before scope tracking) is kept as-is; a sidecar that exists but cannot
+        be read or parsed is damaged tracking data, so the check re-runs rather
+        than trusting output of unknown scope."""
         meta_path = self.config.citation_check_meta_path
         if not meta_path.exists():
             return True
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
-            return True
+            return False
         recorded = meta.get("faithfulness_scope") if isinstance(meta, dict) else None
-        return recorded is None or recorded == self.config.faithfulness_scope
+        return recorded == self.config.faithfulness_scope
 
     @staticmethod
     def _has_auditable_findings(check_data: dict) -> bool:
@@ -1717,28 +1742,28 @@ class ReplicationRunner:
                 return True
         return False
 
-    def _audit_citations(self) -> None:
+    def _audit_citations(self, check_data: Optional[dict] = None) -> None:
         """Independent re-check of the verify pass's flagged verdicts.
 
-        Reads ``evaluation/citation_check.json``; if it has any non-trivial
-        finding, runs a separate provider invocation (fresh context, API keys
-        stripped) that writes disagreements to ``evaluation/citation_audit.json``.
-        Advisory; idempotent; never raises.
+        Takes the parsed check output when the caller already has it (fresh
+        runs), otherwise reads ``evaluation/citation_check.json``; if it has
+        any non-trivial finding, runs a separate provider invocation (fresh
+        context, API keys stripped) that writes disagreements to
+        ``evaluation/citation_audit.json``. Advisory; idempotent; never raises.
         """
         check_path = self.config.citation_check_path
         audit_path = self.config.citation_audit_path
-        if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
-            print("[OK] citation-audit: skipped (already produced)")
-            return
-        if not (check_path.exists() and check_path.read_text(encoding="utf-8").strip()):
+        try:
+            if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
+                print("[OK] citation-audit: skipped (already produced)")
+                return
+        except (OSError, ValueError):
+            return  # unreadable existing audit: leave it as-is
+        if check_data is None:
+            check_data = self._load_existing_citation_check(check_path)
+        if check_data is None:
             return
         if not self.config.has_paper:
-            return
-        try:
-            check_data = json.loads(_extract_json(check_path.read_text(encoding="utf-8")))
-        except (ValueError, json.JSONDecodeError):
-            return
-        if not isinstance(check_data, dict):
             return
         if not self._has_auditable_findings(check_data):
             return
@@ -2181,6 +2206,18 @@ class ReplicationRunner:
         try:
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
+            if self._load_existing_citation_check(self.config.citation_check_path) is None:
+                # The check soft-fails internally; surface that as a command
+                # failure (exit 1) instead of a green message, and leave the
+                # existing report untouched.
+                return RunResult(
+                    success=False,
+                    error=(
+                        "the citation check did not produce a usable "
+                        f"{self.config.citation_check_path.name} (see transcript: "
+                        f"{self.config.citation_check_transcript_path})"
+                    ),
+                )
             report_path, pdf_path = self.report_generator.generate(
                 replicate_dir=self.config.output_dir,
                 generate_pdf=self.config.generate_pdf,
