@@ -150,10 +150,10 @@ class Config:
     citation_timeout: Optional[int] = None
 
     # Citation faithfulness scope: "main" (central attributed claims only) or
-    # "all" (every claim-bearing citation). Default "main".
-    faithfulness_scope: str = field(
-        default_factory=lambda: _env_str("VERITAS_CITATION_FAITHFULNESS_SCOPE", "main")
-    )
+    # "all" (every claim-bearing citation). Resolution (highest wins): CLI flag
+    # -> VERITAS_CITATION_FAITHFULNESS_SCOPE env var -> "main". The CLI passes
+    # None when its flag is not set, mirroring the timeout fields.
+    faithfulness_scope: Optional[str] = None
 
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
@@ -182,6 +182,12 @@ class Config:
         for field_name, env_name in self._TIMEOUT_ENV_VARS.items():
             if getattr(self, field_name) is None:
                 setattr(self, field_name, _env_opt_int(env_name, None))
+
+        # Faithfulness scope: same CLI-then-env-then-default resolution.
+        if self.faithfulness_scope is None:
+            self.faithfulness_scope = _env_str(
+                "VERITAS_CITATION_FAITHFULNESS_SCOPE", "main"
+            )
 
         # Convert input paths to Path objects (if provided)
         if self.repo_path is not None:

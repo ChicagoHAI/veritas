@@ -1133,6 +1133,24 @@ def test_faithfulness_scope_env_fallback(tmp_path, monkeypatch):
     assert cfg.faithfulness_scope == "all"
 
 
+def test_faithfulness_scope_env_applies_through_cli_none_sentinel(tmp_path, monkeypatch):
+    # The CLI passes None when its flag is not set (like the timeouts), so the
+    # env var must win over the code default even through an explicit kwarg.
+    monkeypatch.setenv("VERITAS_CITATION_FAITHFULNESS_SCOPE", "all")
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope=None)
+    assert cfg.faithfulness_scope == "all"
+
+
+def test_faithfulness_scope_cli_flag_beats_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERITAS_CITATION_FAITHFULNESS_SCOPE", "all")
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope="main")
+    assert cfg.faithfulness_scope == "main"
+
+
 # ---------------------------------------------------------------------------
 # --- prompt generation (faithfulness + audit) ---
 # ---------------------------------------------------------------------------

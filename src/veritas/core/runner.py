@@ -2013,6 +2013,10 @@ class ReplicationRunner:
             "plan":         self.config.replication_plan_transcript_path,
             "replicate":    self.config.replication_transcript_path,
             "assess_fixes": self.config.fix_severity_transcript_path,
+            # Advisory citation passes (opt-in). They have no PipelineState
+            # stage, so wall_seconds stays None; only their tokens are summed.
+            "citation_check": self.config.citation_check_transcript_path,
+            "citation_audit": self.config.citation_audit_transcript_path,
         }
         # verify transcripts: one per claim
         verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))

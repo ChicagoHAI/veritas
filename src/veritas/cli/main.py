@@ -130,12 +130,12 @@ def replicate(
         "--citation-timeout",
         help="Timeout in seconds for the citation-check phase. Default: no timeout.",
     ),
-    check_citations_faithfulness: str = typer.Option(
-        "main",
+    check_citations_faithfulness: Optional[str] = typer.Option(
+        None,
         "--check-citations-faithfulness",
         help="Citation faithfulness scope when --check-citations is on: 'main' "
-             "(central attributed claims only, default) or 'all' (every "
-             "claim-bearing citation).",
+             "(central attributed claims only) or 'all' (every claim-bearing "
+             "citation). Default: VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
     max_iters: Optional[int] = typer.Option(
         None,
@@ -453,9 +453,10 @@ def check_citations(
     paper: Optional[Path] = typer.Option(
         None, "--paper", help="Paper PDF (overrides the path recovered from the run's saved config).",
     ),
-    check_citations_faithfulness: str = typer.Option(
-        "main", "--check-citations-faithfulness",
-        help="Faithfulness scope: 'main' (default) or 'all'.",
+    check_citations_faithfulness: Optional[str] = typer.Option(
+        None, "--check-citations-faithfulness",
+        help="Faithfulness scope: 'main' or 'all'. "
+             "Default: VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
     provider: str = typer.Option("claude", "--provider", help="AI provider."),
     citation_timeout: Optional[int] = typer.Option(
