@@ -72,14 +72,15 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   subagent extracts the paper's reference list and runs a deterministic,
   LLM-free resolver (`core/citations.py`, staged into the workspace as a script)
   that verifies existence/metadata against Crossref/OpenAlex/Semantic
-  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates only unresolved
-  references. Output: `evaluation/citation_check.json`. Advisory: never changes
+  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates unresolved
+  references and venue-checks resolver-verified records that lack a venue.
+  Output: `evaluation/citation_check.json`. Advisory: never changes
   the Replication Score. Requires `--paper`. Method adapted from refchecker (MIT).
   The dispatch is a self-contained method that mirrors the research sub-agent
   pattern. The faithfulness sub-pass checks whether each cited source actually
   supports what the paper attributes to it, with verdicts `supported`,
-  `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a
-  verbatim quote from the source. `--check-citations-faithfulness main` (default)
+  `partially_supported`, `contradicted`, or `not_mentioned`; the first three are
+  each grounded in a verbatim quote from the source. `--check-citations-faithfulness main` (default)
   limits this to the paper's central attributed claims; `all` extends it to every
   claim-bearing citation. A scope change re-runs the check (the producing scope
   is recorded in `evaluation/.citation_check_meta.json`); outputs from before
@@ -89,7 +90,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   No human-review step.
   The `check-citations <replicate-dir>` subcommand runs the full citation check
   (including faithfulness and audit) on an already-completed run; it recovers the
-  paper path from the run's saved config, with `--paper` as an override.
+  paper path from the run's saved config, with `--paper` as an override (in
+  docker mode the saved path is a container path from the original run, so
+  `--paper` is effectively required there).
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 

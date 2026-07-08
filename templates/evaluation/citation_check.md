@@ -48,15 +48,16 @@ and continue. The resolver handles an empty list and the result will report
 Run the verification script over your extracted references:
 
 ```bash
-python {{ resolver_script_path }} {{ references_path }} {{ resolver_verdicts_path }}
+python "{{ resolver_script_path }}" "{{ references_path }}" "{{ resolver_verdicts_path }}"
 ```
 
 It queries Crossref, OpenAlex, Semantic Scholar, DBLP, and arXiv and writes a
 verdict per reference: `verified`, `metadata_mismatch`, or `unresolved`, with the
-authoritative record it found. **These verdicts are authoritative. Do not
-override `verified` or `metadata_mismatch`.** They were produced by matching
-real database records, which is more reliable than a web search. Read
-`{{ resolver_verdicts_path }}`.
+authoritative record it found. **These verdicts are authoritative. Never
+downgrade one, and do not override `metadata_mismatch`. The only permitted
+change is the empty-venue check below, which may upgrade a `verified` to
+`metadata_mismatch`.** They were produced by matching real database records,
+which is more reliable than a web search. Read `{{ resolver_verdicts_path }}`.
 
 Run the script once over the whole list (it processes every reference). If the
 script fails (non-zero exit), writes no file, or writes invalid JSON, do NOT
@@ -189,13 +190,16 @@ Rules:
   `source_status` is `inaccessible`.
 - When `source_status` is `inaccessible`, set `verdict` to `null` and `quote` to `""`.
 - Set `summary.faithfulness_scope` to `{{ faithfulness_scope }}`.
-- Keep `checked_support` exactly `true`. A `supported`/`partially_supported`/
+- Set `checked_support` to `false` only if you could not perform Step 4 at all;
+  otherwise keep it `true`. A `supported`/`partially_supported`/
   `contradicted` entry without a `quote` is invalid. Fix it or downgrade to
   `not_mentioned`/`inaccessible`. Print the JSON to stdout as well.
 - Copy `matched_record` verbatim from the resolver output for that reference's
-  key. For references you escalated by web search, set it to `null`.
-- `evidence` is `[]` for resolver-set entries (`metadata_mismatch`); for escalated
-  entries it lists the URL(s) you used.
+  key. Set it to `null` only for Step 3 escalations of `unresolved` references;
+  an entry from the Step 2 empty-venue check keeps its resolver record.
+- `evidence` is `[]` for entries taken unchanged from the resolver; for
+  web-checked entries (a Step 3 escalation or the Step 2 empty-venue check) it
+  lists the URL(s) you used.
 - For `flagged` entries, `evidence_basis` is `provided` when the resolver matched a
   database record; for a web-escalated entry use the basis of the page you read
   (`fetched_full` or `fetched_snippet`), or `inaccessible` if you could not open it.
