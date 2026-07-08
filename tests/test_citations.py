@@ -916,7 +916,7 @@ def test_audit_non_string_claim_does_not_crash():
     assert "Citation Check" in section
 
 
-def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
+def test_citation_view_reconciles_audit_for_both_formats(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)
     (out / "evaluation" / "citation_check.json").write_text(json.dumps({
@@ -943,7 +943,7 @@ def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
     }), encoding="utf-8")
 
     gen = ReportGenerator()
-    view = gen._citation_html_view(gen._load_citation_check(out), gen._load_citation_audit(out))
+    view = gen._citation_view(gen._load_citation_check(out), gen._load_citation_audit(out))
     assert view["total"] == 3 and view["fabricated"] == 1
     by_key = {r["key"]: r for r in view["flagged"]}
     # The audit's milder verdict softened the fabrication flag, same as the md path.
@@ -953,15 +953,15 @@ def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
     assert view["faith_rows"][0]["verdict_label"] == "supported"
 
 
-def test_citation_html_view_none_when_check_absent(tmp_path):
+def test_citation_view_none_when_check_absent(tmp_path):
     gen = ReportGenerator()
-    assert gen._citation_html_view(None, None) is None
+    assert gen._citation_view(None, None) is None
 
 
-def test_citation_html_view_normalizes_whitespace_keys():
+def test_citation_view_normalizes_whitespace_keys():
     # Same key normalization as the markdown path: whitespace-only -> "?".
     gen = ReportGenerator()
-    view = gen._citation_html_view({
+    view = gen._citation_view({
         "summary": {"total": 1},
         "flagged": [{"key": "   ", "status": "inconclusive", "detail": "d",
                      "matched_record": None, "evidence": []}],
@@ -1058,7 +1058,7 @@ def test_renderers_tolerate_hostile_agent_json():
     md = gen._render_citation_check(citation, audit)  # must not raise
     assert "js2024" in md
     assert "javascript:" not in md
-    view = gen._citation_html_view(citation, audit)   # must not raise
+    view = gen._citation_view(citation, audit)   # must not raise
     by_key = {r["key"]: r for r in view["flagged"]}
     assert by_key["js2024"]["url"] == ""              # unsafe scheme never linked
     html = gen._render_html(gen._build_html_context(
@@ -1088,7 +1088,7 @@ def test_renderers_tolerate_non_dict_summary():
     citation = {"summary": ["oops"], "flagged": [], "checked_support": True}
     gen = ReportGenerator()
     assert "Citation Check" in gen._render_citation_check(citation, None)
-    assert gen._citation_html_view(citation, None)["total"] == 0
+    assert gen._citation_view(citation, None)["total"] == 0
 
 
 def test_load_citation_check_tolerates_markdown_fences(tmp_path):

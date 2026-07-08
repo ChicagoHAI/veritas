@@ -156,7 +156,7 @@
   {% if citations.flagged %}
   <table>
     <thead><tr><th>Status</th><th>Ref</th><th>Detail</th><th>Source</th></tr></thead>
-    <tbody>{% for f in citations.flagged %}<tr><td class="st">{{ f.status_label }}</td><td><code>{{ f.key }}</code></td><td>{{ f.detail }}</td><td>{% if f.url %}<a href="{{ f.url }}">record</a>{% endif %}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for f in citations.flagged %}<tr><td class="st">{{ f.status_label }}</td><td><code>{{ f.key }}</code></td><td>{{ f.detail }}</td><td>{% if f.url %}<a href="{{ f.url }}">{{ f.source_label }}</a>{% endif %}</td></tr>{% endfor %}</tbody>
   </table>
   {% endif %}
   {% if citations.support_not_checked %}
