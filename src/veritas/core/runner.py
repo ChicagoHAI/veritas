@@ -1610,7 +1610,7 @@ class ReplicationRunner:
         A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
-        if self._load_existing_citation_check(output_path) is not None:
+        if self._load_json_object(output_path) is not None:
             if self._citation_check_scope_matches():
                 print("[OK] citation-check: skipped (already produced)")
                 # A missing or previously failed audit still gets its pass
@@ -1663,7 +1663,7 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
-        data = self._load_existing_citation_check(output_path)
+        data = self._load_json_object(output_path)
         if data is None:
             # Not stamped with a meta sidecar: the resume gate treats unusable
             # output as not-produced, so the next invocation re-runs the check
@@ -1699,10 +1699,10 @@ class ReplicationRunner:
         self._audit_citations(data)
 
     @staticmethod
-    def _load_existing_citation_check(output_path: Path) -> Optional[dict]:
-        """Parse an existing citation_check.json. None when the file is absent,
+    def _load_json_object(output_path: Path) -> Optional[dict]:
+        """Parse an agent-written JSON artifact. None when the file is absent,
         empty, unreadable, or not a JSON object — all treated as not-produced,
-        so the check re-runs instead of resuming on top of unusable output."""
+        so the producing pass re-runs instead of resuming on unusable output."""
         try:
             raw = output_path.read_text(encoding="utf-8")
         except (OSError, ValueError):
@@ -1753,14 +1753,13 @@ class ReplicationRunner:
         """
         check_path = self.config.citation_check_path
         audit_path = self.config.citation_audit_path
-        try:
-            if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
-                print("[OK] citation-audit: skipped (already produced)")
-                return
-        except (OSError, ValueError):
-            return  # unreadable existing audit: leave it as-is
+        # Same parse-validated gate as the check: garbage from a clean-exit
+        # audit agent must not permanently satisfy the resume check.
+        if self._load_json_object(audit_path) is not None:
+            print("[OK] citation-audit: skipped (already produced)")
+            return
         if check_data is None:
-            check_data = self._load_existing_citation_check(check_path)
+            check_data = self._load_json_object(check_path)
         if check_data is None:
             return
         if not self.config.has_paper:
@@ -2210,7 +2209,7 @@ class ReplicationRunner:
         try:
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
-            if self._load_existing_citation_check(self.config.citation_check_path) is None:
+            if self._load_json_object(self.config.citation_check_path) is None:
                 # The check soft-fails internally; surface that as a command
                 # failure (exit 1) instead of a green message, and leave the
                 # existing report untouched.

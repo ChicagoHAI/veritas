@@ -59,11 +59,18 @@ class Reference:
             year = int(year) if year not in (None, "") else None
         except (TypeError, ValueError):
             year = None
+        authors = d.get("authors") or []
+        if isinstance(authors, str):
+            # A string instead of a list is one author entry, not an iterable
+            # of characters. Kept whole: surname matching stays conservative.
+            authors = [authors]
+        elif not isinstance(authors, list):
+            authors = []
         return cls(
             raw=str(d.get("raw", "") or ""),
             key=str(d.get("key", "") or ""),
             title=str(d.get("title", "") or ""),
-            authors=[str(a) for a in (d.get("authors") or []) if str(a).strip()],
+            authors=[str(a) for a in authors if str(a).strip()],
             year=year,
             venue=str(d.get("venue", "") or ""),
             doi=str(d.get("doi", "") or ""),

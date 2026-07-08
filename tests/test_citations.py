@@ -59,6 +59,16 @@ def test_parse_references_tolerates_missing_fields_and_skips_empty():
     assert [r.raw for r in refs] == ["Some ref", "Only raw"]
 
 
+def test_reference_from_dict_wraps_string_authors():
+    # A string instead of a list is one author entry, never an iterable of
+    # characters (which would guarantee a false author mismatch).
+    ref = Reference.from_dict({"title": "T", "authors": "Ashish Vaswani, Noam Shazeer"})
+    assert ref.authors == ["Ashish Vaswani, Noam Shazeer"]
+    assert author_overlap(ref.authors, ["Ashish Vaswani"]) == 1.0
+    # Other non-list shapes degrade to no authors (no author check runs).
+    assert Reference.from_dict({"title": "T", "authors": {"a": 1}}).authors == []
+
+
 def test_verdict_to_dict_shape():
     v = CitationVerdict(
         key="x", title="T", status="metadata_mismatch",
@@ -650,6 +660,26 @@ def test_check_citations_tolerates_non_object_json_output(tmp_path):
         runner._check_citations()  # must NOT raise
 
 
+def test_audit_reruns_over_malformed_audit_output(tmp_path):
+    # Garbage from a clean-exit audit agent must not permanently satisfy the
+    # audit's resume gate (same contract as the check's gate).
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(json.dumps({
+        "summary": {"total": 1},
+        "flagged": [{"key": "f2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+    }), encoding="utf-8")
+    cfg.citation_audit_path.write_text("not json at all", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._audit_citations()
+    assert m.called
+
+
 def test_audit_citations_tolerates_non_object_check_json(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
     cfg.citation_check_path.write_text('["not an object"]', encoding="utf-8")
@@ -1035,6 +1065,23 @@ def test_renderers_tolerate_hostile_agent_json():
         None, [], None, None, None, None, "full",
         citation=citation, citation_audit=audit))
     assert "javascript:" not in html
+
+
+def test_audit_items_with_wrong_typed_fields_are_ignored():
+    # An unhashable kind or audit_verdict must degrade to an ignored item,
+    # not a TypeError inside the lookup or the severity comparison.
+    citation = {
+        "summary": {"total": 1},
+        "flagged": [{"key": "a2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+        "checked_support": True,
+    }
+    audit = {"items": [
+        {"key": "a2024", "kind": ["integrity"], "audit_verdict": "verified"},
+        {"key": "a2024", "kind": "integrity", "audit_verdict": ["verified"]},
+    ]}
+    section = ReportGenerator()._render_citation_check(citation, audit)  # no raise
+    assert "audit softened" not in section  # wrong-typed items carry no verdict
 
 
 def test_renderers_tolerate_non_dict_summary():

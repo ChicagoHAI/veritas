@@ -103,8 +103,10 @@ def _build_audit_lookup(audit) -> dict:
     for it in (audit or {}).get("items") or []:
         if not (isinstance(it, dict) and isinstance(it.get("key"), str) and it.get("key")):
             continue
-        lookup.setdefault((it.get("key"), it.get("kind")), []).append(
-            (_normalize_audit_claim(it.get("claim")), it.get("audit_verdict"))
+        # kind and audit_verdict are coerced so a wrong-typed (unhashable)
+        # value degrades to an ignored item instead of a TypeError.
+        lookup.setdefault((it.get("key"), _txt(it.get("kind"))), []).append(
+            (_normalize_audit_claim(it.get("claim")), _txt(it.get("audit_verdict")))
         )
     return lookup
 

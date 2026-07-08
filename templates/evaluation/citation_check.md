@@ -53,11 +53,12 @@ python "{{ resolver_script_path }}" "{{ references_path }}" "{{ resolver_verdict
 
 It queries Crossref, OpenAlex, Semantic Scholar, DBLP, and arXiv and writes a
 verdict per reference: `verified`, `metadata_mismatch`, or `unresolved`, with the
-authoritative record it found. **These verdicts are authoritative. Never
-downgrade one, and do not override `metadata_mismatch`. The only permitted
-change is the empty-venue check below, which may upgrade a `verified` to
-`metadata_mismatch`.** They were produced by matching real database records,
-which is more reliable than a web search. Read `{{ resolver_verdicts_path }}`.
+authoritative record it found. **`verified` and `metadata_mismatch` are
+authoritative: never downgrade one, and the only permitted upgrade is the
+empty-venue check below (a `verified` may become `metadata_mismatch`).
+`unresolved` verdicts are yours to settle in Step 3.** They were produced by
+matching real database records, which is more reliable than a web search.
+Read `{{ resolver_verdicts_path }}`.
 
 Run the script once over the whole list (it processes every reference). If the
 script fails (non-zero exit), writes no file, or writes invalid JSON, do NOT

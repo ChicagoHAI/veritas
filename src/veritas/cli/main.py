@@ -12,7 +12,9 @@ from veritas.core.config import (
     EVALUATION_SUBDIR,
     CITATION_CHECK_FILE,
     CITATION_CHECK_META_FILE,
+    CITATION_CHECK_TRANSCRIPT_FILE,
     CITATION_AUDIT_FILE,
+    CITATION_AUDIT_TRANSCRIPT_FILE,
 )
 
 app = typer.Typer(
@@ -191,11 +193,15 @@ def replicate(
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
         # The citation check resumes on its own output files, outside pipeline
-        # state; discard those too so --restart truly starts fresh.
+        # state; discard those too so --restart truly starts fresh. Transcripts
+        # included: resource-usage accounting sums them, so a stale one would
+        # bill the previous run's citation tokens to this run.
         for stale in (
             output_dir / EVALUATION_SUBDIR / CITATION_CHECK_FILE,
             output_dir / EVALUATION_SUBDIR / CITATION_CHECK_META_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_TRANSCRIPT_FILE,
             output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_TRANSCRIPT_FILE,
         ):
             stale.unlink(missing_ok=True)
 
