@@ -282,7 +282,20 @@ case "$1" in
     estimate)
         cmd_passthrough "$@"
         ;;
-    report|evaluate|check-citations)
+    report|evaluate)
+        cmd_passthrough "$@"
+        ;;
+    check-citations)
+        # The citation passes are LLM calls; fail fast when the provider CLI
+        # is missing, matching the docker wrapper's credential preflight.
+        cc_provider="$(extract_provider "$@")"
+        case "$cc_provider" in
+            claude|codex|gemini) require_tools python "$cc_provider" ;;
+            *)
+                echo "ERROR: unknown --provider: $cc_provider (expected claude|codex|gemini)" >&2
+                exit 1
+                ;;
+        esac
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

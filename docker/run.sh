@@ -1198,6 +1198,13 @@ cmd_replicate() {
         model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
     fi
 
+    # Polite-pool contact for the citation resolver's metadata requests when
+    # --check-citations runs inline. No-op unless the host exports it.
+    local contact_flag=""
+    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
+        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
@@ -1205,6 +1212,7 @@ cmd_replicate() {
         $env_file_flag \
         $env_keys_flag \
         $model_flag \
+        $contact_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1279,6 +1287,11 @@ cmd_evaluate() {
 # container path that no longer resolves.
 # -----------------------------------------------------------------------------
 cmd_check_citations() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
+        exit 1
+    fi
+
     ensure_image
     warn_if_outdated
     check_provider_credentials "$(extract_provider "$@")"
@@ -1290,6 +1303,9 @@ cmd_check_citations() {
         echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
         exit 1
     fi
+    # The container (UID 1000) writes evaluation/ and report/ into this dir;
+    # normalize permissions like rewrite_paths does for --output.
+    chmod -R a+rwX "$host_eval_dir" 2>/dev/null || true
 
     # --paper is the subcommand's only path flag; mount it read-only and
     # rewrite the argument. Everything else passes through unchanged.
@@ -1297,6 +1313,11 @@ cmd_check_citations() {
     local args=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --paper=*)
+                # Normalize the equals form onto the space-form arm below.
+                set -- --paper "${1#--paper=}" "${@:2}"
+                continue
+                ;;
             --paper)
                 local host_paper
                 host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
@@ -1322,9 +1343,17 @@ cmd_check_citations() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Crossref/OpenAlex polite-pool contact for the resolver's requests.
+    # No-op unless the host exports VERITAS_CONTACT_EMAIL.
+    local contact_flag=""
+    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
+        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
+        $contact_flag \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
