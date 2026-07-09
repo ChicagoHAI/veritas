@@ -41,6 +41,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 # Per-phase timeouts (default: no timeout)
 ./veritas replicate --repo ./my-project --analyze-timeout 600 --verify-timeout 300
 
+# Opt-in citation check (verify the paper's references exist + metadata is correct)
+./veritas replicate --paper paper.pdf --repo ./my-project --check-citations
+
 # Regenerate the report from existing outputs
 ./veritas report ./replicate-dir
 
@@ -64,6 +67,32 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 4. **Replicate** (`_replicate`) — runs the plan inside a writable copy of the codebase via an AI agent that actively fixes issues; collects execution evidence and fix records. The agent never sees `paper_claims.json`.
 5. **Assess Fixes** (`_assess_fixes`) — rates severity of each fix applied during replication (minor/major/critical) via a separate LLM pass. Output: `assess/fix_severity.json`.
 6. **Verify** (`_verify_with_resume`) — one provider invocation per claim. Each verifier reads the relevant evidence files and produces a structured verdict at `verify/<claim_id>.json` (status `match | partial | no_match | not_attempted | not_applicable`, type-specific `structured` field, free-text `rationale`, `evidence_refs`). Per-claim resume primitive: file-exists check. Final aggregation writes `verify/verdicts.json` and `verify/replication_score.json`.
+- **Citation check** (`_check_citations`, opt-in via `--check-citations`) — a
+  post-verify advisory submodule under the evaluate phase. A single web-enabled
+  subagent extracts the paper's reference list and runs a deterministic,
+  LLM-free resolver (`core/citations.py`, staged into the workspace as a script)
+  that verifies existence/metadata against Crossref/OpenAlex/Semantic
+  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates unresolved
+  references and venue-checks resolver-verified records that lack a venue.
+  Output: `evaluation/citation_check.json`. Advisory: never changes
+  the Replication Score. Requires `--paper`. Method adapted from refchecker (MIT).
+  The dispatch is a self-contained method that mirrors the research sub-agent
+  pattern. The faithfulness sub-pass checks whether each cited source actually
+  supports what the paper attributes to it, with verdicts `supported`,
+  `partially_supported`, `contradicted`, or `not_mentioned`; the first three are
+  each grounded in a verbatim quote from the source. `--check-citations-faithfulness main` (default)
+  limits this to the paper's central attributed claims; `all` extends it to every
+  claim-bearing citation. A scope change re-runs the check (the producing scope
+  is recorded in `evaluation/.citation_check_meta.json`); outputs from before
+  this tracking are kept as-is. An independent audit pass writes its own verdicts to
+  `evaluation/citation_audit.json`; a deterministic reconciliation softens any flagged
+  verdict toward the audit only when the audit is less severe (never escalates).
+  No human-review step.
+  The `check-citations <replicate-dir>` subcommand runs the full citation check
+  (including faithfulness and audit) on an already-completed run; it recovers the
+  paper path from the run's saved config, with `--paper` as an override (in
+  docker mode the saved path is a container path from the original run, so
+  `--paper` is effectively required there).
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 

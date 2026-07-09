@@ -316,11 +316,21 @@ class ReplicationRunner:
             if self.config.run_evaluation:
                 self._evaluate()
 
+            # Optional, opt-in citation-check submodule (reference verification).
+            # Advisory only: does not feed the Replication Score. Idempotent.
+            # The guard makes the advisory contract structural: no failure in
+            # the citation phase can flip the run itself to failed.
+            if self.config.run_citation_check:
+                try:
+                    self._check_citations()
+                except Exception as e:
+                    print(f"  Warning: citation check failed ({e}); continuing without it")
+
             try:
                 self._collect_resource_usage(state)
             except Exception as e:
                 print(f"  Warning: Could not collect resource usage: {e}")
-            
+
             report_path, pdf_path = self._report(
                 claims, verdicts, score, evidence, fix_assessment,
             )
@@ -1568,6 +1578,225 @@ class ReplicationRunner:
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: evaluation output is not valid JSON ({e}); left as-is for audit")
 
+    def _stage_resolver_script(self) -> Path:
+        """Copy the standalone deterministic resolver into the agent workspace.
+
+        ``core/citations.py`` imports only the stdlib, so the copied file runs as
+        a self-contained script the citation-check agent invokes. Copying (rather
+        than relying on veritas being importable from the agent's shell) keeps it
+        runtime-agnostic across docker and host modes. The source is located via
+        ``importlib`` so a ``.py`` path is used even on compiled installs.
+        """
+        import importlib.util
+
+        spec = importlib.util.find_spec("veritas.core.citations")
+        if spec is None or not spec.origin:
+            raise RuntimeError("cannot locate the veritas.core.citations source file")
+        dest = self.config.resolver_script_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(spec.origin, dest)
+        return dest
+
+    def _check_citations(self) -> None:
+        """Opt-in citation-check submodule (post-verify; under evaluate).
+
+        A single web-enabled provider invocation extracts the paper's reference
+        list, runs the staged deterministic resolver (authoritative for
+        existence/metadata), and escalates only unresolved references. Advisory:
+        the output at ``evaluation/citation_check.json`` does NOT alter the
+        Replication Score. Idempotent (skips when already produced with the
+        current faithfulness scope) and never raises into the pipeline.
+
+        A self-contained method that mirrors the research sub-agent dispatch.
+        """
+        output_path = self.config.citation_check_path
+        if self._load_json_object(output_path) is not None:
+            if self._citation_check_scope_matches():
+                print("[OK] citation-check: skipped (already produced)")
+                # A missing or previously failed audit still gets its pass
+                # (idempotent: no-op when the audit exists or nothing needs
+                # auditing).
+                self._audit_citations()
+                return
+            print(
+                "  citation-check: faithfulness scope changed "
+                f"(now '{self.config.faithfulness_scope}'); re-running"
+            )
+            # Discard the stale outputs before re-running: provider success is
+            # only the subprocess exit code, so a re-run that exits cleanly
+            # without writing must not leave the old output to be stamped with
+            # the new scope. The audit re-checks the check's findings, so it
+            # is stale too.
+            output_path.unlink(missing_ok=True)
+            self.config.citation_check_meta_path.unlink(missing_ok=True)
+            self.config.citation_audit_path.unlink(missing_ok=True)
+
+        if not self.config.has_paper:  # defensive; config validation already enforces this
+            print("  citation-check: no paper available; skipping")
+            return
+
+        print("Running citation-check submodule (reference verification)...")
+        try:
+            self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+            script_path = self._stage_resolver_script()
+            prompt = self.prompt_generator.generate_citation_check_prompt(
+                output_dir=self.config.output_dir,
+                paper_path=self.config.paper_path,
+                resolver_script_path=script_path,
+                faithfulness_scope=self.config.faithfulness_scope,
+            )
+            prompt_path = self.config.prompts_dir / "citation_check_prompt.txt"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            success = self._invoke_provider(
+                prompt=prompt,
+                working_dir=self.config.output_dir,
+                log_path=self.config.citation_check_transcript_path,
+                timeout=self.config.citation_timeout,
+            )
+        except Exception as e:
+            print(f"  Warning: citation-check could not run ({e}); skipped")
+            return
+        if not success:
+            print(f"  Warning: citation-check did not succeed (transcript: {self.config.citation_check_transcript_path})")
+            return
+        if not output_path.exists():
+            print(f"  Warning: citation-check agent did not write {output_path}")
+            return
+        data = self._load_json_object(output_path)
+        if data is None:
+            # Not stamped with a meta sidecar: the resume gate treats unusable
+            # output as not-produced, so the next invocation re-runs the check
+            # instead of silently going dead on it.
+            print(
+                f"  Warning: citation-check output at {output_path} is not a "
+                "valid JSON object; the check will re-run on the next invocation"
+            )
+            return
+        try:
+            self.config.citation_check_meta_path.write_text(
+                json.dumps({"faithfulness_scope": self.config.faithfulness_scope}),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            print(f"  Warning: could not record citation-check settings ({e})")
+        s = data.get("summary")
+        s = s if isinstance(s, dict) else {}
+        f = s.get("faithfulness")
+        f = f if isinstance(f, dict) else {}
+        print(
+            f"  Citation check written; {s.get('total', '?')} refs "
+            f"({s.get('likely_fabricated', 0)} likely fabricated, "
+            f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+            f"{s.get('inconclusive', 0)} inconclusive, "
+            f"{s.get('unresolved', 0)} unresolved); "
+            f"faithfulness checked {f.get('checked', 0)} "
+            f"({f.get('contradicted', 0)} contradicted, "
+            f"{f.get('partially_supported', 0)} partial)"
+        )
+
+        # Independent audit pass over the flagged verdicts (advisory; never raises).
+        self._audit_citations(data)
+
+    @staticmethod
+    def _load_json_object(output_path: Path) -> Optional[dict]:
+        """Parse an agent-written JSON artifact. None when the file is absent,
+        empty, unreadable, or not a JSON object — all treated as not-produced,
+        so the producing pass re-runs instead of resuming on unusable output."""
+        try:
+            raw = output_path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return None
+        if not raw.strip():
+            return None
+        try:
+            data = json.loads(_extract_json(raw))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _citation_check_scope_matches(self) -> bool:
+        """True if the existing citation-check output was produced with the
+        current faithfulness scope. Only a missing meta sidecar (an output from
+        before scope tracking) is kept as-is; a sidecar that exists but cannot
+        be read or parsed is damaged tracking data, so the check re-runs rather
+        than trusting output of unknown scope."""
+        meta_path = self.config.citation_check_meta_path
+        if not meta_path.exists():
+            return True
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        recorded = meta.get("faithfulness_scope") if isinstance(meta, dict) else None
+        return recorded == self.config.faithfulness_scope
+
+    @staticmethod
+    def _has_auditable_findings(check_data: dict) -> bool:
+        """True if the citation-check output has any flagged integrity item or a
+        contradicted/partially_supported faithfulness verdict worth re-checking."""
+        if (check_data.get("flagged") or []):
+            return True
+        for f in check_data.get("faithfulness") or []:
+            if isinstance(f, dict) and f.get("verdict") in ("contradicted", "partially_supported"):
+                return True
+        return False
+
+    def _audit_citations(self, check_data: Optional[dict] = None) -> None:
+        """Independent re-check of the verify pass's flagged verdicts.
+
+        Takes the parsed check output when the caller already has it (fresh
+        runs), otherwise reads ``evaluation/citation_check.json``; if it has
+        any non-trivial finding, runs a separate provider invocation (fresh
+        context, API keys stripped) that writes disagreements to
+        ``evaluation/citation_audit.json``. Advisory; idempotent; never raises.
+        """
+        check_path = self.config.citation_check_path
+        audit_path = self.config.citation_audit_path
+        # Same parse-validated gate as the check: garbage from a clean-exit
+        # audit agent must not permanently satisfy the resume check.
+        if self._load_json_object(audit_path) is not None:
+            print("[OK] citation-audit: skipped (already produced)")
+            return
+        if check_data is None:
+            check_data = self._load_json_object(check_path)
+        if check_data is None:
+            return
+        if not self.config.has_paper:
+            return
+        if not self._has_auditable_findings(check_data):
+            return
+        print("Running citation-audit (independent re-check of flagged verdicts)...")
+        try:
+            prompt = self.prompt_generator.generate_citation_audit_prompt(
+                output_dir=self.config.output_dir,
+                paper_path=self.config.paper_path,
+            )
+            prompt_path = self.config.prompts_dir / "citation_audit_prompt.txt"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            success = self._invoke_provider(
+                prompt=prompt,
+                working_dir=self.config.output_dir,
+                log_path=self.config.citation_audit_transcript_path,
+                timeout=self.config.citation_timeout,
+            )
+        except Exception as e:
+            print(f"  Warning: citation-audit could not run ({e}); skipped")
+            return
+        if not success:
+            print(f"  Warning: citation-audit did not succeed (transcript: {self.config.citation_audit_transcript_path})")
+            return
+        if not audit_path.exists():
+            print(f"  Warning: citation-audit agent did not write {audit_path}")
+            return
+        try:
+            data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
+            n = len(data.get("items") or []) if isinstance(data, dict) else 0
+            print(f"  Citation audit written; {n} item(s) re-checked")
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
+
     # -- Phase 4: Verify ---------------------------------------------------
 
     def _run_single_verify(
@@ -1783,6 +2012,10 @@ class ReplicationRunner:
             "plan":         self.config.replication_plan_transcript_path,
             "replicate":    self.config.replication_transcript_path,
             "assess_fixes": self.config.fix_severity_transcript_path,
+            # Advisory citation passes (opt-in). They have no PipelineState
+            # stage, so wall_seconds stays None; only their tokens are summed.
+            "citation_check": self.config.citation_check_transcript_path,
+            "citation_audit": self.config.citation_audit_transcript_path,
         }
         # verify transcripts: one per claim
         verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))
@@ -1963,6 +2196,46 @@ class ReplicationRunner:
             evidence=evidence,
             fix_assessment=fix_assessment,
         )
+
+    def check_citations_existing(self) -> RunResult:
+        """Run the citation check on an already-completed run, then refresh the report.
+
+        Assumes ``config.output_dir`` is a finished run directory and
+        ``config.paper_path`` was recovered by the caller. Runs the self-contained
+        citation check (verify + independent audit) and regenerates the report so
+        it includes the citation sections. Advisory; never touches the Replication
+        Score.
+        """
+        try:
+            self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+            self._check_citations()
+            if self._load_json_object(self.config.citation_check_path) is None:
+                # The check soft-fails internally; surface that as a command
+                # failure (exit 1) instead of a green message, and leave the
+                # existing report untouched.
+                return RunResult(
+                    success=False,
+                    error=(
+                        "the citation check did not produce a usable "
+                        f"{self.config.citation_check_path.name} (see transcript: "
+                        f"{self.config.citation_check_transcript_path})"
+                    ),
+                )
+            report_path, pdf_path = self.report_generator.generate(
+                replicate_dir=self.config.output_dir,
+                generate_pdf=self.config.generate_pdf,
+                generate_md=True,
+            )
+            return RunResult(success=True, report_path=report_path, pdf_path=pdf_path)
+        except Exception as e:
+            return RunResult(success=False, error=str(e))
+        finally:
+            # Same API-key redaction pass run() applies; this entry point writes
+            # prompts and transcripts without going through run().
+            try:
+                sanitize_logs_directory(self.config.output_dir)
+            except Exception:
+                pass
 
     # -- Resume helpers ----------------------------------------------------
 

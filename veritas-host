@@ -239,8 +239,8 @@ cmd_replicate() {
 }
 
 cmd_passthrough() {
-    # report / evaluate — no pre/post staging needed; just
-    # forward to the python CLI.
+    # report / evaluate / estimate / check-citations — no pre/post staging
+    # needed; just forward to the python CLI.
     local subcmd="$1"; shift
     run_veritas_cli "$subcmd" "$@"
 }
@@ -255,6 +255,7 @@ Subcommands:
   estimate      Estimate compute/cost for a paper without running replication
   evaluate      Run the evaluation manager + report on an existing replicate dir
   report        Regenerate report from an existing replicate output dir
+  check-citations  Verify the paper's references on an existing replicate dir
 
 Same flags as the docker \`./veritas\` wrapper. The host wrapper:
   - copies templates/skills to <--output>/veritas-skills
@@ -282,6 +283,19 @@ case "$1" in
         cmd_passthrough "$@"
         ;;
     report|evaluate)
+        cmd_passthrough "$@"
+        ;;
+    check-citations)
+        # The citation passes are LLM calls; fail fast when the provider CLI
+        # is missing, matching the docker wrapper's credential preflight.
+        cc_provider="$(extract_provider "$@")"
+        case "$cc_provider" in
+            claude|codex|gemini) require_tools python "$cc_provider" ;;
+            *)
+                echo "ERROR: unknown --provider: $cc_provider (expected claude|codex|gemini)" >&2
+                exit 1
+                ;;
+        esac
         cmd_passthrough "$@"
         ;;
     -h|--help|help)
