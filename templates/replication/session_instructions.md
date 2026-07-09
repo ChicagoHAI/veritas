@@ -56,7 +56,8 @@ A step is only "unreproducible" once distinct strategies have each failed for a 
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology, parameters, and experimental setup. See **Reporting Discipline** below for how to treat any result values it reports.
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
-{% if gpu_available is not none %}- **Hardware:** {% if gpu_available %}a GPU is available in this environment (confirmed at launch) — use it for GPU-capable steps.{% else %}no GPU is available in this environment (confirmed at launch) — do not plan around GPU-only code paths; use CPU fallbacks.{% endif %}
+{% if gpu_available == true %}- **Hardware:** a GPU is available in this environment (confirmed at launch) — use it for GPU-capable steps.
+{% elif gpu_available == false %}- **Hardware:** no GPU is available in this environment (confirmed at launch) — do not plan around GPU-only code paths; use CPU fallbacks.
 {% endif %}
 
 Write only under the working directory and the output directory above. Other subdirectories of the run output (`analyze/`, `verify/`, ...) belong to other pipeline phases — do not write into them.
