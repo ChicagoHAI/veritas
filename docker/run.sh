@@ -1376,97 +1376,15 @@ cmd_report() {
 }
 
 # -----------------------------------------------------------------------------
-# Evaluate: run the evaluation manager + report on an existing replication dir
-# (the product layer, decoupled from replicate). Needs provider credentials
-# because the manager is an LLM pass; reads everything from the mounted output
-# dir, so the original paper/repo need not be re-supplied.
+# Shared launcher for the post-hoc eval-layer subcommands (evaluate,
+# check-citations). Both operate on an existing replication dir: resolve and
+# mount it, rewrite a --paper flag onto a read-only mount, and run the CLI
+# verb in the container. Verb-independent by design — the forwarded flags
+# (auth/engine vars, ANTHROPIC_MODEL, VERITAS_CONTACT_EMAIL) are no-ops when
+# the host does not export them.
 # -----------------------------------------------------------------------------
-cmd_evaluate() {
-    ensure_image
-    warn_if_outdated
-    load_provider_auth_env
-    check_provider_credentials "$(extract_bucket_provider --evaluate-model "$@")"
-
-    local eval_dir="$1"; shift
-    local host_eval_dir
-    host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
-    if [ ! -d "$host_eval_dir" ]; then
-        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
-        exit 1
-    fi
-
-    # --paper is the subcommand's only path flag; mount it read-only and
-    # rewrite the argument. Everything else passes through unchanged.
-    local paper_mount=""
-    local args=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --paper=*)
-                # Normalize the equals form onto the space-form arm below.
-                set -- --paper "${1#--paper=}" "${@:2}"
-                continue
-                ;;
-            --paper)
-                [ $# -ge 2 ] || break
-                local host_paper
-                host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
-                if [ ! -f "$host_paper" ]; then
-                    echo -e "${RED}File not found:${NC} $2" >&2
-                    exit 1
-                fi
-                local basename
-                basename=$(basename "$host_paper")
-                paper_mount="-v \"$host_paper:/workspace/inputs/$basename:ro\""
-                args="$args --paper \"/workspace/inputs/$basename\""
-                shift 2
-                ;;
-            *)
-                args="$args \"$1\""
-                shift
-                ;;
-        esac
-    done
-
-    local tty_flag=$(get_tty_flag)
-    local platform_flag=$(get_platform_flags)
-    local credential_mounts=$(get_cli_credential_mounts)
-    ensure_credential_perms
-    local auth_flags=$(get_provider_auth_flags)
-
-    # Forward an explicitly-set model override so the evaluation manager's LLM
-    # pass pins the same model as replication. Passed as a direct -e. No-op
-    # unless the host exports ANTHROPIC_MODEL.
-    local model_flag=""
-    if [ -n "$ANTHROPIC_MODEL" ]; then
-        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
-    fi
-
-    eval "docker run $tty_flag --rm \
-        $platform_flag \
-        $credential_mounts \
-        $auth_flags \
-        $model_flag \
-        $paper_mount \
-        -v \"$host_eval_dir:/workspace/eval\" \
-        -w /workspace \
-        \"$IMAGE_NAME\" \
-        veritas evaluate /workspace/eval $args"
-}
-
-# -----------------------------------------------------------------------------
-# Citation check: reference integrity + faithfulness on an existing replication
-# dir (the post-hoc twin of `replicate --check-citations`). Advisory: never
-# changes the Replication Score. Needs provider credentials because the
-# extraction and faithfulness passes are LLM calls. A --paper given here is
-# mounted read-only and its path rewritten; without it the CLI falls back to
-# the paper path saved in the run's config, which for containerized runs is a
-# container path that no longer resolves.
-# -----------------------------------------------------------------------------
-cmd_check_citations() {
-    if [ $# -eq 0 ]; then
-        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
-        exit 1
-    fi
+run_eval_container() {
+    local verb="$1"; shift
 
     ensure_image
     warn_if_outdated
@@ -1484,7 +1402,7 @@ cmd_check_citations() {
     # normalize permissions like rewrite_paths does for --output.
     chmod -R a+rwX "$host_eval_dir" 2>/dev/null || true
 
-    # --paper is the subcommand's only path flag; mount it read-only and
+    # --paper is the subcommands' only path flag; mount it read-only and
     # rewrite the argument. Everything else passes through unchanged.
     local paper_mount=""
     local args=""
@@ -1522,8 +1440,16 @@ cmd_check_citations() {
     ensure_credential_perms
     local auth_flags=$(get_provider_auth_flags)
 
-    # Crossref/OpenAlex polite-pool contact for the resolver's requests.
-    # No-op unless the host exports VERITAS_CONTACT_EMAIL.
+    # Forward an explicitly-set model override so the evaluate-bucket LLM
+    # passes pin the same model as replication. No-op unless the host
+    # exports ANTHROPIC_MODEL.
+    local model_flag=""
+    if [ -n "$ANTHROPIC_MODEL" ]; then
+        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+    fi
+
+    # Crossref/OpenAlex polite-pool contact for the citation resolver's
+    # metadata requests. No-op unless the host exports VERITAS_CONTACT_EMAIL.
     local contact_flag=""
     if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
         contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
@@ -1533,12 +1459,40 @@ cmd_check_citations() {
         $platform_flag \
         $credential_mounts \
         $auth_flags \
+        $model_flag \
         $contact_flag \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas check-citations /workspace/eval $args"
+        veritas $verb /workspace/eval $args"
+}
+
+# -----------------------------------------------------------------------------
+# Evaluate: run the evaluation manager + report on an existing replication dir
+# (the product layer, decoupled from replicate). Needs provider credentials
+# because the manager is an LLM pass; reads everything from the mounted output
+# dir, so the original paper/repo need not be re-supplied.
+# -----------------------------------------------------------------------------
+cmd_evaluate() {
+    run_eval_container evaluate "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Citation check: reference integrity + faithfulness on an existing replication
+# dir (the post-hoc twin of `replicate --check-citations`). Advisory: never
+# changes the Replication Score. Needs provider credentials because the
+# extraction and faithfulness passes are LLM calls. A --paper given here is
+# mounted read-only and its path rewritten; without it the CLI falls back to
+# the paper path saved in the run's config, which for containerized runs is a
+# container path that no longer resolves.
+# -----------------------------------------------------------------------------
+cmd_check_citations() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
+        exit 1
+    fi
+    run_eval_container check-citations "$@"
 }
 
 # -----------------------------------------------------------------------------
