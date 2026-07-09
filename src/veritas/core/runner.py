@@ -317,13 +317,7 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            # Buckets whose output reaches the replication agent: the plan
-            # (analyze bucket) and codegen feed it directly, and the manager
-            # directive (evaluate bucket) does when the retry loop is on.
-            leak_buckets = ["analyze", "codegen", "replicate"]
-            if self.config.max_iters > 1:
-                leak_buckets.append("evaluate")
-            for leak_bucket in leak_buckets:
+            for leak_bucket in self._leak_buckets():
                 _, leak_model = self.config.engine_for(leak_bucket)
                 if is_web_locked_slug(leak_model):
                     print(
@@ -2773,6 +2767,20 @@ class ReplicationRunner:
             self._collect_resource_usage(PipelineState(self.config.output_dir))
         except Exception as e:
             print(f"  Warning: Could not collect resource usage: {e}")
+
+    def _leak_buckets(self) -> List[str]:
+        """Buckets whose output reaches the replication agent: the plan
+        (analyze bucket) always, codegen when it runs (paper-only mode),
+        and the manager directive (evaluate bucket) when the retry loop
+        is on. A web-locked engine on any of these defeats the
+        anti-leakage design."""
+        buckets = ["analyze"]
+        if self.config.mode == "paper-only":
+            buckets.append("codegen")
+        buckets.append("replicate")
+        if self.config.max_iters > 1:
+            buckets.append("evaluate")
+        return buckets
 
     def _active_buckets(self, dry_run: bool = False) -> set:
         """Buckets whose engines this run will actually invoke."""

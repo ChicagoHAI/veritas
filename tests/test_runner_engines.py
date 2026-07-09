@@ -547,3 +547,27 @@ def test_replicate_entry_restores_codegen_snapshot_in_paper_only(tmp_path):
 
     ReplicationRunner(config)._refresh_codebase_if_stale(state)
     assert (codebase / "gen.py").read_text(encoding="utf-8") == "pristine-generated"
+
+
+# -- leakage-warning bucket selection ----------------------------------------
+
+def test_leak_buckets_exclude_codegen_outside_paper_only(tmp_path):
+    # codegen never runs outside paper-only mode; a web-locked global model
+    # must not warn about a bucket that stays inert.
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out")
+    assert "codegen" not in ReplicationRunner(config)._leak_buckets()
+
+
+def test_leak_buckets_include_codegen_in_paper_only(tmp_path):
+    paper = tmp_path / "paper.pdf"; paper.write_text("x", encoding="utf-8")
+    config = Config(paper_path=paper, output_dir=tmp_path / "out")
+    assert "codegen" in ReplicationRunner(config)._leak_buckets()
+
+
+def test_leak_buckets_include_evaluate_only_when_loop_on(tmp_path):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    single = Config(repo_path=repo, output_dir=tmp_path / "out", max_iters=1)
+    looped = Config(repo_path=repo, output_dir=tmp_path / "out2", max_iters=2)
+    assert "evaluate" not in ReplicationRunner(single)._leak_buckets()
+    assert "evaluate" in ReplicationRunner(looped)._leak_buckets()
