@@ -13,7 +13,11 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from veritas.core.config import BUCKETS, Config, OUTPUT_SUBDIRS, is_web_locked_slug
 from veritas.core.models.resource_estimate import ResourceEstimate
-from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
+from veritas.core.pipeline_state import (
+    PipelineState,
+    STATUS_INSUFFICIENT_SPEC,
+    state_file_path,
+)
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
@@ -2775,7 +2779,7 @@ class ReplicationRunner:
         """Best-effort resource_usage refresh for standalone entry points,
         so their transcripts count toward the run's totals. Skipped when the
         directory has no pipeline state (nothing established the baseline)."""
-        state_file = self.config.veritas_state_dir / "pipeline_state.json"
+        state_file = state_file_path(self.config.output_dir)
         if not state_file.exists():
             return
         try:

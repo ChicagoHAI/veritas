@@ -22,6 +22,26 @@ STATE_SCHEMA_VERSION = 3
 STATUS_INSUFFICIENT_SPEC = "insufficient_spec"
 
 
+def state_file_path(output_dir) -> Path:
+    """Canonical location of a run's pipeline state file."""
+    return Path(output_dir) / STATE_DIR / STATE_FILE
+
+
+def read_state_dict(output_dir) -> Dict[str, Any]:
+    """Best-effort read of a run's pipeline state for post-hoc consumers.
+
+    Unlike ``PipelineState`` (which owns the live file and enforces the
+    schema), this returns the raw dict — empty when the file is absent,
+    unreadable, or not a JSON object — so report generation and standalone
+    CLI recovery degrade gracefully on legacy or damaged directories.
+    """
+    try:
+        data = json.loads(state_file_path(output_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 class PipelineState:
     """Tracks pipeline execution state for resumable phases."""
 

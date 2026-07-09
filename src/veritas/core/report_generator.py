@@ -32,6 +32,7 @@ from veritas.core.config import (
     WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.fix_severity import FixSeverityAssessment
+from veritas.core.pipeline_state import read_state_dict
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
     PaperClaims,
@@ -81,14 +82,7 @@ def read_engines_from_state(output_dir) -> dict:
     """
     if not output_dir:
         return {}
-    state_path = Path(output_dir) / ".veritas" / "pipeline_state.json"
-    if not state_path.exists():
-        return {}
-    try:
-        config = json.loads(
-            state_path.read_text(encoding="utf-8")).get("config") or {}
-    except (OSError, ValueError, AttributeError):
-        return {}
+    config = read_state_dict(output_dir).get("config") or {}
     prefix = "engine_"
     return {
         key[len(prefix):]: value
@@ -361,16 +355,8 @@ class ReportGenerator:
         Reads from ``state['config']`` — the canonical location, since ``mode``
         is a runtime configuration knob, not an input artifact.
         """
-        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-        if not state_path.exists():
-            return None
-        try:
-            with open(state_path, encoding='utf-8') as f:
-                data = json.load(f)
-            config = data.get("config") or {}
-            return config.get("mode")
-        except (OSError, json.JSONDecodeError):
-            return None
+        config = read_state_dict(replicate_dir).get("config") or {}
+        return config.get("mode")
 
     def _load_fix_assessment(self, replicate_dir: Path) -> Optional[FixSeverityAssessment]:
         """Load assess/fix_severity.json for a from-artifacts re-render.

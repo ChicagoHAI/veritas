@@ -1,6 +1,5 @@
 """Main CLI entry point for Veritas."""
 
-import json
 import typer
 from pathlib import Path
 from typing import Optional
@@ -8,6 +7,7 @@ from rich.console import Console
 
 from veritas.core.runner import ReplicationRunner
 from veritas.core.config import (
+    BUCKETS,
     Config,
     EVALUATION_SUBDIR,
     CITATION_CHECK_FILE,
@@ -16,6 +16,7 @@ from veritas.core.config import (
     CITATION_AUDIT_FILE,
     CITATION_AUDIT_TRANSCRIPT_FILE,
 )
+from veritas.core.pipeline_state import read_state_dict, state_file_path
 
 def _recovered_engine_kwargs(replicate_dir, provider, explicit):
     """Engine kwargs for a standalone pass over an existing run.
@@ -26,17 +27,9 @@ def _recovered_engine_kwargs(replicate_dir, provider, explicit):
     passed explicitly win; recorded engines without a model pin (bare
     provider strings) are covered by the recovered provider.
     """
-    recorded = {}
-    state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-    if state_path.exists():
-        try:
-            recorded = (json.loads(state_path.read_text(encoding="utf-8"))
-                        .get("config") or {})
-        except (OSError, ValueError):
-            recorded = {}
+    recorded = read_state_dict(replicate_dir).get("config") or {}
     kwargs = {"provider": provider or recorded.get("provider") or "claude"}
-    for bucket in ("analyze", "codegen", "replicate", "assess", "verify",
-                   "evaluate"):
+    for bucket in BUCKETS:
         field = f"{bucket}_model"
         if explicit.get(field) is not None:
             kwargs[field] = explicit[field]
@@ -259,7 +252,7 @@ def replicate(
         raise typer.Exit(1)
 
     if restart:
-        state_file = output_dir / ".veritas" / "pipeline_state.json"
+        state_file = state_file_path(output_dir)
         if state_file.exists():
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
@@ -500,21 +493,13 @@ def evaluate(
 
     # Recover the original inputs/mode from the run's state; fall back to the
     # patched codebase so evaluation works even if the source inputs moved.
-    state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-    mode = "auto"
-    repo = data = None
-    recovered_paper = None
-    if state_path.exists():
-        try:
-            st = json.loads(state_path.read_text(encoding="utf-8"))
-            cfg = st.get("config") or {}
-            inp = st.get("inputs") or {}
-            mode = cfg.get("mode", "auto")
-            recovered_paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
-            repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
-            data = Path(inp["data_path"]) if inp.get("data_path") else None
-        except (OSError, ValueError):
-            pass
+    st = read_state_dict(replicate_dir)
+    cfg = st.get("config") or {}
+    inp = st.get("inputs") or {}
+    mode = cfg.get("mode", "auto")
+    recovered_paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
+    repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
+    data = Path(inp["data_path"]) if inp.get("data_path") else None
 
     if paper is None:
         paper = recovered_paper
@@ -616,15 +601,9 @@ def check_citations(
 
     recovered_paper = paper
     if recovered_paper is None:
-        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-        if state_path.exists():
-            try:
-                st = json.loads(state_path.read_text(encoding="utf-8"))
-                inp = st.get("inputs") or {}
-                if inp.get("paper_path"):
-                    recovered_paper = Path(inp["paper_path"])
-            except (OSError, ValueError):
-                pass
+        inp = read_state_dict(replicate_dir).get("inputs") or {}
+        if inp.get("paper_path"):
+            recovered_paper = Path(inp["paper_path"])
     if recovered_paper is None:
         console.print(
             "[bold red]Error:[/bold red] no paper path was found for this run "
