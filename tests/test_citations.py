@@ -59,6 +59,16 @@ def test_parse_references_tolerates_missing_fields_and_skips_empty():
     assert [r.raw for r in refs] == ["Some ref", "Only raw"]
 
 
+def test_reference_from_dict_wraps_string_authors():
+    # A string instead of a list is one author entry, never an iterable of
+    # characters (which would guarantee a false author mismatch).
+    ref = Reference.from_dict({"title": "T", "authors": "Ashish Vaswani, Noam Shazeer"})
+    assert ref.authors == ["Ashish Vaswani, Noam Shazeer"]
+    assert author_overlap(ref.authors, ["Ashish Vaswani"]) == 1.0
+    # Other non-list shapes degrade to no authors (no author check runs).
+    assert Reference.from_dict({"title": "T", "authors": {"a": 1}}).authors == []
+
+
 def test_verdict_to_dict_shape():
     v = CitationVerdict(
         key="x", title="T", status="metadata_mismatch",
@@ -106,11 +116,39 @@ def test_author_overlap_handles_surname_first_order():
     assert author_overlap(["Vaswani, A."], ["John Doe"]) == 0.0
 
 
+def test_author_overlap_skips_generational_suffixes():
+    # A suffix before the comma must not be mistaken for the surname.
+    assert author_overlap(["Smith Jr., John"], ["John Smith"]) == 1.0
+    # Suffixes are skipped on the record side too.
+    assert author_overlap(["Smith Jr., John"], ["John Smith Jr."]) == 1.0
+    assert author_overlap(["Davis III, R."], ["Richard Davis"]) == 1.0
+
+
 def test_normalize_arxiv_id_strips_prefix_and_version():
     assert normalize_arxiv_id("arXiv:1706.03762v5") == "1706.03762"
     assert normalize_arxiv_id("1706.03762") == "1706.03762"
     assert normalize_arxiv_id("https://arxiv.org/abs/2401.01234") == "2401.01234"
     assert normalize_arxiv_id("10.1145/3292500") == ""  # a DOI, not an arXiv id
+
+
+def test_normalize_arxiv_id_handles_old_style_ids():
+    # Pre-2007 ids: archive(/subject-class)/YYMMNNN, optionally versioned.
+    assert normalize_arxiv_id("hep-ph/9905221") == "hep-ph/9905221"
+    assert normalize_arxiv_id("arXiv:hep-ph/9905221v2") == "hep-ph/9905221"
+    assert normalize_arxiv_id("math.GT/0309136") == "math.GT/0309136"
+    assert normalize_arxiv_id("https://arxiv.org/abs/hep-th/0603001") == "hep-th/0603001"
+
+
+def test_author_overlap_ignores_et_al_and_folds_diacritics():
+    # "et al." transcribed as an author entry must not count as an unmatched name.
+    assert author_overlap(["A. Vaswani", "et al."], ["Ashish Vaswani", "Noam Shazeer"]) == 1.0
+    assert author_overlap(["Smith, J.", "and others"], ["Jane Smith", "Bob Lee"]) == 1.0
+    # Transliterated bibliography surnames match the record's accented form.
+    assert author_overlap(["J. Muller"], ["Jürgen Müller"]) == 1.0
+
+
+def test_normalize_title_folds_diacritics():
+    assert normalize_title("Schrödinger's Cat") == "schrodinger s cat"
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +229,17 @@ def test_classify_verified_when_both_are_preprints():
     assert v.status == STATUS_VERIFIED
 
 
+def test_classify_no_year_mismatch_across_preprint_published_boundary():
+    # A published citation matched only by a preprint record legitimately
+    # differs in year (preprint predates the venue); the venue check owns
+    # that comparison, so no year flag on a correct citation.
+    ref = Reference(title="A Cross Boundary Work", authors=["A"], year=2019, venue="NeurIPS")
+    recs = [_rec(source="arxiv", title="A Cross Boundary Work", authors=["A"],
+                 year=2017, venue="arXiv")]
+    v = classify(ref, recs, sources_queried=["arxiv"])
+    assert v.status == STATUS_VERIFIED
+
+
 def test_classify_doi_prefix_forms_are_not_a_mismatch():
     ref = Reference(title="Paper With Prefixed DOI", authors=["A"], doi="doi:10.1145/3292500")
     recs = [_rec(title="Paper With Prefixed DOI", authors=["A"], doi="10.1145/3292500")]
@@ -246,6 +295,32 @@ def test_parse_semantic_scholar_extracts_record():
     assert recs[0].doi == "10.9/z" and recs[0].venue == "ACL"
 
 
+def test_parsers_coerce_string_years():
+    # OpenAlex/S2 year fields are coerced like the other adapters, so classify's
+    # numeric comparison can never see a string year.
+    oa = parse_openalex({"results": [{"title": "T", "publication_year": "2020",
+                                      "authorships": [], "primary_location": {}}]})
+    assert oa[0].year == 2020
+    s2 = parse_semantic_scholar({"data": [{"title": "T", "year": "2019",
+                                           "authors": [], "externalIds": {}}]})
+    assert s2[0].year == 2019
+
+
+def test_fetchers_swallow_http_client_exceptions(monkeypatch):
+    # IncompleteRead/BadStatusLine are HTTPException, not OSError; a mid-body
+    # connection drop must degrade the source, not kill the resolver script.
+    import http.client
+    import urllib.request
+    from veritas.core import citations as cit
+
+    def boom(*args, **kwargs):
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert cit.fetch_json("https://example.org/api") is None
+    assert cit.fetch_text("https://example.org/api") is None
+
+
 def test_parse_dblp_extracts_record():
     payload = {"result": {"hits": {"hit": [{"info": {
         "title": "DBLP Paper", "year": "2024", "venue": "ICLR",
@@ -255,6 +330,20 @@ def test_parse_dblp_extracts_record():
     recs = parse_dblp(payload)
     assert recs[0].source == "dblp" and recs[0].venue == "ICLR" and recs[0].year == 2024
     assert recs[0].authors == ["First Author", "Second Author"]
+
+
+def test_parse_dblp_single_hit_dict():
+    # DBLP returns a bare dict for hits.hit when exactly one result matches —
+    # the common case for a distinctive title. Must parse, not crash.
+    payload = {"result": {"hits": {"hit": {"info": {
+        "title": "Lone Hit Paper", "year": "2023", "venue": "NeurIPS",
+        "authors": {"author": [{"text": "Only Author"}]},
+        "url": "https://dblp.org/rec/3",
+    }}}}}
+    recs = parse_dblp(payload)
+    assert len(recs) == 1
+    assert recs[0].title == "Lone Hit Paper" and recs[0].year == 2023
+    assert recs[0].authors == ["Only Author"]
 
 
 def test_parse_dblp_single_author_dict_and_list_venue():
@@ -425,6 +514,86 @@ def test_check_citations_idempotent_skip(tmp_path):
     m.assert_not_called()  # already produced -> skip
 
 
+def test_check_citations_reruns_over_malformed_output(tmp_path):
+    # A truncated/invalid check output must not satisfy the resume gate, or
+    # the feature goes permanently dead on it.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text("{truncated", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
+        cfg.citation_check_path.write_text('{"summary": {"total": 1}, "flagged": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.called
+    meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
+    assert meta["faithfulness_scope"] == "main"
+
+
+def test_check_citations_meta_only_stamped_for_valid_output(tmp_path):
+    # A fresh run whose agent writes malformed JSON must not be stamped as
+    # produced; the next invocation re-runs instead of resuming over it.
+    runner, cfg = _citation_runner(tmp_path)
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
+        cfg.citation_check_path.write_text("[1, 2", encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke):
+        runner._check_citations()
+    assert not cfg.citation_check_meta_path.exists()
+
+
+def test_check_citations_reruns_on_corrupt_meta(tmp_path):
+    # A meta sidecar that exists but cannot be parsed is damaged tracking
+    # data: re-run rather than trust output of unknown scope.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text("{truncated", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
+        cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.called
+
+
+def test_check_citations_existing_fails_when_check_produces_nothing(tmp_path):
+    # The standalone subcommand's whole purpose is the check; a run where it
+    # produced nothing must exit non-zero and leave the report untouched.
+    runner, cfg = _citation_runner(tmp_path)
+    with patch.object(ReplicationRunner, "_invoke_provider", return_value=False), \
+         patch.object(runner, "report_generator") as rg:
+        result = runner.check_citations_existing()
+    assert not result.success
+    rg.generate.assert_not_called()
+
+
+def test_check_citations_skip_path_still_runs_missing_audit(tmp_path):
+    # A prior run's check succeeded but its audit didn't (e.g. interrupted).
+    # The idempotency fast-path must still give the audit its pass instead of
+    # returning before it.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(json.dumps({
+        "summary": {"total": 1},
+        "flagged": [{"key": "f2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+    }), encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._check_citations()
+
+    assert m.call_count == 1  # the audit dispatch, not a re-run of the check
+    assert cfg.citation_audit_path.exists()
+
+
 def test_check_citations_skips_when_scope_matches_meta(tmp_path):
     runner, cfg = _citation_runner(tmp_path)  # default scope: main
     cfg.citation_check_path.write_text('{"summary": {"total": 0}}', encoding="utf-8")
@@ -455,6 +624,21 @@ def test_check_citations_reruns_on_scope_change(tmp_path):
     assert meta["faithfulness_scope"] == "main"  # meta re-recorded for the new run
 
 
+def test_check_citations_scope_rerun_never_mislabels_stale_output(tmp_path):
+    # Provider success is only the exit code. If the re-run exits cleanly but
+    # never writes the file, the old-scope output must not survive to be
+    # stamped as produced by the new scope.
+    runner, cfg = _citation_runner(tmp_path)  # current scope: main
+    cfg.citation_check_path.write_text('{"summary": {"total": 7}}', encoding="utf-8")
+    cfg.citation_check_meta_path.write_text('{"faithfulness_scope": "all"}', encoding="utf-8")
+
+    with patch.object(ReplicationRunner, "_invoke_provider", return_value=True):
+        runner._check_citations()
+
+    assert not cfg.citation_check_path.exists()  # stale output cleared, not re-served
+    assert not cfg.citation_check_meta_path.exists()  # no meta claiming a fresh main-scope run
+
+
 def test_check_citations_skips_cleanly_when_staging_fails(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
     with patch.object(ReplicationRunner, "_stage_resolver_script", side_effect=OSError("disk full")), \
@@ -474,6 +658,26 @@ def test_check_citations_tolerates_non_object_json_output(tmp_path):
 
     with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke):
         runner._check_citations()  # must NOT raise
+
+
+def test_audit_reruns_over_malformed_audit_output(tmp_path):
+    # Garbage from a clean-exit audit agent must not permanently satisfy the
+    # audit's resume gate (same contract as the check's gate).
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(json.dumps({
+        "summary": {"total": 1},
+        "flagged": [{"key": "f2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+    }), encoding="utf-8")
+    cfg.citation_audit_path.write_text("not json at all", encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
+        cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
+        runner._audit_citations()
+    assert m.called
 
 
 def test_audit_citations_tolerates_non_object_check_json(tmp_path):
@@ -613,7 +817,106 @@ def test_render_citation_check_counts_unresolved_and_annotates_inaccessible_audi
     assert "audit softened" not in section
 
 
-def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
+def test_audit_softening_is_claim_specific():
+    # Two distinct claims cite the same reference key; an audit item that
+    # names one claim must soften only that row.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness", "claim": "claim one text",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
+
+
+def test_audit_without_claim_field_still_softens():
+    # Audits from before claim tracking carry no claim field; their verdict
+    # applies by (key, kind) as before.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "solo2024", "claim": "only claim",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "solo2024", "kind": "faithfulness",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_claim_match_tolerates_whitespace_and_case_drift():
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "drift2024", "claim": "The method improves accuracy",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "drift2024", "kind": "faithfulness",
+             "claim": "  the method  improves\naccuracy ",
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_non_string_claim_does_not_crash():
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "odd2024", "claim": ["not", "a", "string"],
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "odd2024", "kind": "faithfulness", "claim": 42,
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "Citation Check" in section
+
+
+def test_citation_view_reconciles_audit_for_both_formats(tmp_path):
     out = tmp_path / "out"
     (out / "evaluation").mkdir(parents=True)
     (out / "evaluation" / "citation_check.json").write_text(json.dumps({
@@ -640,7 +943,7 @@ def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
     }), encoding="utf-8")
 
     gen = ReportGenerator()
-    view = gen._citation_html_view(gen._load_citation_check(out), gen._load_citation_audit(out))
+    view = gen._citation_view(gen._load_citation_check(out), gen._load_citation_audit(out))
     assert view["total"] == 3 and view["fabricated"] == 1
     by_key = {r["key"]: r for r in view["flagged"]}
     # The audit's milder verdict softened the fabrication flag, same as the md path.
@@ -650,9 +953,22 @@ def test_citation_html_view_mirrors_markdown_reconciliation(tmp_path):
     assert view["faith_rows"][0]["verdict_label"] == "supported"
 
 
-def test_citation_html_view_none_when_check_absent(tmp_path):
+def test_citation_view_none_when_check_absent(tmp_path):
     gen = ReportGenerator()
-    assert gen._citation_html_view(None, None) is None
+    assert gen._citation_view(None, None) is None
+
+
+def test_citation_view_normalizes_whitespace_keys():
+    # Same key normalization as the markdown path: whitespace-only -> "?".
+    gen = ReportGenerator()
+    view = gen._citation_view({
+        "summary": {"total": 1},
+        "flagged": [{"key": "   ", "status": "inconclusive", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+        "checked_support": False,
+    }, None)
+    assert view["flagged"][0]["key"] == "?"
+    assert view["support_not_checked"] is True
 
 
 def test_html_report_renders_citation_section(tmp_path):
@@ -676,9 +992,103 @@ def test_html_report_renders_citation_section(tmp_path):
     assert "Citation check" in html
     assert "likely fabricated" in html
     assert "f2024" in html
+    # checked_support is False in the fixture -> same disclaimer as the md report.
+    assert "does not check citation support" in html
     # Absent check -> no section.
     ctx_none = gen._build_html_context(None, [], None, None, None, None, "full")
     assert "Citation check" not in gen._render_html(ctx_none)
+
+
+def test_generate_from_artifacts_keeps_evidence_and_fixes(tmp_path):
+    # A from-disk re-render (report subcommand / check-citations refresh) must
+    # keep the replication-evidence and fix-severity sections the original run
+    # rendered from in-memory data, not silently drop them.
+    run = tmp_path / "run"
+    (run / "replication").mkdir(parents=True)
+    (run / "assess").mkdir()
+    (run / "replication" / "replication_log.json").write_text(json.dumps({
+        "step_outcomes": [{
+            "step_id": 1, "description": "train the model",
+            "command_executed": "python train.py", "exit_code": 0,
+            "duration_seconds": 4.0,
+        }],
+    }), encoding="utf-8")
+    (run / "assess" / "fix_severity.json").write_text(json.dumps({
+        "fixes": [{"fix_description": "pinned numpy", "severity": "minor",
+                   "rationale": "r", "reproducibility_impact": "low"}],
+        "summary": "one environment fix", "total_fixes": 1,
+        "minor_count": 1, "major_count": 0, "critical_count": 0,
+    }), encoding="utf-8")
+
+    gen = ReportGenerator()
+    md_path, _ = gen.generate(run, generate_pdf=False)
+    md = md_path.read_text(encoding="utf-8")
+    assert "train the model" in md          # evidence section survived
+    assert "pinned numpy" in md             # fixes table survived
+    html = (run / "report" / "replication_report.html").read_text(encoding="utf-8")
+    assert "train the model" in html and "pinned numpy" in html
+
+
+def test_renderers_tolerate_hostile_agent_json():
+    # Every string field the wrong type, plus unsafe URL schemes: the report
+    # must degrade field-by-field, never crash, and never emit non-http links.
+    citation = {
+        "summary": {"total": 2, "verified": 0, "metadata_mismatch": 0, "unresolved": 0,
+                    "likely_fabricated": 2, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1}},
+        "flagged": [
+            {"key": 12, "status": 7, "detail": 42, "matched_record": "not a dict",
+             "evidence": {"not": "a list"}},
+            {"key": "js2024", "status": "likely_fabricated", "detail": "d",
+             "matched_record": {"source": "dblp", "url": "javascript:alert(1)"},
+             "evidence": ["javascript:alert(2)"]},
+        ],
+        "faithfulness": [
+            {"key": None, "claim": ["not", "a", "string"], "verdict": 3, "quote": 9,
+             "source": "javascript:alert(3)", "source_status": "retrieved"},
+        ],
+        "checked_support": False,
+    }
+    audit = {"items": [
+        {"key": ["unhashable"], "kind": "integrity", "audit_verdict": []},
+        {"key": "js2024", "kind": "integrity", "audit_verdict": "inconclusive"},
+    ]}
+
+    gen = ReportGenerator()
+    md = gen._render_citation_check(citation, audit)  # must not raise
+    assert "js2024" in md
+    assert "javascript:" not in md
+    view = gen._citation_view(citation, audit)   # must not raise
+    by_key = {r["key"]: r for r in view["flagged"]}
+    assert by_key["js2024"]["url"] == ""              # unsafe scheme never linked
+    html = gen._render_html(gen._build_html_context(
+        None, [], None, None, None, None, "full",
+        citation=citation, citation_audit=audit))
+    assert "javascript:" not in html
+
+
+def test_audit_items_with_wrong_typed_fields_are_ignored():
+    # An unhashable kind or audit_verdict must degrade to an ignored item,
+    # not a TypeError inside the lookup or the severity comparison.
+    citation = {
+        "summary": {"total": 1},
+        "flagged": [{"key": "a2024", "status": "likely_fabricated", "detail": "d",
+                     "matched_record": None, "evidence": []}],
+        "checked_support": True,
+    }
+    audit = {"items": [
+        {"key": "a2024", "kind": ["integrity"], "audit_verdict": "verified"},
+        {"key": "a2024", "kind": "integrity", "audit_verdict": ["verified"]},
+    ]}
+    section = ReportGenerator()._render_citation_check(citation, audit)  # no raise
+    assert "audit softened" not in section  # wrong-typed items carry no verdict
+
+
+def test_renderers_tolerate_non_dict_summary():
+    citation = {"summary": ["oops"], "flagged": [], "checked_support": True}
+    gen = ReportGenerator()
+    assert "Citation Check" in gen._render_citation_check(citation, None)
+    assert gen._citation_view(citation, None)["total"] == 0
 
 
 def test_load_citation_check_tolerates_markdown_fences(tmp_path):
@@ -768,6 +1178,24 @@ def test_faithfulness_scope_env_fallback(tmp_path, monkeypatch):
     paper = tmp_path / "p.pdf"; paper.write_text("x")
     cfg = Config(paper_path=paper, output_dir=tmp_path / "out", run_citation_check=True)
     assert cfg.faithfulness_scope == "all"
+
+
+def test_faithfulness_scope_env_applies_through_cli_none_sentinel(tmp_path, monkeypatch):
+    # The CLI passes None when its flag is not set (like the timeouts), so the
+    # env var must win over the code default even through an explicit kwarg.
+    monkeypatch.setenv("VERITAS_CITATION_FAITHFULNESS_SCOPE", "all")
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope=None)
+    assert cfg.faithfulness_scope == "all"
+
+
+def test_faithfulness_scope_cli_flag_beats_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERITAS_CITATION_FAITHFULNESS_SCOPE", "all")
+    paper = tmp_path / "p.pdf"; paper.write_text("x")
+    cfg = Config(paper_path=paper, output_dir=tmp_path / "out",
+                 run_citation_check=True, faithfulness_scope="main")
+    assert cfg.faithfulness_scope == "main"
 
 
 # ---------------------------------------------------------------------------
@@ -1037,6 +1465,10 @@ def test_check_citations_existing_runs_check_and_report(tmp_path):
 
     def fake_check():
         calls["check"] += 1
+        cfg.evaluation_dir.mkdir(parents=True, exist_ok=True)
+        cfg.citation_check_path.write_text(
+            '{"summary": {"total": 0}, "flagged": []}', encoding="utf-8"
+        )
 
     def fake_generate(replicate_dir, output_path=None, generate_pdf=True, generate_md=True):
         calls["report"] += 1

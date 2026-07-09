@@ -27,6 +27,22 @@ _DEFAULT_SKILLS_DIR = "/workspace/veritas-skills"
 _DEFAULT_VENV_DIR = "/workspace/.venv"
 
 
+def _parse_gpu_info(raw: Optional[str]) -> Optional[str]:
+    """Parse VERITAS_GPU_INFO: a semicolon-joined "name, VRAM" string per
+    reachable GPU, set by the docker/host wrapper's own GPU reachability
+    probe (docker/run.sh::get_gpu_info or the veritas-host equivalent).
+
+    This IS the GPU-availability signal — its absence means no GPU (or the
+    wrapper wasn't used, e.g. the CLI invoked directly), its presence means
+    a GPU is available, with what it actually is. No separate boolean: a
+    bare yes/no doesn't tell codegen whether the paper's methodology
+    actually fits in the available VRAM.
+    """
+    if not raw or not raw.strip():
+        return None
+    return "; ".join(part.strip() for part in raw.split(";") if part.strip())
+
+
 class PromptGenerator:
     """Generates prompts for claim extraction, replication, and verification."""
 
@@ -58,6 +74,7 @@ class PromptGenerator:
         ctx = {
             "skills_dir": os.environ.get("VERITAS_SKILLS_DIR", _DEFAULT_SKILLS_DIR),
             "venv_dir": os.environ.get("VERITAS_VENV_DIR", _DEFAULT_VENV_DIR),
+            "gpu_info": _parse_gpu_info(os.environ.get("VERITAS_GPU_INFO")),
         }
         if output_dir is not None:
             output_abs = Path(output_dir).absolute()

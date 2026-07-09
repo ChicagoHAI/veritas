@@ -482,12 +482,13 @@ class ReplicationRunner:
 
             # Optional, opt-in citation-check submodule (reference verification).
             # Advisory only: does not feed the Replication Score. Idempotent.
-            # Runs before usage collection so its transcripts are counted.
+            # The guard makes the advisory contract structural: no failure in
+            # the citation phase can flip the run itself to failed.
             if self.config.run_citation_check:
                 try:
                     self._check_citations()
                 except Exception as e:
-                    print(f"  Warning: citation check failed (continuing): {e}")
+                    print(f"  Warning: citation check failed ({e}); continuing without it")
 
             try:
                 self._collect_resource_usage(state)
@@ -896,7 +897,8 @@ class ReplicationRunner:
             + "\n\n---\n\n"
             + "Your last output was not valid JSON. Here is what you returned:\n\n"
             + broken_output[:2000]
-            + "\n\nPlease return ONLY valid JSON, with no explanation or markdown formatting."
+            + f"\n\nRewrite {output_path} so it contains ONLY valid JSON, "
+            + "with no explanation or markdown formatting."
             + "\n\nCommon JSON mistakes to avoid:"
             + "\n- Double quotes inside strings MUST be escaped: use \\\" not \""
             + "\n- Backslash-single-quote (\\') is not valid JSON — just use '"
@@ -1899,14 +1901,7 @@ class ReplicationRunner:
             "engine": self.config.resolved_engines()["evaluate"],
             "faithfulness_scope": self.config.faithfulness_scope,
         }
-        try:
-            existing_output = (
-                output_path.exists()
-                and bool(output_path.read_text(encoding="utf-8").strip())
-            )
-        except (OSError, ValueError):
-            existing_output = False
-        if existing_output:
+        if self._load_json_object(output_path) is not None:
             if self._citation_check_settings_match(current_meta):
                 print("[OK] citation-check: skipped (already produced with these settings)")
                 # A missing or previously failed audit still gets its pass
@@ -1919,10 +1914,11 @@ class ReplicationRunner:
                 f"'{self.config.faithfulness_scope}', engine "
                 f"'{current_meta['engine']}'); re-running"
             )
-            # Discard the stale trio before re-running: a re-run that then
-            # fails to produce output must not leave the old output stamped
-            # with the new settings, and the audit refers to the output
-            # being discarded.
+            # Discard the stale trio before re-running: provider success is
+            # only the subprocess exit code, so a re-run that exits cleanly
+            # without writing must not leave the old output to be stamped with
+            # the new settings. The audit re-checks the check's findings, so
+            # it is stale too.
             output_path.unlink(missing_ok=True)
             meta_path.unlink(missing_ok=True)
             self.config.citation_audit_path.unlink(missing_ok=True)
@@ -1966,43 +1962,67 @@ class ReplicationRunner:
         # meta stamp so an interruption between the two re-audits on resume
         # instead of pairing the old audit with the new output.
         self.config.citation_audit_path.unlink(missing_ok=True)
+        data = self._load_json_object(output_path)
+        if data is None:
+            # Not stamped with a meta sidecar: the resume gate treats unusable
+            # output as not-produced, so the next invocation re-runs the check
+            # instead of silently going dead on it.
+            print(
+                f"  Warning: citation-check output at {output_path} is not a "
+                "valid JSON object; the check will re-run on the next invocation"
+            )
+            return
         _write_engine_meta(meta_path, current_meta)
-        try:
-            data = json.loads(_extract_json(output_path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, json.JSONDecodeError) as e:
-            print(f"  Warning: citation-check output is not valid JSON ({e}); left as-is for audit")
-        else:
-            if not isinstance(data, dict):
-                print("  Warning: citation-check output is not a JSON object; left as-is for audit")
-            else:
-                s = data.get("summary")
-                s = s if isinstance(s, dict) else {}
-                f = s.get("faithfulness")
-                f = f if isinstance(f, dict) else {}
-                print(
-                    f"  Citation check written; {s.get('total', '?')} refs "
-                    f"({s.get('likely_fabricated', 0)} likely fabricated, "
-                    f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
-                    f"{s.get('inconclusive', 0)} inconclusive, "
-                    f"{s.get('unresolved', 0)} unresolved); "
-                    f"faithfulness checked {f.get('checked', 0)} "
-                    f"({f.get('contradicted', 0)} contradicted, "
-                    f"{f.get('partially_supported', 0)} partial)"
-                )
+        s = data.get("summary")
+        s = s if isinstance(s, dict) else {}
+        f = s.get("faithfulness")
+        f = f if isinstance(f, dict) else {}
+        print(
+            f"  Citation check written; {s.get('total', '?')} refs "
+            f"({s.get('likely_fabricated', 0)} likely fabricated, "
+            f"{s.get('metadata_mismatch', 0)} metadata-mismatch, "
+            f"{s.get('inconclusive', 0)} inconclusive, "
+            f"{s.get('unresolved', 0)} unresolved); "
+            f"faithfulness checked {f.get('checked', 0)} "
+            f"({f.get('contradicted', 0)} contradicted, "
+            f"{f.get('partially_supported', 0)} partial)"
+        )
 
         # Independent audit pass over the flagged verdicts (advisory; never raises).
-        self._audit_citations()
+        self._audit_citations(data)
+
+    @staticmethod
+    def _load_json_object(output_path: Path) -> Optional[dict]:
+        """Parse an agent-written JSON artifact. None when the file is absent,
+        empty, unreadable, or not a JSON object — all treated as not-produced,
+        so the producing pass re-runs instead of resuming on unusable output."""
+        try:
+            raw = output_path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return None
+        if not raw.strip():
+            return None
+        try:
+            data = json.loads(_extract_json(raw))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def _citation_check_settings_match(self, current_meta: Dict[str, Any]) -> bool:
         """True if the existing citation-check output was produced with the
         current settings (faithfulness scope and evaluate engine).
 
-        Lenient per field: a sidecar that predates a field (or the sidecar
-        itself) counts as matching, so outputs from before settings tracking
-        are kept as-is."""
-        meta = _read_engine_meta(self.config.citation_check_meta_path)
-        if meta is None:
+        A missing sidecar (an output from before settings tracking) counts as
+        matching, so legacy outputs are kept as-is; a sidecar that exists but
+        cannot be read or parsed is damaged tracking data, so the check
+        re-runs rather than trusting output of unknown settings. Lenient per
+        field: a sidecar that predates a field counts as matching it."""
+        meta_path = self.config.citation_check_meta_path
+        if not meta_path.exists():
             return True
+        meta = _read_engine_meta(meta_path)
+        if meta is None:
+            return False
         return all(
             meta.get(key) is None or meta.get(key) == value
             for key, value in current_meta.items()
@@ -2019,36 +2039,27 @@ class ReplicationRunner:
                 return True
         return False
 
-    def _audit_citations(self) -> None:
+    def _audit_citations(self, check_data: Optional[dict] = None) -> None:
         """Independent re-check of the verify pass's flagged verdicts.
 
-        Reads ``evaluation/citation_check.json``; if it has any non-trivial
-        finding, runs a separate provider invocation (fresh context, API keys
-        stripped) that writes disagreements to ``evaluation/citation_audit.json``.
-        Advisory; idempotent; never raises.
+        Takes the parsed check output when the caller already has it (fresh
+        runs), otherwise reads ``evaluation/citation_check.json``; if it has
+        any non-trivial finding, runs a separate provider invocation (fresh
+        context, API keys stripped) that writes disagreements to
+        ``evaluation/citation_audit.json``. Advisory; idempotent; never raises.
         """
         check_path = self.config.citation_check_path
         audit_path = self.config.citation_audit_path
-        try:
-            if audit_path.exists() and audit_path.read_text(encoding="utf-8").strip():
-                print("[OK] citation-audit: skipped (already produced)")
-                return
-            check_text = (
-                check_path.read_text(encoding="utf-8") if check_path.exists() else ""
-            )
-        except (OSError, ValueError):
-            # An unreadable artifact counts as absent; the audit is advisory
-            # and must never raise into the pipeline.
+        # Same parse-validated gate as the check: garbage from a clean-exit
+        # audit agent must not permanently satisfy the resume check.
+        if self._load_json_object(audit_path) is not None:
+            print("[OK] citation-audit: skipped (already produced)")
             return
-        if not check_text.strip():
+        if check_data is None:
+            check_data = self._load_json_object(check_path)
+        if check_data is None:
             return
         if not self.config.has_paper:
-            return
-        try:
-            check_data = json.loads(_extract_json(check_text))
-        except (ValueError, json.JSONDecodeError):
-            return
-        if not isinstance(check_data, dict):
             return
         if not self._has_auditable_findings(check_data):
             return
@@ -2302,6 +2313,8 @@ class ReplicationRunner:
             "replicate":         self.config.replication_transcript_path,
             "assess_fixes":      self.config.fix_severity_transcript_path,
             "evaluation":        self.config.evaluation_transcript_path,
+            # Advisory citation passes (opt-in). They have no PipelineState
+            # stage, so wall_seconds stays None; only their tokens are summed.
             "citation_check":    self.config.citation_check_transcript_path,
             "citation_audit":    self.config.citation_audit_transcript_path,
         }
@@ -2562,6 +2575,18 @@ class ReplicationRunner:
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
             self._collect_usage_if_tracked()
+            if self._load_json_object(self.config.citation_check_path) is None:
+                # The check soft-fails internally; surface that as a command
+                # failure (exit 1) instead of a green message, and leave the
+                # existing report untouched.
+                return RunResult(
+                    success=False,
+                    error=(
+                        "the citation check did not produce a usable "
+                        f"{self.config.citation_check_path.name} (see transcript: "
+                        f"{self.config.citation_check_transcript_path})"
+                    ),
+                )
             report_path, pdf_path = self.report_generator.generate(
                 replicate_dir=self.config.output_dir,
                 generate_pdf=self.config.generate_pdf,

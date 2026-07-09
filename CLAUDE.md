@@ -76,14 +76,15 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   subagent extracts the paper's reference list and runs a deterministic,
   LLM-free resolver (`core/citations.py`, staged into the workspace as a script)
   that verifies existence/metadata against Crossref/OpenAlex/Semantic
-  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates only unresolved
-  references. Output: `evaluation/citation_check.json`. Advisory: never changes
+  Scholar/DBLP/arXiv (keyless); the agent web-search-escalates unresolved
+  references and venue-checks resolver-verified records that lack a venue.
+  Output: `evaluation/citation_check.json`. Advisory: never changes
   the Replication Score. Requires `--paper`. Method adapted from refchecker (MIT).
   The dispatch is a self-contained method that mirrors the research sub-agent
   pattern. The faithfulness sub-pass checks whether each cited source actually
   supports what the paper attributes to it, with verdicts `supported`,
-  `partially_supported`, `contradicted`, or `not_mentioned`, each grounded in a
-  verbatim quote from the source. `--check-citations-faithfulness main` (default)
+  `partially_supported`, `contradicted`, or `not_mentioned`; the first three are
+  each grounded in a verbatim quote from the source. `--check-citations-faithfulness main` (default)
   limits this to the paper's central attributed claims; `all` extends it to every
   claim-bearing citation. A scope or evaluate-engine change re-runs the check
   (the producing settings are recorded in `evaluation/.citation_check_meta.json`);
@@ -93,7 +94,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   No human-review step.
   The `check-citations <replicate-dir>` subcommand runs the full citation check
   (including faithfulness and audit) on an already-completed run; it recovers the
-  paper path from the run's saved config, with `--paper` as an override.
+  paper path from the run's saved config, with `--paper` as an override (in
+  docker mode the saved path is a container path from the original run, so
+  `--paper` is effectively required there).
 
 Output is organized into per-phase subdirectories: `analyze/`, `replication/` (with `codebase/` and `codebase.diff`), `assess/`, `verify/`, `report/`, and `prompts/`.
 
@@ -150,7 +153,7 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **GPU is auto-detected and Linux-only** (requires NVIDIA Container Toolkit).
 - **Two runtimes: docker (`./veritas`) and host (`./veritas-host`).** Docker is the default; the wrapper manages image lifecycle (pull from GHCR on first run, build locally if pull fails). Host mode is for environments without docker (HPC clusters); the user provides the provider CLIs they use (claude/codex/gemini, opencode for openrouter), python, and uv on PATH, and `veritas-host` does the workspace pre-staging that `docker/entrypoint.sh` does in docker mode (`templates/skills/` → `<output>/veritas-skills/`, `--repo` → `<output>/replication/codebase/`, EXIT-trap codebase.diff). Both runtimes share the Python pipeline; the two `/workspace/`-derived paths in templates (skills catalog, agent venv) are parameterized via `VERITAS_SKILLS_DIR` and `VERITAS_VENV_DIR` env vars with docker-mode defaults.
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
-- **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped.
+- **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped. `get_gpu_info` (docker) / `detect_gpu_info` (host) reuse this same reachability result to capture each device's actual model/VRAM (`nvidia-smi --query-gpu=name,memory.total`) as `VERITAS_GPU_INFO` — a semicolon-joined string, empty when no GPU is reachable — so `prompt_generator.py` can state real GPU presence and capacity as a fact in codegen/plan/replicate prompts, instead of leaving the agent to infer it or telling it only a bare yes/no. Issue #92 traced downscaling to codegen defaulting to CPU-only code blind to whether a GPU would even be present at replicate time.
 - **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_replicate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys (except the invoked provider's own auth vars, per the auth gotcha above), but the paper code run during replicate does. `./veritas setup` and `./veritas config` subcommands manage the file.
 - **Per-bucket engines.** Every LLM call site belongs to a bucket (`analyze | codegen | replicate | assess | verify | evaluate`); `Config.engine_for` resolves each bucket's `(provider, model)` from `--<bucket>-model` flags / `VERITAS_<BUCKET>_MODEL` vars with the global `--provider`/`--model` as fallback. The `evaluate` bucket covers manager review, research, contextual evaluation, and the citation check/audit. New call sites must pass their `bucket=` to `_invoke_provider`. Engine changes invalidate only their dependent stages (a `--verify-model` change re-runs verify alone); the contextual-evaluation and citation outputs record their producing settings in sidecar files (`evaluation/.{contextual_evaluation,citation_check}_meta.json`) and re-run on an engine or scope change — outputs from before this tracking are kept as-is (delete them to re-run).
 - **Provider auth keys: host env or `.env`, scoped per invocation.** The wrapper forwards `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` (host shell wins; `.env`-only keys are loaded into the wrapper env, so they also satisfy the preflight credential check). Inside the pipeline, `_stripped_env` exempts only the invoked provider's own auth vars — one bucket's key never reaches another provider's subprocess. Consequence: with claude running a phase, an `ANTHROPIC_API_KEY` in `.env` reaches that claude subprocess and billing is expected to follow the key (unverified).

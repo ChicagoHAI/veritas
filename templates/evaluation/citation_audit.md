@@ -17,7 +17,7 @@ Read both the `flagged` array and the `faithfulness` array from
 `{{ citation_check_path }}`. Re-check:
 
 - every entry in `flagged` (integrity issues: `metadata_mismatch`, `likely_fabricated`,
-  `inconclusive`), and
+  `inconclusive`, `unresolved`), and
 - every `faithfulness` entry whose `verdict` is `contradicted` or `partially_supported`.
 
 Do not re-check `verified` references, or `supported` / `not_mentioned` faithfulness

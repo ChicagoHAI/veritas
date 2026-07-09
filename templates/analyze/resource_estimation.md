@@ -34,7 +34,7 @@ Look for:
 
 Use web search to find current costs for the detected resource type:
 
-- If GPU is required: search for current hourly rates (e.g. "RunPod A100 hourly price 2025" or "Lambda Labs H100 cost per hour")
+- If GPU is required: search for current hourly rates (e.g. "RunPod A100 hourly price" or "Lambda Labs H100 cost per hour") — use whatever rates the search actually returns, not a memorized figure
 - If external LLM API calls are detected: search for the provider's current pricing page
 - Use real numbers you find, and quote the source URL in your output.
 - If you cannot find reliable pricing, omit the cost fields or set them to null.
@@ -75,6 +75,4 @@ No repository was provided — the code will be generated from the paper by a se
 ```json
 "predicted_codegen_cost_usd": 1.5
 ```
-
-Set this to 0 if a repo was supplied (codegen doesn't run in that case).
 {% endif %}

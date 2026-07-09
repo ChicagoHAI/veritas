@@ -127,6 +127,29 @@ get_gpu_flags() {
 }
 
 # -----------------------------------------------------------------------------
+# Return a "name, VRAM" line per reachable GPU (semicolon-joined for a single
+# env-var-safe line), or empty if none. This IS the GPU-availability signal
+# passed to the prompts — its emptiness means "no GPU" (or unknown), its
+# presence means "GPU available, and here's what it is." No separate
+# available/unavailable boolean: a bare "yes" doesn't tell codegen whether
+# the paper's methodology actually fits in the available VRAM, so there's no
+# reason to carry both.
+#
+# Takes the already-computed $gpu_flags result (empty or "--gpus all") so it
+# doesn't repeat get_gpu_flags's own toolkit/image-existence checks.
+# -----------------------------------------------------------------------------
+get_gpu_info() {
+    local gpu_flags="$1"
+    if [ -z "$gpu_flags" ]; then
+        echo ""
+        return
+    fi
+    docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+        --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
+        | tr '\n' ';' | sed 's/;$//'
+}
+
+# -----------------------------------------------------------------------------
 # On macOS, force linux/amd64 because nvidia/cuda base images have no arm64
 # build. Docker Desktop uses Rosetta emulation.
 # -----------------------------------------------------------------------------
@@ -1268,6 +1291,17 @@ cmd_replicate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
+    # can thread into codegen/plan/replicate prompts (issue #92: codegen
+    # previously defaulted to CPU-only code blind to whether a GPU would even
+    # be present at replicate time). Empty when get_gpu_flags found none.
+    local gpu_info_flag=""
+    local gpu_info
+    gpu_info=$(get_gpu_info "$gpu_flags")
+    if [ -n "$gpu_info" ]; then
+        gpu_info_flag="-e VERITAS_GPU_INFO=\"$gpu_info\""
+    fi
+
     # Replication API keys: pass .env into the container only on subcommands
     # that run paper code. The key-name list lets the Python layer scope
     # visibility to the replicate phase (see runner.py::_invoke_provider).
@@ -1293,14 +1327,23 @@ cmd_replicate() {
 
     local auth_flags=$(get_provider_auth_flags)
 
+    # Polite-pool contact for the citation resolver's metadata requests when
+    # --check-citations runs inline. No-op unless the host exports it.
+    local contact_flag=""
+    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
+        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
+        $gpu_info_flag \
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
         $model_flag \
         $auth_flags \
+        $contact_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1359,7 +1402,8 @@ cmd_evaluate() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --paper=*)
-                set -- --paper "${1#*=}" "${@:2}"
+                # Normalize the equals form onto the space-form arm below.
+                set -- --paper "${1#--paper=}" "${@:2}"
                 continue
                 ;;
             --paper)
@@ -1389,10 +1433,19 @@ cmd_evaluate() {
     ensure_credential_perms
     local auth_flags=$(get_provider_auth_flags)
 
+    # Forward an explicitly-set model override so the evaluation manager's LLM
+    # pass pins the same model as replication. Passed as a direct -e. No-op
+    # unless the host exports ANTHROPIC_MODEL.
+    local model_flag=""
+    if [ -n "$ANTHROPIC_MODEL" ]; then
+        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
         $auth_flags \
+        $model_flag \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
@@ -1410,6 +1463,11 @@ cmd_evaluate() {
 # container path that no longer resolves.
 # -----------------------------------------------------------------------------
 cmd_check_citations() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
+        exit 1
+    fi
+
     ensure_image
     warn_if_outdated
     load_provider_auth_env
@@ -1422,6 +1480,9 @@ cmd_check_citations() {
         echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
         exit 1
     fi
+    # The container (UID 1000) writes evaluation/ and report/ into this dir;
+    # normalize permissions like rewrite_paths does for --output.
+    chmod -R a+rwX "$host_eval_dir" 2>/dev/null || true
 
     # --paper is the subcommand's only path flag; mount it read-only and
     # rewrite the argument. Everything else passes through unchanged.
@@ -1430,7 +1491,8 @@ cmd_check_citations() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --paper=*)
-                set -- --paper "${1#*=}" "${@:2}"
+                # Normalize the equals form onto the space-form arm below.
+                set -- --paper "${1#--paper=}" "${@:2}"
                 continue
                 ;;
             --paper)
@@ -1460,10 +1522,18 @@ cmd_check_citations() {
     ensure_credential_perms
     local auth_flags=$(get_provider_auth_flags)
 
+    # Crossref/OpenAlex polite-pool contact for the resolver's requests.
+    # No-op unless the host exports VERITAS_CONTACT_EMAIL.
+    local contact_flag=""
+    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
+        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
         $auth_flags \
+        $contact_flag \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \

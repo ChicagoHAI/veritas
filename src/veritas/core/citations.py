@@ -14,10 +14,12 @@ script). It must never import from the ``veritas`` package.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -57,11 +59,18 @@ class Reference:
             year = int(year) if year not in (None, "") else None
         except (TypeError, ValueError):
             year = None
+        authors = d.get("authors") or []
+        if isinstance(authors, str):
+            # A string instead of a list is one author entry, not an iterable
+            # of characters. Kept whole: surname matching stays conservative.
+            authors = [authors]
+        elif not isinstance(authors, list):
+            authors = []
         return cls(
             raw=str(d.get("raw", "") or ""),
             key=str(d.get("key", "") or ""),
             title=str(d.get("title", "") or ""),
-            authors=[str(a) for a in (d.get("authors") or []) if str(a).strip()],
+            authors=[str(a) for a in authors if str(a).strip()],
             year=year,
             venue=str(d.get("venue", "") or ""),
             doi=str(d.get("doi", "") or ""),
@@ -137,14 +146,23 @@ def parse_references(raw: str) -> List[Reference]:
 
 _PUNCT_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
 _WS_RE = re.compile(r"\s+", flags=re.UNICODE)
-_ARXIV_RE = re.compile(r"(\d{4}\.\d{4,5})(?:v\d+)?")
+# New-style ids (2401.01234) and old-style pre-2007 ids (hep-ph/9905221,
+# math.GT/0309136). The old-style branch requires a letter-leading archive
+# name so bare DOIs (10.1145/3292500) never match.
+_ARXIV_RE = re.compile(
+    r"(\d{4}\.\d{4,5})(?:v\d+)?"
+    r"|([a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?"
+)
 
 
 def normalize_title(title: str) -> str:
-    """Lowercase, drop punctuation, collapse whitespace — for fuzzy matching."""
+    """Lowercase, fold diacritics, drop punctuation, collapse whitespace — for
+    fuzzy matching ("Schrödinger" and the transliterated "Schrodinger" match)."""
     if not title:
         return ""
-    t = _PUNCT_RE.sub(" ", title.lower())
+    t = unicodedata.normalize("NFKD", title)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = _PUNCT_RE.sub(" ", t.lower())
     return _WS_RE.sub(" ", t).strip()
 
 
@@ -156,22 +174,34 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
+# Generational suffixes that can trail a surname ("Smith Jr.", "Davis III").
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+
 def _last_name(author: str) -> str:
     """Best-effort surname, normalized. A comma means "Surname, Given/Initial"
-    order (take the part before it); otherwise "Given Surname" (last token)."""
+    order (take the part before it); otherwise "Given Surname" (last token).
+    Trailing generational suffixes (Jr/Sr/II-IV) are skipped on both sides."""
     head = author.split(",", 1)[0]
     parts = normalize_title(head).split()
+    while len(parts) > 1 and parts[-1] in _NAME_SUFFIXES:
+        parts.pop()
     return parts[-1] if parts else ""
+
+
+# Tokens that mean "and more authors", not a surname ("et al.", "and others").
+_NON_AUTHOR_TOKENS = {"al", "et", "others"}
 
 
 def author_overlap(cited: List[str], record: List[str]) -> float:
     """Fraction of cited authors whose surname appears in the record's authors.
 
     Returns 0.0 if either list is empty. Surname-based so initials vs full
-    given names ("A. Vaswani", "Vaswani, A.", "Ashish Vaswani") all match.
+    given names ("A. Vaswani", "Vaswani, A.", "Ashish Vaswani") all match;
+    "et al." entries are ignored rather than counted as unmatched authors.
     """
-    cited_names = {n for a in cited if (n := _last_name(a))}
-    record_names = {n for a in record if (n := _last_name(a))}
+    cited_names = {n for a in cited if (n := _last_name(a)) and n not in _NON_AUTHOR_TOKENS}
+    record_names = {n for a in record if (n := _last_name(a)) and n not in _NON_AUTHOR_TOKENS}
     if not cited_names or not record_names:
         return 0.0
     hits = sum(1 for n in cited_names if n in record_names)
@@ -183,7 +213,9 @@ def normalize_arxiv_id(value: str) -> str:
     if not value:
         return ""
     m = _ARXIV_RE.search(value)
-    return m.group(1) if m else ""
+    if not m:
+        return ""
+    return m.group(1) or m.group(2) or ""
 
 
 _DOI_PREFIXES = (
@@ -306,8 +338,12 @@ def classify(
         )
 
     # Year disagreement (>1 year apart, when both present and positive).
+    # Skipped when exactly one side is a preprint venue: preprint and published
+    # years legitimately differ, and the venue check above already covers the
+    # flaggable direction — same incomplete-coverage rationale as there.
     if (ref.year is not None and rec.year is not None
             and ref.year > 0 and rec.year > 0
+            and _venue_looks_like_preprint(ref.venue) == _venue_looks_like_preprint(rec.venue)
             and abs(int(ref.year) - int(rec.year)) > 1):
         mismatches.append(f"year: cited {ref.year} but record says {rec.year} ({rec.source})")
 
@@ -325,6 +361,14 @@ def classify(
 def _first(seq: Any, default: str = "") -> str:
     """Return the first element of a list, or default if the list is empty/non-list."""
     return seq[0] if isinstance(seq, list) and seq else default
+
+
+def _coerce_year(value: Any) -> Optional[int]:
+    """Best-effort int year; None for missing or malformed API values."""
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_crossref(payload: Dict[str, Any]) -> List[SourceRecord]:
@@ -368,7 +412,7 @@ def parse_openalex(payload: Dict[str, Any]) -> List[SourceRecord]:
             source="openalex",
             title=str(item.get("title", "") or ""),
             authors=[a for a in authors if a],
-            year=item.get("publication_year"),
+            year=_coerce_year(item.get("publication_year")),
             venue=venue,
             doi=doi,
             url=str(item.get("id", "") or ""),
@@ -385,7 +429,7 @@ def parse_semantic_scholar(payload: Dict[str, Any]) -> List[SourceRecord]:
             source="s2",
             title=str(item.get("title", "") or ""),
             authors=[a.get("name", "") for a in item.get("authors", []) or [] if a.get("name")],
-            year=item.get("year"),
+            year=_coerce_year(item.get("year")),
             venue=str(item.get("venue", "") or ""),
             doi=str(ext.get("DOI", "") or ""),
             arxiv_id=str(ext.get("ArXiv", "") or ""),
@@ -398,6 +442,10 @@ def parse_dblp(payload: Dict[str, Any]) -> List[SourceRecord]:
     """Parse a DBLP search JSON payload into SourceRecords."""
     out: List[SourceRecord] = []
     hits = (((payload.get("result") or {}).get("hits") or {}).get("hit")) or []
+    if isinstance(hits, dict):
+        # DBLP returns a bare dict (not a one-element list) when exactly one
+        # hit matches, same as the nested author field below.
+        hits = [hits]
     for hit in hits:
         info = hit.get("info", {}) or {}
         author_field = (info.get("authors") or {}).get("author") or []
@@ -473,7 +521,8 @@ def fetch_json(url: str) -> Optional[Dict[str, Any]]:
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError, OSError):
+    except (urllib.error.URLError, urllib.error.HTTPError, http.client.HTTPException,
+            ValueError, TimeoutError, OSError):
         return None
 
 
@@ -483,7 +532,8 @@ def fetch_text(url: str) -> Optional[str]:
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
             return resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+    except (urllib.error.URLError, urllib.error.HTTPError, http.client.HTTPException,
+            TimeoutError, OSError):
         return None
 
 
@@ -530,12 +580,14 @@ def lookup_reference(ref: Reference) -> tuple[List[SourceRecord], List[str]]:
             records.extend(parse_dblp(dblp))
 
     if ref.arxiv_id:
-        queried.append("arxiv")
-        atom = fetch_text(
-            f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(normalize_arxiv_id(ref.arxiv_id), safe='')}"
-        )
-        if atom:
-            records.extend(parse_arxiv_atom(atom))
+        arxiv_id = normalize_arxiv_id(ref.arxiv_id)
+        if arxiv_id:  # skip the query when the id doesn't parse as an arXiv id
+            queried.append("arxiv")
+            atom = fetch_text(
+                f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(arxiv_id, safe='')}"
+            )
+            if atom:
+                records.extend(parse_arxiv_atom(atom))
 
     return records, queried
 

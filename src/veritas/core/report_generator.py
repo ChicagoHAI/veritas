@@ -21,18 +21,22 @@ from veritas.core.config import (
     REPLICATION_SCORE_FILE,
     PAPER_CLAIMS_FILE,
     ANALYZE_SUBDIR,
+    ASSESS_SUBDIR,
+    REPLICATION_SUBDIR,
+    FIX_SEVERITY_FILE,
     EVALUATION_SUBDIR,
     EVALUATION_FILE,
     CITATION_CHECK_FILE,
     CITATION_AUDIT_FILE,
     WORKFLOW_LOG_FILE,
 )
+from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
     PaperClaims,
     ReplicationScore,
 )
-from veritas.core.replication import _extract_json
+from veritas.core.replication import _extract_json, gather_evidence
 
 
 # Header label for each tier in the report.
@@ -121,10 +125,12 @@ def _build_audit_lookup(audit) -> dict:
     claim text."""
     lookup = {}
     for it in (audit or {}).get("items") or []:
-        if not (isinstance(it, dict) and it.get("key")):
+        if not (isinstance(it, dict) and isinstance(it.get("key"), str) and it.get("key")):
             continue
-        lookup.setdefault((it.get("key"), it.get("kind")), []).append(
-            (_normalize_audit_claim(it.get("claim")), it.get("audit_verdict"))
+        # kind and audit_verdict are coerced so a wrong-typed (unhashable)
+        # value degrades to an ignored item instead of a TypeError.
+        lookup.setdefault((it.get("key"), _txt(it.get("kind"))), []).append(
+            (_normalize_audit_claim(it.get("claim")), _txt(it.get("audit_verdict")))
         )
     return lookup
 
@@ -136,6 +142,8 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
     ever applies to that claim's row; when nothing matches, no verdict
     applies (conservative: better to keep the first-pass verdict than to
     soften the wrong row)."""
+    if not isinstance(key, str):
+        return None
     items = lookup.get((key, kind))
     if not items:
         return None
@@ -147,6 +155,17 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
     if len(items) == 1 and not items[0][0]:
         return items[0][1]
     return None
+
+
+def _txt(value) -> str:
+    """Agent-JSON string field, coerced: non-strings render as empty."""
+    return value if isinstance(value, str) else ""
+
+
+def _safe_url(value) -> str:
+    """Only http(s) URLs are emitted as links; other schemes render unlinked."""
+    url = value if isinstance(value, str) else ""
+    return url if url.startswith(("https://", "http://")) else ""
 
 
 class ReportGenerator:
@@ -169,17 +188,24 @@ class ReportGenerator:
         score = self._load_score(replicate_dir)
         mode = self._load_mode(replicate_dir)
         evaluation = self._load_evaluation(replicate_dir)
+        # Reconstituted from artifacts so a from-disk re-render (report /
+        # check-citations refresh) keeps the evidence and fixes sections the
+        # original run rendered from in-memory data.
+        evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        fix_assessment = self._load_fix_assessment(replicate_dir)
+        citation = self._load_citation_check(replicate_dir)
+        citation_audit = self._load_citation_audit(replicate_dir)
 
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
-            evidence=None, fix_assessment=None,
+            evidence=evidence, fix_assessment=fix_assessment,
             mode=mode,
             output_dir=replicate_dir,
+            citation=citation, citation_audit=citation_audit,
         )
         html_content = self._render_html(self._build_html_context(
-            claims, verdicts, score, None, None, evaluation, mode,
-            citation=self._load_citation_check(replicate_dir),
-            citation_audit=self._load_citation_audit(replicate_dir),
+            claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
+            citation=citation, citation_audit=citation_audit,
         ))
 
         if output_path is None:
@@ -217,16 +243,18 @@ class ReportGenerator:
     ) -> Tuple[Optional[Path], Optional[Path]]:
         """Render the report from live in-memory data."""
         evaluation = self._load_evaluation(output_dir)
+        citation = self._load_citation_check(output_dir)
+        citation_audit = self._load_citation_audit(output_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=config.mode,
             output_dir=output_dir,
+            citation=citation, citation_audit=citation_audit,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
-            citation=self._load_citation_check(output_dir),
-            citation_audit=self._load_citation_audit(output_dir),
+            citation=citation, citation_audit=citation_audit,
         ))
 
         report_dir = config.report_dir
@@ -335,6 +363,20 @@ class ReportGenerator:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _load_fix_assessment(self, replicate_dir: Path) -> Optional[FixSeverityAssessment]:
+        """Load assess/fix_severity.json for a from-artifacts re-render.
+
+        None when the assess phase didn't run or its output is malformed; the
+        report then simply omits the fixes table.
+        """
+        path = replicate_dir / ASSESS_SUBDIR / FIX_SEVERITY_FILE
+        if not path.exists():
+            return None
+        try:
+            return FixSeverityAssessment.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+
     # -- Rendering ----------------------------------------------------------
 
     def _render(
@@ -346,6 +388,8 @@ class ReportGenerator:
         fix_assessment=None,
         mode: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        citation: Optional[dict] = None,
+        citation_audit: Optional[dict] = None,
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report = f"# Replication Report\n\n**Generated:** {now}\n\n"
@@ -378,11 +422,9 @@ class ReportGenerator:
             report += self._render_flags(score.flags)
 
         # Advisory citation check (opt-in via --check-citations). Independent of
-        # the score; rendered when present.
-        report += self._render_citation_check(
-            self._load_citation_check(output_dir),
-            self._load_citation_audit(output_dir),
-        )
+        # the score; rendered when present. Loaded once by the caller and
+        # shared with the HTML context.
+        report += self._render_citation_check(citation, citation_audit)
 
         # Manager retry-loop trajectory (only when the loop ran, i.e. >1
         # iteration or a hand-off). The Replication Score above is unaffected by
@@ -480,125 +522,78 @@ class ReportGenerator:
         return first, False
 
     def _render_citation_check(self, citation: Optional[dict], audit: Optional[dict] = None) -> str:
-        """Render the advisory citation-check section.
+        """Render the advisory citation-check section of the markdown report.
 
-        Covers reference integrity (existence/metadata) and, when present, a
-        claim-support (faithfulness) summary. The independent audit can only soften
-        verify verdicts, never escalate them. Advisory: does not affect the
-        Replication Score.
+        Pure formatting: verdict reconciliation lives in ``_citation_view``,
+        which the HTML/PDF section consumes too, so the two report formats
+        cannot drift. Advisory: does not affect the Replication Score.
         """
-        if not citation:
+        view = self._citation_view(citation, audit)
+        if view is None:
             return ""
 
-        audit_lookup = _build_audit_lookup(audit)
-        softened_count = 0
+        def esc(text: str) -> str:
+            return text.replace("|", "\\|")
 
-        s = citation.get("summary") or {}
-        total = s.get("total", 0)
         section = "## Citation Check\n\n"
         section += (
             "_Advisory reference check (does each cited work exist and is its "
             "metadata correct). This does not affect the Replication Score._\n\n"
         )
         section += (
-            f"**{total} references checked.** "
-            f"{s.get('verified', 0)} verified, "
-            f"{s.get('metadata_mismatch', 0)} metadata mismatch, "
-            f"{s.get('likely_fabricated', 0)} likely fabricated, "
-            f"{s.get('inconclusive', 0)} inconclusive, "
-            f"{s.get('unresolved', 0)} unresolved.\n\n"
+            f"**{view['total']} references checked.** "
+            f"{view['verified']} verified, "
+            f"{view['mismatch']} metadata mismatch, "
+            f"{view['fabricated']} likely fabricated, "
+            f"{view['inconclusive']} inconclusive, "
+            f"{view['unresolved']} unresolved.\n\n"
         )
-        if audit_lookup:
+        if view["has_audit"]:
             section += (
                 "_Counts above are the first-pass result; the independent audit may "
                 "have softened some verdicts, shown below._\n\n"
             )
-        flagged = citation.get("flagged") or []
-        if not flagged:
-            section += f"No reference issues flagged across {total} references.\n\n"
+        if not view["flagged"]:
+            section += f"No reference issues flagged across {view['total']} references.\n\n"
         else:
             section += "| Status | Ref | Detail | Source |\n"
             section += "|--------|-----|--------|--------|\n"
-            label = self._INTEGRITY_LABEL
-            for f in flagged:
-                if not isinstance(f, dict):
-                    continue
-                first_status = f.get("status", "")
-                final_status, softened = self._soften_verdict(
-                    first_status, _audit_verdict_for(audit_lookup, f.get("key"), "integrity"), "integrity")
-                if softened:
-                    softened_count += 1
-                status_label = label.get(final_status, final_status)
-                if softened:
-                    status_label += f" (audit softened from {first_status})"
-                key = ((f.get("key") or "").strip() or "?").replace("|", "\\|")
-                detail = (f.get("detail") or "").replace("|", "\\|").replace("\n", " ").strip()
-                rec = f.get("matched_record") or {}
-                evidence = f.get("evidence") or []
-                src = ""
-                if isinstance(rec, dict) and rec.get("url"):
-                    src = f"[{rec.get('source', 'record')}]({rec['url']})"
-                elif evidence and isinstance(evidence[0], str):
-                    src = f"[evidence]({evidence[0]})"
-                src = src.replace("|", "\\|")
-                section += f"| {status_label} | `{key}` | {detail} | {src} |\n"
+            for row in view["flagged"]:
+                src = f"[{row['source_label']}]({row['url']})" if row["url"] else ""
+                section += (
+                    f"| {esc(row['status_label'])} | `{esc(row['key'])}` "
+                    f"| {esc(row['detail'])} | {esc(src)} |\n"
+                )
             section += "\n"
-        if citation.get("checked_support") is False:
+        if view["support_not_checked"]:
             section += (
                 "_Note: this checks that references exist and are described "
                 "correctly. It does not check citation support (whether each "
                 "cited paper actually backs the claim it is cited for)._\n\n"
             )
 
-        fsum = (citation.get("summary") or {}).get("faithfulness") or {}
-        faith = citation.get("faithfulness") or []
-        if fsum.get("checked"):
-            scope = (citation.get("summary") or {}).get("faithfulness_scope", "main")
-            section += f"\n**Claim support ({scope} claims):** "
+        if view["faith_checked"]:
+            section += f"\n**Claim support ({view['faith_scope']} claims):** "
             section += (
-                f"{fsum.get('checked', 0)} checked. "
-                f"{fsum.get('supported', 0)} supported, "
-                f"{fsum.get('partially_supported', 0)} partially supported, "
-                f"{fsum.get('contradicted', 0)} contradicted, "
-                f"{fsum.get('not_mentioned', 0)} not mentioned, "
-                f"{fsum.get('inaccessible', 0)} inaccessible.\n\n"
+                f"{view['faith_checked']} checked. "
+                f"{view['faith_supported']} supported, "
+                f"{view['faith_partial']} partially supported, "
+                f"{view['faith_contradicted']} contradicted, "
+                f"{view['faith_not_mentioned']} not mentioned, "
+                f"{view['faith_inaccessible']} inaccessible.\n\n"
             )
-            label_faith = self._FAITHFULNESS_LABEL
-            for f in faith:
-                if not isinstance(f, dict):
-                    continue
-                if f.get("source_status") == "inaccessible":
-                    verdict_label = "source inaccessible"
-                    softened_faith = False
-                else:
-                    first_verdict = f.get("verdict", "")
-                    audit_verdict = _audit_verdict_for(
-                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
-                    final_verdict, softened_faith = self._soften_verdict(
-                        first_verdict, audit_verdict, "faithfulness")
-                    if softened_faith:
-                        softened_count += 1
-                    verdict_label = label_faith.get(final_verdict, final_verdict or "?")
-                    if softened_faith:
-                        verdict_label += f" (audit softened from {first_verdict})"
-                    elif audit_verdict == "inaccessible":
-                        verdict_label += " (audit could not retrieve the source)"
-                key = (f.get("key") or "?").replace("|", "\\|")
-                claim = f.get("claim") if isinstance(f.get("claim"), str) else ""
-                claim = claim.replace("\n", " ").strip()
-                quote = (f.get("quote") or "").replace("\n", " ").strip()
-                src = f.get("source") or ""
-                section += f"- `{key}` ({verdict_label}): {claim}"
-                if quote:
-                    section += f'  \n  Source says: "{quote}"'
-                if src:
-                    section += f"  \n  [source]({src})"
+            for row in view["faith_rows"]:
+                section += f"- `{esc(row['key'])}` ({row['verdict_label']}): {row['claim']}"
+                if row["quote"]:
+                    section += f'  \n  Source says: "{row["quote"]}"'
+                if row["source"]:
+                    section += f"  \n  [source]({row['source']})"
                 section += "\n"
             section += "\n"
 
-        if softened_count:
+        if view["softened_count"]:
             section += (
-                f"\n_The independent audit softened {softened_count} flagged "
+                f"\n_The independent audit softened {view['softened_count']} flagged "
                 f"verdict(s) it could not confirm._\n\n"
             )
 
@@ -871,11 +866,12 @@ class ReportGenerator:
         )
         return env.get_template("report/report.html.j2").render(**ctx)
 
-    def _citation_html_view(self, citation: Optional[dict], audit: Optional[dict]) -> Optional[dict]:
-        """Structured citation-check data for the HTML template.
+    def _citation_view(self, citation: Optional[dict], audit: Optional[dict]) -> Optional[dict]:
+        """Reconcile the citation check with its audit into presentation rows.
 
-        Applies the same audit reconciliation as the markdown renderer so the
-        two report formats never disagree. None when the check did not run.
+        The single home of verdict reconciliation: the markdown section and
+        the HTML/PDF section are both thin formatters over these rows, so the
+        two report formats cannot disagree. None when the check did not run.
         """
         if not citation:
             return None
@@ -889,7 +885,7 @@ class ReportGenerator:
         for f in citation.get("flagged") or []:
             if not isinstance(f, dict):
                 continue
-            first_status = f.get("status", "")
+            first_status = _txt(f.get("status"))
             audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
@@ -897,16 +893,21 @@ class ReportGenerator:
             status_label = self._INTEGRITY_LABEL.get(final_status, final_status)
             if softened:
                 status_label += f" (audit softened from {first_status})"
-            rec = f.get("matched_record") or {}
-            evidence = f.get("evidence") or []
-            url = rec.get("url") if isinstance(rec, dict) else None
-            if not url and evidence and isinstance(evidence[0], str):
-                url = evidence[0]
+            rec = f.get("matched_record")
+            rec = rec if isinstance(rec, dict) else {}
+            evidence = f.get("evidence")
+            evidence = evidence if isinstance(evidence, list) else []
+            url = _safe_url(rec.get("url"))
+            source_label = (_txt(rec.get("source")) or "record") if url else ""
+            if not url and evidence:
+                url = _safe_url(evidence[0])
+                source_label = "evidence" if url else ""
             flagged_rows.append({
                 "status_label": status_label,
-                "key": (f.get("key") or "?"),
-                "detail": (f.get("detail") or "").strip(),
+                "key": (_txt(f.get("key")).strip() or "?"),
+                "detail": _txt(f.get("detail")).replace("\n", " ").strip(),
                 "url": url,
+                "source_label": source_label,
             })
 
         fsum = s.get("faithfulness")
@@ -919,7 +920,7 @@ class ReportGenerator:
                 if f.get("source_status") == "inaccessible":
                     verdict_label = "source inaccessible"
                 else:
-                    first_verdict = f.get("verdict", "")
+                    first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
                         audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
                     final_verdict, softened = self._soften_verdict(
@@ -932,11 +933,11 @@ class ReportGenerator:
                     elif audit_verdict == "inaccessible":
                         verdict_label += " (audit could not retrieve the source)"
                 faith_rows.append({
-                    "key": f.get("key") or "?",
+                    "key": (_txt(f.get("key")).strip() or "?"),
                     "verdict_label": verdict_label,
-                    "claim": (f.get("claim") if isinstance(f.get("claim"), str) else "").strip(),
-                    "quote": (f.get("quote") or "").strip(),
-                    "source": f.get("source") or "",
+                    "claim": _txt(f.get("claim")).replace("\n", " ").strip(),
+                    "quote": _txt(f.get("quote")).replace("\n", " ").strip(),
+                    "source": _safe_url(f.get("source")),
                 })
 
         return {
@@ -947,8 +948,15 @@ class ReportGenerator:
             "inconclusive": s.get("inconclusive", 0),
             "unresolved": s.get("unresolved", 0),
             "flagged": flagged_rows,
+            "has_audit": bool(audit_lookup),
+            "support_not_checked": citation.get("checked_support") is False,
             "faith_checked": fsum.get("checked", 0) or 0,
             "faith_scope": s.get("faithfulness_scope", "main"),
+            "faith_supported": fsum.get("supported", 0),
+            "faith_partial": fsum.get("partially_supported", 0),
+            "faith_contradicted": fsum.get("contradicted", 0),
+            "faith_not_mentioned": fsum.get("not_mentioned", 0),
+            "faith_inaccessible": fsum.get("inaccessible", 0),
             "faith_rows": faith_rows,
             "softened_count": softened_count,
         }
@@ -1056,7 +1064,7 @@ class ReportGenerator:
             "n_minor": n_minor, "n_major": n_major, "n_critical": n_critical,
             "flags": (score.flags if (score is not None and score.flags) else []),
             "has_evaluation": evaluation is not None,
-            "citations": self._citation_html_view(citation, citation_audit),
+            "citations": self._citation_view(citation, citation_audit),
         }
 
     def _generate_pdf_from_html(self, html_content: str, output_path: Path) -> bool:

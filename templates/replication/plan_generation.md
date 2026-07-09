@@ -118,6 +118,16 @@ GOOD:
 
 This is a setup value, not a result.
 
+### Plan at the paper's scale — no pre-authorized reductions
+
+Plan every result-producing step at the full scale the methodology prescribes — problem size, resolution, iteration count, dataset, and seed count. Do NOT write reduced-scale fallbacks into the plan — no "if intractable, shrink the problem" clauses, no `--quick`/`--fast`-style shortcut flags, no downsized parameter grids. There is no hidden time budget to plan around: a heavy step may legitimately run for hours or multiple days if that is what the methodology needs — runtime alone is never a reason to plan a smaller step. If the plan offers a reduced-scale escape hatch, the executing agent will take it and the run will produce numbers at the wrong scale.
+
+When a step is genuinely expensive, plan for *efficiency at full scale* instead: prefer the repo's compiled/vectorized code paths, use the GPU when one is available and the method supports it, or split the computation into resumable chunks. Whether to reduce scale is the executing agent's runtime decision, made only under a genuine resource limit and recorded explicitly — never a plan provision.
+{% if gpu_info %}
+
+**Hardware available for this plan:** a GPU is present in this environment: {{ gpu_info }}. Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.
+{% endif %}
+
 ## Scope
 
 Focus on the paper's **headline and supporting claims**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to a headline claim.
@@ -130,7 +140,8 @@ Focus on the paper's **headline and supporting claims**. Do not attempt to repro
 - The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
 - If you find multiple entry points or experiments, prioritize the one that targets the headline claim
 - Every result-producing step MUST have at least one claim ID in `verifies`. Setup-only steps may have an empty `verifies` list.
-- **Validate each `verifies` entry.** For every claim ID you list in a step's `verifies`, re-read that claim's `verification` field. The step's `command_hint` must actually run a workflow that produces the specific evidence the verification field asks the verifier to inspect — not merely touch the same file or codepath. If a step doesn't exercise the claim's specific behavior, either modify `command_hint` to do so, or drop the claim ID from `verifies`. Example of the failure to catch: a claim asks for a comparison between an `i_orb`=90° inference and an `i_orb`-sampled inference, the step description says "Run transform.py to generate forward coordinate transforms", and transform.py hardcodes `i_orb = pi/2`. The step touches the relevant area but never runs the second inference, so the cross-reference is wrong — either modify the step to run both inferences, or drop that claim ID from `verifies`.
+- **Validate each `verifies` entry.** For every claim ID you list in a step's `verifies`, re-read that claim's `verification` field. The step's `command_hint` must actually run a workflow that produces the specific evidence the verification field asks the verifier to inspect — not merely touch the same file or codepath. If a step doesn't exercise the claim's specific behavior, either modify `command_hint` to do so, or drop the claim ID from `verifies`. Example of the failure to catch: a claim asks for a comparison between two specific configurations of a procedure (e.g. one parameter fixed vs. that same parameter varied), the step description says only "run the analysis script," and the script hardcodes the fixed-parameter path so it never actually exercises the varied case. The step touches the relevant code area but never runs the second configuration, so the cross-reference is wrong — either modify the step to run both configurations, or drop that claim ID from `verifies`.
+- Step outputs (files the commands produce) belong under the working copy at `{{ codebase_dir }}/`. Do not direct outputs into other pipeline directories (e.g. `{{ output_dir }}/analyze/`).
 - NEVER include the paper's reported numerical result values in `expected_outcome`.
 
 ## Output
@@ -140,9 +151,9 @@ Save the plan to `{{ output_dir }}/analyze/replication_plan.json` with this form
 ```json
 {
     "environment": {
-        "language": "python or other",
+        "language": "the language(s) the implementation actually uses",
         "key_dependencies": ["list", "of", "main", "packages"],
-        "setup_hints": "Any notes about environment requirements"
+        "setup_hints": "Toolchains to install and hardware to use (e.g. which steps should run on the GPU). Never pre-authorize reduced-scale runs here."
     },
     "steps": [
         {
@@ -155,7 +166,5 @@ Save the plan to `{{ output_dir }}/analyze/replication_plan.json` with this form
     ]
 }
 ```
-
-Also print the JSON to stdout so it can be captured.
 
 Begin your analysis now.

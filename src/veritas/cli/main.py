@@ -7,7 +7,15 @@ from typing import Optional
 from rich.console import Console
 
 from veritas.core.runner import ReplicationRunner
-from veritas.core.config import Config
+from veritas.core.config import (
+    Config,
+    EVALUATION_SUBDIR,
+    CITATION_CHECK_FILE,
+    CITATION_CHECK_META_FILE,
+    CITATION_CHECK_TRANSCRIPT_FILE,
+    CITATION_AUDIT_FILE,
+    CITATION_AUDIT_TRANSCRIPT_FILE,
+)
 
 def _recovered_engine_kwargs(replicate_dir, provider, explicit):
     """Engine kwargs for a standalone pass over an existing run.
@@ -199,9 +207,8 @@ def replicate(
         None,
         "--check-citations-faithfulness",
         help="Citation faithfulness scope when --check-citations is on: 'main' "
-             "(central attributed claims only, default) or 'all' (every "
-             "claim-bearing citation). Default: VERITAS_CITATION_FAITHFULNESS_SCOPE "
-             "or 'main'.",
+             "(central attributed claims only) or 'all' (every claim-bearing "
+             "citation). Default: VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
     max_iters: Optional[int] = typer.Option(
         None,
@@ -256,6 +263,18 @@ def replicate(
         if state_file.exists():
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
+        # The citation check resumes on its own output files, outside pipeline
+        # state; discard those too so --restart truly starts fresh. Transcripts
+        # included: resource-usage accounting sums them, so a stale one would
+        # bill the previous run's citation tokens to this run.
+        for stale in (
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_META_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_TRANSCRIPT_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_FILE,
+            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_TRANSCRIPT_FILE,
+        ):
+            stale.unlink(missing_ok=True)
 
     # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
     # (only when explicitly set in the environment) -> 1 (single-pass default for
@@ -566,8 +585,8 @@ def check_citations(
     ),
     check_citations_faithfulness: Optional[str] = typer.Option(
         None, "--check-citations-faithfulness",
-        help="Faithfulness scope: 'main' or 'all'. Default: "
-             "VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
+        help="Faithfulness scope: 'main' or 'all'. "
+             "Default: VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
     provider: Optional[str] = typer.Option(
         None, "--provider",

@@ -48,15 +48,24 @@ do not memorize numerical results for hardcoding (see Self-Review).
 
 ### 2. Plan
 
+First choose the computational stack, then outline the file structure.
+
+**Match the paper's computational demands.** Implement in the language and framework the methodology genuinely needs, not whichever is fastest to write. If the method's scale depends on compiled or GPU performance — a large-N numerical simulation, an iterative sampling or optimization procedure with many steps, large-scale model training or inference — use tools that deliver it: GPU-enabled libraries (PyTorch / CuPy / JAX) when a GPU is present, JIT or vectorized paths (numba), C/C++ extensions via the available gcc toolchain, or R for R-native methods — pure Python/NumPy on CPU is the easy default, but it is only correct when the paper's own scale doesn't need more. An implementation that is faithful on paper but cannot run at the paper's scale will fail the replication.
+{% if gpu_info %}
+
+**This environment has a GPU available**: {{ gpu_info }}. If the method's scale depends on GPU performance, use it — a GPU-enabled library (PyTorch / CuPy / JAX), not a CPU-only implementation, just because that would be simpler to write.
+{% endif %}
+
+Before committing to a stack, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) to see actual CPU core count, RAM, and GPU VRAM — size your implementation to what is actually there instead of guessing capacity.
+
 Outline the file structure of your codebase before writing any code:
 
 - What modules do you need?
 - What is their dependency order?
 - Where will entry points live?
-- What dependencies (Python packages) are needed?
+- What dependencies (packages, system libraries) are needed?
 
-Track dependencies in `pyproject.toml` or `requirements.txt` (your
-choice; pick one and be consistent).
+Track Python dependencies in `pyproject.toml` or `requirements.txt` (your choice; pick one and be consistent); a non-Python stack additionally uses its native manifest (e.g. R's `DESCRIPTION`).
 
 ### 2.5. Capture the plan to disk
 
@@ -159,8 +168,7 @@ For each Python module you wrote, run:
 python -c "import <module_name>"
 ```
 
-Fix any `ImportError`, `SyntaxError`, or `ModuleNotFoundError`. The
-codebase must be importable end-to-end before you exit.
+Fix any `ImportError`, `SyntaxError`, or `ModuleNotFoundError`. The codebase must be importable end-to-end before you exit. For non-Python components, run the equivalent smoke check (the C/C++ code compiles; R sources parse).
 
 #### d. Dependency completeness
 

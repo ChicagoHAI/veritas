@@ -93,6 +93,21 @@ compute_env_file_keys() {
         | sed 's/,$//'
 }
 
+# "name, VRAM" per reachable GPU, semicolon-joined into one env-var-safe
+# line, or empty if none (no GPU, or no reachable one). This IS the
+# GPU-availability signal passed to the prompts — no separate boolean, since
+# a bare yes/no doesn't tell codegen whether the paper's methodology
+# actually fits in the available VRAM. Mirrors get_gpu_info() in
+# docker/run.sh.
+detect_gpu_info() {
+    if command -v nvidia-smi &> /dev/null; then
+        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
+            | tr '\n' ';' | sed 's/;$//'
+    else
+        echo ""
+    fi
+}
+
 # Resolve --output to the same value veritas's config.py would compute.
 # Mirrors the fallback chain at src/veritas/core/config.py:106-115.
 resolve_output_dir() {
@@ -272,6 +287,7 @@ cmd_replicate() {
     # are docker paths; we override for host-side layout).
     export VERITAS_SKILLS_DIR="$skills_dst"
     export VERITAS_VENV_DIR="$output_dir/.venv"
+    export VERITAS_GPU_INFO="$(detect_gpu_info)"
 
     run_veritas_cli replicate "$@"
 }
@@ -306,7 +322,7 @@ Subcommands:
 Same flags as the docker \`./veritas\` wrapper. The host wrapper:
   - copies templates/skills to <--output>/veritas-skills
   - copies --repo to <--output>/replication/codebase (full mode)
-  - exports VERITAS_SKILLS_DIR and VERITAS_VENV_DIR for prompt rendering
+  - exports VERITAS_SKILLS_DIR, VERITAS_VENV_DIR, and VERITAS_GPU_INFO for prompt rendering
   - writes <--output>/replication/codebase.diff on exit
 EOF
 }
@@ -328,7 +344,20 @@ case "$1" in
     estimate)
         cmd_passthrough "$@"
         ;;
-    report|evaluate|check-citations)
+    report|evaluate)
+        cmd_passthrough "$@"
+        ;;
+    check-citations)
+        # The citation passes are LLM calls; fail fast when the provider CLI
+        # is missing, matching the docker wrapper's credential preflight.
+        cc_provider="$(extract_provider "$@")"
+        case "$cc_provider" in
+            claude|codex|gemini) require_tools python "$cc_provider" ;;
+            *)
+                echo "ERROR: unknown --provider: $cc_provider (expected claude|codex|gemini)" >&2
+                exit 1
+                ;;
+        esac
         cmd_passthrough "$@"
         ;;
     -h|--help|help)
