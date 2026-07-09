@@ -54,11 +54,7 @@ class Reference:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Reference":
-        year = d.get("year")
-        try:
-            year = int(year) if year not in (None, "") else None
-        except (TypeError, ValueError):
-            year = None
+        year = _coerce_year(d.get("year"))
         authors = d.get("authors") or []
         if isinstance(authors, str):
             # A string instead of a list is one author entry, not an iterable
@@ -379,13 +375,8 @@ def parse_crossref(payload: Dict[str, Any]) -> List[SourceRecord]:
             (a.get("name") or f"{a.get('given', '')} {a.get('family', '')}".strip())
             for a in item.get("author", []) or []
         ]
-        year = None
         parts = ((item.get("issued") or {}).get("date-parts") or [])
-        if parts and parts[0]:
-            try:
-                year = int(parts[0][0])
-            except (TypeError, ValueError, IndexError):
-                year = None
+        year = _coerce_year(parts[0][0]) if parts and parts[0] else None
         out.append(SourceRecord(
             source="crossref",
             title=_first(item.get("title", [])),
@@ -452,11 +443,7 @@ def parse_dblp(payload: Dict[str, Any]) -> List[SourceRecord]:
         if isinstance(author_field, dict):
             author_field = [author_field]
         authors = [a.get("text", "") for a in author_field if a.get("text")]
-        year = None
-        try:
-            year = int(info.get("year")) if info.get("year") else None
-        except (TypeError, ValueError):
-            year = None
+        year = _coerce_year(info.get("year"))
         venue_field = info.get("venue", "")
         venue = str(_first(venue_field) or "") if isinstance(venue_field, list) else str(venue_field or "")
         out.append(SourceRecord(
