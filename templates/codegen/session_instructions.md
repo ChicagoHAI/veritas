@@ -59,12 +59,9 @@ when a GPU is present, JIT or vectorized paths (numba), C/C++ extensions
 via the available gcc toolchain, or R for R-native methods. An
 implementation that is faithful on paper but cannot run at the paper's
 scale will fail the replication.
-{% if gpu_available == true %}
+{% if gpu_info %}
 
-**This environment has a GPU available** (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %}. If the method's scale depends on GPU performance, write to a GPU-enabled library (PyTorch / CuPy / JAX) — don't default to CPU-only NumPy just because it's simpler.
-{% elif gpu_available == false %}
-
-**This environment has no GPU available** (confirmed at launch). Do not write CUDA/GPU-only code paths; target a CPU-viable stack (compiled, JIT, or vectorized) instead.
+**This environment has a GPU available**: {{ gpu_info }}. If the method's scale depends on GPU performance, write to a GPU-enabled library (PyTorch / CuPy / JAX) — don't default to CPU-only NumPy just because it's simpler.
 {% endif %}
 
 Before committing to a stack, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) to see actual CPU core count, RAM, and GPU VRAM — size your implementation to what is actually there instead of guessing capacity.

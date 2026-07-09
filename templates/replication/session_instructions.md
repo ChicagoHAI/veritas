@@ -56,8 +56,7 @@ A step is only "unreproducible" once distinct strategies have each failed for a 
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology, parameters, and experimental setup. See **Reporting Discipline** below for how to treat any result values it reports.
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
-{% if gpu_available == true %}- **Hardware:** a GPU is available in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %} — use it for GPU-capable steps.
-{% elif gpu_available == false %}- **Hardware:** no GPU is available in this environment (confirmed at launch) — do not plan around GPU-only code paths; use CPU fallbacks.
+{% if gpu_info %}- **Hardware:** a GPU is available in this environment: {{ gpu_info }} — use it for GPU-capable steps.
 {% endif %}
 
 Write only under the working directory and the output directory above. Other subdirectories of the run output (`analyze/`, `verify/`, ...) belong to other pipeline phases — do not write into them.
@@ -166,15 +165,13 @@ Surfacing a corrupted intermediate as a logged finding is far more useful than l
 
 This plan includes GPU-dependent steps.
 
-{% if gpu_available == false %}
-No GPU is available in this environment (confirmed at launch).
-{% elif gpu_available %}
-A GPU is available in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %} — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
+{% if gpu_info %}
+A GPU is available in this environment: {{ gpu_info }} — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
 {% else %}
 If `nvidia-smi` shows a GPU, run GPU-capable steps on it — do not quietly fall
 back to CPU (and then to a downsized run) when the hardware is present.
 {% endif %}
-{% if not gpu_available %}
+{% if not gpu_info %}
 If GPU is not available:
 - Try running with `CUDA_VISIBLE_DEVICES=""` to force CPU mode
 - Check if the code supports a `--device cpu` or `--no-cuda` flag

@@ -20,27 +20,16 @@ _DEFAULT_SKILLS_DIR = "/workspace/veritas-skills"
 _DEFAULT_VENV_DIR = "/workspace/.venv"
 
 
-def _parse_gpu_available(raw: Optional[str]) -> Optional[bool]:
-    """Parse VERITAS_GPU_AVAILABLE, set by the docker/host wrapper from its
-    own GPU reachability probe (docker/run.sh::get_gpu_flags or the
-    veritas-host equivalent).
-
-    None means the wrapper didn't set it (e.g. the CLI invoked directly,
-    bypassing ./veritas / ./veritas-host) — templates fall back to asking
-    the agent to check for itself rather than asserting a fact we don't have.
-    """
-    if raw is None:
-        return None
-    return raw.strip().lower() == "true"
-
-
 def _parse_gpu_info(raw: Optional[str]) -> Optional[str]:
     """Parse VERITAS_GPU_INFO: a semicolon-joined "name, VRAM" string per
-    reachable GPU, set by the same wrapper probe as VERITAS_GPU_AVAILABLE.
+    reachable GPU, set by the docker/host wrapper's own GPU reachability
+    probe (docker/run.sh::get_gpu_info or the veritas-host equivalent).
 
-    None means no detail is available (unset, or the probe returned nothing
-    usable) — a bare gpu_available boolean doesn't tell codegen whether the
-    paper's methodology actually fits in the available VRAM.
+    This IS the GPU-availability signal — its absence means no GPU (or the
+    wrapper wasn't used, e.g. the CLI invoked directly), its presence means
+    a GPU is available, with what it actually is. No separate boolean: a
+    bare yes/no doesn't tell codegen whether the paper's methodology
+    actually fits in the available VRAM.
     """
     if not raw or not raw.strip():
         return None
@@ -78,7 +67,6 @@ class PromptGenerator:
         ctx = {
             "skills_dir": os.environ.get("VERITAS_SKILLS_DIR", _DEFAULT_SKILLS_DIR),
             "venv_dir": os.environ.get("VERITAS_VENV_DIR", _DEFAULT_VENV_DIR),
-            "gpu_available": _parse_gpu_available(os.environ.get("VERITAS_GPU_AVAILABLE")),
             "gpu_info": _parse_gpu_info(os.environ.get("VERITAS_GPU_INFO")),
         }
         if output_dir is not None:

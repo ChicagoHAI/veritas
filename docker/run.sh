@@ -128,18 +128,19 @@ get_gpu_flags() {
 
 # -----------------------------------------------------------------------------
 # Return a "name, VRAM" line per reachable GPU (semicolon-joined for a single
-# env-var-safe line), or empty if none. A bare "GPU present" boolean doesn't
-# tell codegen whether the paper's methodology actually fits in the available
-# VRAM; this reuses the same nvidia-smi probe get_gpu_flags already runs, just
-# keeping its output instead of discarding it. Empty whenever get_gpu_flags
-# would also report no GPU (same toolkit/reachability checks).
+# env-var-safe line), or empty if none. This IS the GPU-availability signal
+# passed to the prompts — its emptiness means "no GPU" (or unknown), its
+# presence means "GPU available, and here's what it is." No separate
+# available/unavailable boolean: a bare "yes" doesn't tell codegen whether
+# the paper's methodology actually fits in the available VRAM, so there's no
+# reason to carry both.
+#
+# Takes the already-computed $gpu_flags result (empty or "--gpus all") so it
+# doesn't repeat get_gpu_flags's own toolkit/image-existence checks.
 # -----------------------------------------------------------------------------
 get_gpu_info() {
-    if ! docker info 2>/dev/null | grep -qi nvidia; then
-        echo ""
-        return
-    fi
-    if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+    local gpu_flags="$1"
+    if [ -z "$gpu_flags" ]; then
         echo ""
         return
     fi
@@ -1197,21 +1198,13 @@ cmd_replicate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
-    # Surface the same GPU reachability probe get_gpu_flags already ran, as a
-    # fact prompt_generator.py can thread into codegen/plan/replicate prompts
-    # (issue #92: codegen previously defaulted to CPU-only code blind to
-    # whether a GPU would even be present at replicate time).
-    local gpu_available_flag="-e VERITAS_GPU_AVAILABLE=false"
-    if [ -n "$gpu_flags" ]; then
-        gpu_available_flag="-e VERITAS_GPU_AVAILABLE=true"
-    fi
-
-    # Actual GPU model/VRAM per device, when available — lets the prompt say
-    # e.g. "2x NVIDIA RTX A6000, 49140 MiB" instead of a bare yes/no, so
-    # codegen can reason about whether the paper's methodology fits.
+    # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
+    # can thread into codegen/plan/replicate prompts (issue #92: codegen
+    # previously defaulted to CPU-only code blind to whether a GPU would even
+    # be present at replicate time). Empty when get_gpu_flags found none.
     local gpu_info_flag=""
     local gpu_info
-    gpu_info=$(get_gpu_info)
+    gpu_info=$(get_gpu_info "$gpu_flags")
     if [ -n "$gpu_info" ]; then
         gpu_info_flag="-e VERITAS_GPU_INFO=\"$gpu_info\""
     fi
@@ -1242,7 +1235,6 @@ cmd_replicate() {
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
-        $gpu_available_flag \
         $gpu_info_flag \
         $credential_mounts \
         $env_file_flag \

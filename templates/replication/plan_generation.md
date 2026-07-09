@@ -134,12 +134,9 @@ one is available and the method supports it, or split the computation into
 resumable chunks. Whether to reduce scale is the executing agent's runtime
 decision, made only under a genuine resource limit and recorded explicitly —
 never a plan provision.
-{% if gpu_available == true %}
+{% if gpu_info %}
 
-**Hardware available for this plan:** a GPU is present in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %}. Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.
-{% elif gpu_available == false %}
-
-**Hardware available for this plan:** no GPU is present in this environment (confirmed at launch). Do not plan steps around GPU-only code paths; scope compiled or vectorized CPU paths instead.
+**Hardware available for this plan:** a GPU is present in this environment: {{ gpu_info }}. Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.
 {% endif %}
 
 ## Scope
