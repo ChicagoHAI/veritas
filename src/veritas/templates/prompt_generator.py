@@ -20,6 +20,20 @@ _DEFAULT_SKILLS_DIR = "/workspace/veritas-skills"
 _DEFAULT_VENV_DIR = "/workspace/.venv"
 
 
+def _parse_gpu_available(raw: Optional[str]) -> Optional[bool]:
+    """Parse VERITAS_GPU_AVAILABLE, set by the docker/host wrapper from its
+    own GPU reachability probe (docker/run.sh::get_gpu_flags or the
+    veritas-host equivalent).
+
+    None means the wrapper didn't set it (e.g. the CLI invoked directly,
+    bypassing ./veritas / ./veritas-host) — templates fall back to asking
+    the agent to check for itself rather than asserting a fact we don't have.
+    """
+    if raw is None:
+        return None
+    return raw.strip().lower() == "true"
+
+
 class PromptGenerator:
     """Generates prompts for claim extraction, replication, and verification."""
 
@@ -51,6 +65,7 @@ class PromptGenerator:
         ctx = {
             "skills_dir": os.environ.get("VERITAS_SKILLS_DIR", _DEFAULT_SKILLS_DIR),
             "venv_dir": os.environ.get("VERITAS_VENV_DIR", _DEFAULT_VENV_DIR),
+            "gpu_available": _parse_gpu_available(os.environ.get("VERITAS_GPU_AVAILABLE")),
         }
         if output_dir is not None:
             output_abs = Path(output_dir).absolute()

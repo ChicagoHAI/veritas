@@ -88,6 +88,19 @@ compute_env_file_keys() {
         | sed 's/,$//'
 }
 
+# Detect GPU reachability directly on the host (no docker --gpus flag to
+# mirror here). Mirrors docker/run.sh::get_gpu_flags's intent: "true" only
+# when nvidia-smi both exists and actually lists a device, not just when the
+# binary is on PATH with no card behind it.
+detect_gpu_available() {
+    if command -v nvidia-smi &> /dev/null \
+            && nvidia-smi --query-gpu=name --format=csv,noheader &> /dev/null; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
 # Resolve --output to the same value veritas's config.py would compute.
 # Mirrors the fallback chain at src/veritas/core/config.py:106-115.
 resolve_output_dir() {
@@ -234,6 +247,7 @@ cmd_replicate() {
     # are docker paths; we override for host-side layout).
     export VERITAS_SKILLS_DIR="$skills_dst"
     export VERITAS_VENV_DIR="$output_dir/.venv"
+    export VERITAS_GPU_AVAILABLE="$(detect_gpu_available)"
 
     run_veritas_cli replicate "$@"
 }
@@ -259,7 +273,7 @@ Subcommands:
 Same flags as the docker \`./veritas\` wrapper. The host wrapper:
   - copies templates/skills to <--output>/veritas-skills
   - copies --repo to <--output>/replication/codebase (full mode)
-  - exports VERITAS_SKILLS_DIR and VERITAS_VENV_DIR for prompt rendering
+  - exports VERITAS_SKILLS_DIR, VERITAS_VENV_DIR, and VERITAS_GPU_AVAILABLE for prompt rendering
   - writes <--output>/replication/codebase.diff on exit
 EOF
 }

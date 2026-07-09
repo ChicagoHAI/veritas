@@ -59,6 +59,9 @@ when a GPU is present, JIT or vectorized paths (numba), C/C++ extensions
 via the available gcc toolchain, or R for R-native methods. An
 implementation that is faithful on paper but cannot run at the paper's
 scale will fail the replication.
+{% if gpu_available is not none %}
+**This environment{% if gpu_available %} has a GPU available{% else %} has no GPU available{% endif %}** (confirmed at launch).{% if gpu_available %} If the method's scale depends on GPU performance, write to a GPU-enabled library (PyTorch / CuPy / JAX) — don't default to CPU-only NumPy just because it's simpler.{% else %} Do not write CUDA/GPU-only code paths; target a CPU-viable stack (compiled, JIT, or vectorized) instead.{% endif %}
+{% endif %}
 
 Outline the file structure of your codebase before writing any code:
 

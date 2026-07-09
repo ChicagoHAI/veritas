@@ -1175,6 +1175,15 @@ cmd_replicate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Surface the same GPU reachability probe get_gpu_flags already ran, as a
+    # fact prompt_generator.py can thread into codegen/plan/replicate prompts
+    # (issue #92: codegen previously defaulted to CPU-only code blind to
+    # whether a GPU would even be present at replicate time).
+    local gpu_available_flag="-e VERITAS_GPU_AVAILABLE=false"
+    if [ -n "$gpu_flags" ]; then
+        gpu_available_flag="-e VERITAS_GPU_AVAILABLE=true"
+    fi
+
     # Replication API keys: pass .env into the container only on subcommands
     # that run paper code. The key-name list lets the Python layer scope
     # visibility to the replicate phase (see runner.py::_invoke_provider).
@@ -1201,6 +1210,7 @@ cmd_replicate() {
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
+        $gpu_available_flag \
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
