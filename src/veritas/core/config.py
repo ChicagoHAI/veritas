@@ -64,7 +64,13 @@ _WEB_LOCKED_MODELS = ("openrouter/fusion",)
 def is_web_locked_slug(model: Optional[str]) -> bool:
     if not model:
         return False
-    return model in _WEB_LOCKED_MODELS or model.endswith(":online")
+    # Model specs may carry the slug bare ("openrouter:fusion") or with its
+    # author prefix ("openrouter:openrouter/fusion"); lock both spellings.
+    return (
+        model in _WEB_LOCKED_MODELS
+        or f"openrouter/{model}" in _WEB_LOCKED_MODELS
+        or model.endswith(":online")
+    )
 
 
 # Output directory structure — each phase writes into its own subdir.

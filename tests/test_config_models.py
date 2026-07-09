@@ -130,6 +130,11 @@ from veritas.core.config import is_web_locked_slug
 def test_web_locked_fusion():
     assert is_web_locked_slug("openrouter/fusion") is True
 
+def test_web_locked_bare_fusion_shorthand():
+    # `--replicate-model openrouter:fusion` resolves the model as bare
+    # "fusion"; the lock must catch the shorthand, not only the full slug.
+    assert is_web_locked_slug("fusion") is True
+
 def test_web_locked_online_suffix():
     assert is_web_locked_slug("moonshotai/kimi-k2.6:online") is True
 
