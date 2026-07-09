@@ -127,6 +127,29 @@ get_gpu_flags() {
 }
 
 # -----------------------------------------------------------------------------
+# Return a "name, VRAM" line per reachable GPU (semicolon-joined for a single
+# env-var-safe line), or empty if none. This IS the GPU-availability signal
+# passed to the prompts — its emptiness means "no GPU" (or unknown), its
+# presence means "GPU available, and here's what it is." No separate
+# available/unavailable boolean: a bare "yes" doesn't tell codegen whether
+# the paper's methodology actually fits in the available VRAM, so there's no
+# reason to carry both.
+#
+# Takes the already-computed $gpu_flags result (empty or "--gpus all") so it
+# doesn't repeat get_gpu_flags's own toolkit/image-existence checks.
+# -----------------------------------------------------------------------------
+get_gpu_info() {
+    local gpu_flags="$1"
+    if [ -z "$gpu_flags" ]; then
+        echo ""
+        return
+    fi
+    docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+        --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
+        | tr '\n' ';' | sed 's/;$//'
+}
+
+# -----------------------------------------------------------------------------
 # On macOS, force linux/amd64 because nvidia/cuda base images have no arm64
 # build. Docker Desktop uses Rosetta emulation.
 # -----------------------------------------------------------------------------
@@ -1175,6 +1198,17 @@ cmd_replicate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
+    # can thread into codegen/plan/replicate prompts (issue #92: codegen
+    # previously defaulted to CPU-only code blind to whether a GPU would even
+    # be present at replicate time). Empty when get_gpu_flags found none.
+    local gpu_info_flag=""
+    local gpu_info
+    gpu_info=$(get_gpu_info "$gpu_flags")
+    if [ -n "$gpu_info" ]; then
+        gpu_info_flag="-e VERITAS_GPU_INFO=\"$gpu_info\""
+    fi
+
     # Replication API keys: pass .env into the container only on subcommands
     # that run paper code. The key-name list lets the Python layer scope
     # visibility to the replicate phase (see runner.py::_invoke_provider).
@@ -1208,6 +1242,7 @@ cmd_replicate() {
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
+        $gpu_info_flag \
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \

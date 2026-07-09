@@ -719,7 +719,8 @@ class ReplicationRunner:
             + "\n\n---\n\n"
             + "Your last output was not valid JSON. Here is what you returned:\n\n"
             + broken_output[:2000]
-            + "\n\nPlease return ONLY valid JSON, with no explanation or markdown formatting."
+            + f"\n\nRewrite {output_path} so it contains ONLY valid JSON, "
+            + "with no explanation or markdown formatting."
             + "\n\nCommon JSON mistakes to avoid:"
             + "\n- Double quotes inside strings MUST be escaped: use \\\" not \""
             + "\n- Backslash-single-quote (\\') is not valid JSON — just use '"

@@ -27,7 +27,7 @@ is fine.
 For each fix, assess:
 
 1. **Severity** — one of:
-   - `minor`: Routine maintenance (API renames, dependency version pins, import path updates, missing type hints). A human would fix this in under a minute.
+   - `minor`: Routine maintenance (API renames, dependency version pins, import path updates, hardcoded-path corrections). A human would fix this in under a minute.
    - `major`: Significant but localized issue (wrong algorithm parameters, broken data loading, missing preprocessing steps, incompatible library versions requiring code changes). A human would need to understand the code to fix this.
    - `critical`: Fundamental problem (core algorithm is wrong, essential data is unavailable, methodology cannot be implemented as described). Questions whether the paper's results are achievable from the provided code.
 

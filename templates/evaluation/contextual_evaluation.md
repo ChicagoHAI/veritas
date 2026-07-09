@@ -148,6 +148,5 @@ Reliability rules:
   headline Replication Score. The score stays deterministic.
 - Every `report.*` field is a string. Use `""` for genuinely-empty sections
   (the report renderer omits empty sections rather than printing filler).
-- Print the JSON to stdout as well.
 
 Begin your review now.

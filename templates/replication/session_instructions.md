@@ -56,6 +56,10 @@ A step is only "unreproducible" once distinct strategies have each failed for a 
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology, parameters, and experimental setup. See **Reporting Discipline** below for how to treat any result values it reports.
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
+{% if gpu_info %}- **Hardware:** a GPU is available in this environment: {{ gpu_info }} — use it for GPU-capable steps.
+{% endif %}
+
+Write only under the working directory and the output directory above. Other subdirectories of the run output (`analyze/`, `verify/`, ...) belong to other pipeline phases — do not write into them.
 
 ## Reporting Discipline
 
@@ -104,7 +108,7 @@ if [ -f setup.py ] || [ -f pyproject.toml ]; then
     uv pip install -e . 2>&1 || echo "editable install had errors"
 fi
 if [ -f environment.yml ]; then
-    echo "Note: Conda environment.yml found but conda not available; using pip fallback"
+    echo "Note: environment.yml found; if conda is unavailable here, approximate it with pip installs"
 fi
 
 # Record what was installed
@@ -117,11 +121,11 @@ When something fails, actively resolve it:
 
 - **Missing packages** → install them (`uv pip install <package>`)
 - **Deprecated APIs** → patch the code (e.g., rename `cumtrapz` to `cumulative_trapezoid`)
-- **Missing compilers or system tools** → install them. Prefer the package manager your environment already uses: `apt-get install -y g++` on a Debian/Ubuntu host or container, `conda install -y gxx_linux-64` in a conda environment, or `module load gcc` on a managed HPC cluster. If you don't have sudo and `apt-get` isn't available, fall back to conda or pip (`pip install <pkg>`) for Python-side fixes.
+- **Missing compilers or system tools** → check before installing: the veritas container already ships `gcc`/`g++`/`make` (build-essential) and R. For a genuinely missing tool, use a mechanism that works without root — many toolchains install via pip/uv (`cmake`, `ninja`) or via conda where a conda environment exists; on a managed HPC cluster try `module load gcc`. `apt-get install` requires root and fails in the default container — don't burn attempts on it there.
 - **Missing data files** → check for download scripts, look for URLs in the README, check for filename typos
 - **Configuration issues** → adjust paths, environment variables, config files
 - **Version incompatibilities** → pin compatible versions, patch import paths
-- **Memory/resource issues** → reduce batch sizes, use smaller models, set resource limits
+- **Memory/resource issues** → set resource limits, stream or chunk the data, checkpoint and resume. Reducing the scale of the computation itself is a last resort governed by "Run at the methodology's intended scale" below — never swap in a smaller model or dataset as a convenience.
 
 **Every fix you apply is valuable evidence.** A paper that needed 4 minor patches to run is still reproducible — the fixes document what a human would have to do. Report each fix in your evidence (see Evidence Collection below).
 
@@ -131,7 +135,10 @@ When something fails, actively resolve it:
 
 Run each step at the **scale the plan/methodology specifies** — the full grid, the full epoch count, the full dataset or sample size. Do **not** quietly substitute a toy or downsized run (1 epoch, a handful of samples, a tiny grid) to finish faster.
 
-- Only downsize if a genuine resource limit forces it (out of memory, no GPU, a step that cannot finish in the available time) — and only after trying to make the full-scale run work.
+There is **no hidden time budget**. A heavy step may legitimately take hours or multiple days if that is what the methodology needs — a full-scale run that takes days beats a fast toy run at the wrong scale. When a step looks expensive, make it *efficient at full scale* first — use the compiled/vectorized code path, run on the GPU if one is available, split the work into resumable chunks — rather than shrinking the problem.
+
+- Only downsize if a genuine resource limit forces it (out of memory, required hardware absent) — a long runtime by itself is not such a limit; let a heavy step run as long as it needs. Downsize only after trying to make the full-scale run work.
+- Before concluding a resource limit forces a downsize, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) and cite its actual numbers in your notes — a downsize justified by a guessed constraint is not genuine.
 - If you must downsize, **say so explicitly in that step's `notes`**: what you reduced, from what to what, and why (the specific resource limit). A downsized run that is clearly labeled is a finding; an unlabeled one is a silent flaw.
 
 **When to stop trying:** Only after you have tried several genuinely different approaches (see the strategies above) and the problem is fundamental — core algorithm wrong, essential data paywalled with no alternative, hardware genuinely unavailable. Document what you tried, the distinct approaches, and why each failed, then move on.
@@ -156,11 +163,20 @@ Surfacing a corrupted intermediate as a logged finding is far more useful than l
 {% if has_gpu_step | length > 0 %}
 ### GPU Guidance
 
-This plan includes GPU-dependent steps. If GPU is not available:
+This plan includes GPU-dependent steps.
+
+{% if gpu_info %}
+A GPU is available in this environment: {{ gpu_info }} — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
+{% else %}
+If `nvidia-smi` shows a GPU, run GPU-capable steps on it — do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
+{% endif %}
+{% if not gpu_info %}
+If GPU is not available:
 - Try running with `CUDA_VISIBLE_DEVICES=""` to force CPU mode
 - Check if the code supports a `--device cpu` or `--no-cuda` flag
 - Install missing compilers if GPU code needs to fall back to CPU compilation
 - Record the GPU status in your evidence
+{% endif %}
 {% endif %}
 {% endif %}
 
@@ -178,7 +194,7 @@ Execute the following steps in order. For each step, run the code from `{{ codeb
 
 ## Evidence Collection
 
-After executing all steps, save two files:
+Maintain two files. Update `replication_log.json` after **each completed step** (rewrite the full JSON each time), not only at the end — if the session is cut short, the steps already logged survive, whereas an end-only log is lost entirely.
 
 ### 1. `{{ replication_dir }}/replication_log.json`
 
