@@ -2756,6 +2756,21 @@ class ReplicationRunner:
         bucket's provider."""
         return frozenset(PROVIDER_AUTH_VARS.get(provider, ()))
 
+    @staticmethod
+    def _subprocess_env(provider: str, expose_api_keys: bool) -> Dict[str, str]:
+        """Environment for a provider subprocess.
+
+        Every invocation keeps only its own provider's auth vars; other
+        providers' keys are stripped even at the replicate call site, so a
+        host-shell key configured for a different bucket never reaches the
+        paper code. ``expose_api_keys=True`` additionally keeps the vars
+        named in ``VERITAS_ENV_FILE_KEYS`` — the .env file is the sanctioned
+        key channel for the paper code replicate runs."""
+        exempt = ReplicationRunner._auth_exemptions(provider)
+        if expose_api_keys:
+            exempt = exempt | ReplicationRunner._env_file_keys()
+        return ReplicationRunner._stripped_env(exempt)
+
     def _collect_usage_if_tracked(self) -> None:
         """Best-effort resource_usage refresh for standalone entry points,
         so their transcripts count toward the run's totals. Skipped when the
@@ -2881,11 +2896,12 @@ class ReplicationRunner:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         open_mode = "a" if append else "w"
 
-        # Default: strip replication API keys (sourced from .env via --env-file)
-        # from non-replicate phases, keeping only the invoked provider's own
-        # auth vars (PROVIDER_AUTH_VARS). _replicate opts in via
-        # expose_api_keys=True since the paper code it runs needs the keys.
-        env = None if expose_api_keys else self._stripped_env(self._auth_exemptions(provider))
+        # Strip replication API keys (sourced from .env via --env-file) and
+        # other providers' auth vars, keeping only the invoked provider's own
+        # (PROVIDER_AUTH_VARS). _replicate opts in via expose_api_keys=True,
+        # which keeps the .env keys since the paper code it runs needs them —
+        # but other providers' host-shell keys stay stripped even there.
+        env = self._subprocess_env(provider, expose_api_keys)
 
         try:
             process = subprocess.Popen(

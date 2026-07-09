@@ -571,3 +571,77 @@ def test_leak_buckets_include_evaluate_only_when_loop_on(tmp_path):
     looped = Config(repo_path=repo, output_dir=tmp_path / "out2", max_iters=2)
     assert "evaluate" not in ReplicationRunner(single)._leak_buckets()
     assert "evaluate" in ReplicationRunner(looped)._leak_buckets()
+
+
+# -- replicate subprocess env scoping -----------------------------------------
+
+def test_replicate_env_keeps_env_file_keys_strips_other_providers(monkeypatch):
+    # The replicate subprocess runs untrusted paper code: it needs the .env
+    # replication keys and its own provider's auth vars, but another
+    # provider's host-shell-only key must not reach it.
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "HF_TOKEN")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-host-only")
+
+    env = ReplicationRunner._subprocess_env("claude", expose_api_keys=True)
+    assert env["HF_TOKEN"] == "hf-test"
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert "OPENROUTER_API_KEY" not in env
+
+
+def test_replicate_env_keeps_other_provider_key_when_user_put_it_in_env_file(monkeypatch):
+    # A key the user listed in .env is the sanctioned channel for paper
+    # code, even when it doubles as another provider's auth var.
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "OPENROUTER_API_KEY")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env-file")
+
+    env = ReplicationRunner._subprocess_env("claude", expose_api_keys=True)
+    assert env["OPENROUTER_API_KEY"] == "sk-or-from-env-file"
+
+
+def test_non_replicate_env_still_strips_env_file_keys(monkeypatch):
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "HF_TOKEN")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    env = ReplicationRunner._subprocess_env("claude", expose_api_keys=False)
+    assert "HF_TOKEN" not in env
+
+
+def test_invoke_provider_scopes_env_even_with_exposed_keys(tmp_path, monkeypatch):
+    # The expose_api_keys call site must pass a scoped env to the
+    # subprocess, not inherit the whole container environment.
+    import veritas.core.runner as runner_mod
+
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "HF_TOKEN")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-host-only")
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out")
+    runner = ReplicationRunner(config)
+    monkeypatch.setattr(ReplicationRunner, "_resolve_cli",
+                        staticmethod(lambda name: "fake-cli"))
+
+    captured = {}
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO("")
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _FakeProc()
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+    ok = runner._invoke_provider(
+        prompt="p", working_dir=repo, log_path=tmp_path / "t.jsonl",
+        timeout=None, bucket="replicate", expose_api_keys=True,
+    )
+    assert ok is True
+    assert captured["env"] is not None
+    assert captured["env"]["HF_TOKEN"] == "hf-test"
+    assert "OPENROUTER_API_KEY" not in captured["env"]
