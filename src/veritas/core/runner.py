@@ -1899,13 +1899,14 @@ class ReplicationRunner:
             "engine": self.config.resolved_engines()["evaluate"],
             "faithfulness_scope": self.config.faithfulness_scope,
         }
-        if self._load_json_object(output_path) is not None:
+        existing = self._load_json_object(output_path)
+        if existing is not None:
             if self._citation_check_settings_match(current_meta):
                 print("[OK] citation-check: skipped (already produced with these settings)")
                 # A missing or previously failed audit still gets its pass
                 # (idempotent: no-op when the audit exists or nothing needs
                 # auditing).
-                self._audit_citations()
+                self._audit_citations(existing)
                 return
             print(
                 f"  citation-check: settings changed (now scope "
@@ -2086,12 +2087,13 @@ class ReplicationRunner:
         if not audit_path.exists():
             print(f"  Warning: citation-audit agent did not write {audit_path}")
             return
-        try:
-            data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
-            n = len(data.get("items") or []) if isinstance(data, dict) else 0
-            print(f"  Citation audit written; {n} item(s) re-checked")
-        except (ValueError, json.JSONDecodeError) as e:
-            print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
+        data = self._load_json_object(audit_path)
+        if data is None:
+            # The resume gate treats this as not-produced; say so rather
+            # than reporting a written audit.
+            print("  Warning: citation-audit output is not a valid JSON object; the audit will re-run on the next invocation")
+        else:
+            print(f"  Citation audit written; {len(data.get('items') or [])} item(s) re-checked")
 
     # -- Phase 4: Verify ---------------------------------------------------
 
