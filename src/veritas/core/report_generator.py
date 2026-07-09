@@ -919,12 +919,16 @@ class ReportGenerator:
         fsum = s.get("faithfulness")
         fsum = fsum if isinstance(fsum, dict) else {}
         faith_rows = []
-        # Auditable rows per key: with a single row, an audit item for the
-        # key pairs unambiguously even when its claim text drifted.
+        # Auditable rows per key — only verdicts the audit re-checks (see
+        # _has_auditable_findings) can be the target of an audit item. With a
+        # single such row, an item for the key pairs unambiguously even when
+        # its claim text drifted.
         auditable_key_counts = Counter(
             _txt(f.get("key"))
             for f in citation.get("faithfulness") or []
-            if isinstance(f, dict) and f.get("source_status") != "inaccessible"
+            if isinstance(f, dict)
+            and f.get("source_status") != "inaccessible"
+            and f.get("verdict") in ("contradicted", "partially_supported")
         )
         if fsum.get("checked"):
             for f in citation.get("faithfulness") or []:
@@ -936,7 +940,10 @@ class ReportGenerator:
                     first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
                         audit_lookup, f.get("key"), "faithfulness", f.get("claim"),
-                        sole_row=auditable_key_counts[_txt(f.get("key"))] == 1,
+                        sole_row=(
+                            f.get("verdict") in ("contradicted", "partially_supported")
+                            and auditable_key_counts[_txt(f.get("key"))] == 1
+                        ),
                         consumed=consumed)
                     final_verdict, softened = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")

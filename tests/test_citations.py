@@ -1717,3 +1717,31 @@ def test_generate_degrades_on_malformed_replication_log(tmp_path):
     gen = ReportGenerator()
     md_path, _ = gen.generate(run, generate_pdf=False)
     assert md_path.exists()
+
+
+def test_audit_pairing_ignores_rows_the_audit_never_rechecks(tmp_path):
+    # The audit re-checks only contradicted/partially_supported rows, so a
+    # supported row sharing the key does not make the pairing ambiguous.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "mix2024", "claim": "the supported claim",
+             "verdict": "supported", "quote": "q0", "source_status": "retrieved"},
+            {"key": "mix2024", "claim": "The method improves accuracy by 12%",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "mix2024", "kind": "faithfulness",
+             "claim": "the approach yields a 12 percent accuracy gain",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
