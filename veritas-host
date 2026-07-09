@@ -75,6 +75,43 @@ extract_provider() {
 ' "$provider" | tr '[:upper:]' '[:lower:]'
 }
 
+# Provider for a specific engine bucket: a [provider:]model spec on the given
+# flag overrides the global --provider. Mirrors extract_bucket_provider() in
+# docker/run.sh so the host and docker preflights agree.
+extract_bucket_provider() {
+    local flag="$1"; shift
+    local provider=$(extract_provider "$@")
+    local spec=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "$flag")
+                [ $# -ge 2 ] || break
+                spec="$2"; shift 2 ;;
+            "$flag"=*) spec="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
+    case "$spec" in
+        claude:*|codex:*|gemini:*|openrouter:*) provider="${spec%%:*}" ;;
+    esac
+    echo "$provider"
+}
+
+# Provider-aware tool preflight: the base tools passed as extra args are
+# always required, plus the CLI of the provider that will be invoked.
+require_provider_tools() {
+    local provider="$1"; shift
+    case "$provider" in
+        claude|codex|gemini) require_tools "$@" "$provider" ;;
+        openrouter)          require_tools "$@" opencode ;;
+        *)
+            echo "ERROR: unknown provider: $provider (expected claude|codex|gemini|openrouter)" >&2
+            exit 1
+            ;;
+    esac
+}
+
 # Compute a comma-separated list of var names defined in $VERITAS_REPO/.env
 # (uncommented `VAR=value` lines only). Empty string if .env is absent or
 # defines no keys. Used to build VERITAS_ENV_FILE_KEYS — runner.py's
@@ -192,18 +229,7 @@ load_env_file() {
 cmd_replicate() {
     # Tool check is provider-aware: python+uv are always needed, but the
     # agent CLI is only required for the provider the user actually picked.
-    # Hardcoding `claude` here broke `--provider codex` runs (Filbert
-    # caught this in review of the initial PR).
-    local provider
-    provider="$(extract_provider "$@")"
-    case "$provider" in
-        claude|codex|gemini) require_tools python uv "$provider" ;;
-        openrouter)          require_tools python uv opencode ;;
-        *)
-            echo "ERROR: unknown --provider: $provider (expected claude|codex|gemini|openrouter)" >&2
-            exit 1
-            ;;
-    esac
+    require_provider_tools "$(extract_provider "$@")" python uv
 
     local output_dir
     output_dir="$(resolve_output_dir "$@")"
@@ -348,16 +374,10 @@ case "$1" in
         cmd_passthrough "$@"
         ;;
     check-citations)
-        # The citation passes are LLM calls; fail fast when the provider CLI
-        # is missing, matching the docker wrapper's credential preflight.
-        cc_provider="$(extract_provider "$@")"
-        case "$cc_provider" in
-            claude|codex|gemini) require_tools python "$cc_provider" ;;
-            *)
-                echo "ERROR: unknown --provider: $cc_provider (expected claude|codex|gemini)" >&2
-                exit 1
-                ;;
-        esac
+        # The citation passes are LLM calls riding the evaluate bucket; fail
+        # fast when that engine's CLI is missing, matching the docker
+        # wrapper's credential preflight.
+        require_provider_tools "$(extract_bucket_provider --evaluate-model "$@")" python
         cmd_passthrough "$@"
         ;;
     -h|--help|help)
