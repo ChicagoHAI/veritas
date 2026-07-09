@@ -193,8 +193,12 @@ class ReportGenerator:
         evaluation = self._load_evaluation(replicate_dir)
         # Reconstituted from artifacts so a from-disk re-render (report /
         # check-citations refresh) keeps the evidence and fixes sections the
-        # original run rendered from in-memory data.
-        evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        # original run rendered from in-memory data. The log is agent-written:
+        # any malformed shape costs the evidence section, never the render.
+        try:
+            evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        except Exception:
+            evidence = None
         fix_assessment = self._load_fix_assessment(replicate_dir)
         citation = self._load_citation_check(replicate_dir)
         citation_audit = self._load_citation_audit(replicate_dir)

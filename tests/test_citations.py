@@ -1705,3 +1705,15 @@ def test_unmatched_audit_items_are_reported_not_silently_dropped():
     assert view["unmatched_audit"] == 1
     section = gen._render_citation_check(citation, audit)
     assert "could not be matched" in section
+
+
+def test_generate_degrades_on_malformed_replication_log(tmp_path):
+    # The replication log is agent-written; an entry missing a required
+    # field must cost the evidence section, not the whole re-render.
+    run = tmp_path / "run"
+    (run / "replication").mkdir(parents=True)
+    (run / "replication" / "replication_log.json").write_text(
+        '{"step_outcomes": [{"step_id": 1}]}', encoding="utf-8")
+    gen = ReportGenerator()
+    md_path, _ = gen.generate(run, generate_pdf=False)
+    assert md_path.exists()
