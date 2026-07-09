@@ -120,7 +120,7 @@ This is a setup value, not a result.
 
 ### Plan at the paper's scale — no pre-authorized reductions
 
-Plan every result-producing step at the full scale the methodology prescribes — problem size, resolution, iteration count, dataset, and seed count. Do NOT write reduced-scale fallbacks into the plan — no "if intractable, shrink the problem" clauses, no `--quick`/`--fast`-style shortcut flags, no downsized parameter grids. There is no hidden time budget to plan around: a heavy step is allowed to run for hours. If the plan offers a reduced-scale escape hatch, the executing agent will take it and the run will produce numbers at the wrong scale.
+Plan every result-producing step at the full scale the methodology prescribes — problem size, resolution, iteration count, dataset, and seed count. Do NOT write reduced-scale fallbacks into the plan — no "if intractable, shrink the problem" clauses, no `--quick`/`--fast`-style shortcut flags, no downsized parameter grids. There is no hidden time budget to plan around: a heavy step may legitimately run for hours or multiple days if that is what the methodology needs — runtime alone is never a reason to plan a smaller step. If the plan offers a reduced-scale escape hatch, the executing agent will take it and the run will produce numbers at the wrong scale.
 
 When a step is genuinely expensive, plan for *efficiency at full scale* instead: prefer the repo's compiled/vectorized code paths, use the GPU when one is available and the method supports it, or split the computation into resumable chunks. Whether to reduce scale is the executing agent's runtime decision, made only under a genuine resource limit and recorded explicitly — never a plan provision.
 {% if gpu_info %}

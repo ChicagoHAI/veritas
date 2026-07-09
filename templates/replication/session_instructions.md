@@ -135,9 +135,9 @@ When something fails, actively resolve it:
 
 Run each step at the **scale the plan/methodology specifies** — the full grid, the full epoch count, the full dataset or sample size. Do **not** quietly substitute a toy or downsized run (1 epoch, a handful of samples, a tiny grid) to finish faster.
 
-There is **no hidden time budget**. A heavy step is allowed to run for hours; a full-scale run that takes hours beats a fast toy run. When a step looks expensive, make it *efficient at full scale* first — use the compiled/vectorized code path, run on the GPU if one is available, split the work into resumable chunks — rather than shrinking the problem.
+There is **no hidden time budget**. A heavy step may legitimately take hours or multiple days if that is what the methodology needs — a full-scale run that takes days beats a fast toy run at the wrong scale. When a step looks expensive, make it *efficient at full scale* first — use the compiled/vectorized code path, run on the GPU if one is available, split the work into resumable chunks — rather than shrinking the problem.
 
-- Only downsize if a genuine resource limit forces it (out of memory, required hardware absent, a step that would clearly run for days) — and only after trying to make the full-scale run work.
+- Only downsize if a genuine resource limit forces it (out of memory, required hardware absent) — a long runtime by itself is not such a limit; let a heavy step run as long as it needs. Downsize only after trying to make the full-scale run work.
 - Before concluding a resource limit forces a downsize, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) and cite its actual numbers in your notes — a downsize justified by a guessed constraint is not genuine.
 - If you must downsize, **say so explicitly in that step's `notes`**: what you reduced, from what to what, and why (the specific resource limit). A downsized run that is clearly labeled is a finding; an unlabeled one is a silent flaw.
 
