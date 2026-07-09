@@ -120,20 +120,9 @@ This is a setup value, not a result.
 
 ### Plan at the paper's scale — no pre-authorized reductions
 
-Plan every result-producing step at the scale the methodology prescribes (the
-full particle count, grid resolution, chain length, dataset, seed count). Do
-NOT write reduced-scale fallbacks into the plan — no "if intractable, reduce
-N", no `--quick` variants, no downsized parameter grids. There is no hidden
-time budget to plan around: a heavy step is allowed to run for hours. If the
-plan offers a reduced-scale escape hatch, the executing agent will take it and
-the run will produce numbers at the wrong scale.
+Plan every result-producing step at the scale the methodology prescribes (the full particle count, grid resolution, chain length, dataset, seed count). Do NOT write reduced-scale fallbacks into the plan — no "if intractable, reduce N", no `--quick` variants, no downsized parameter grids. There is no hidden time budget to plan around: a heavy step is allowed to run for hours. If the plan offers a reduced-scale escape hatch, the executing agent will take it and the run will produce numbers at the wrong scale.
 
-When a step is genuinely expensive, plan for *efficiency at full scale*
-instead: prefer the repo's compiled/vectorized code paths, use the GPU when
-one is available and the method supports it, or split the computation into
-resumable chunks. Whether to reduce scale is the executing agent's runtime
-decision, made only under a genuine resource limit and recorded explicitly —
-never a plan provision.
+When a step is genuinely expensive, plan for *efficiency at full scale* instead: prefer the repo's compiled/vectorized code paths, use the GPU when one is available and the method supports it, or split the computation into resumable chunks. Whether to reduce scale is the executing agent's runtime decision, made only under a genuine resource limit and recorded explicitly — never a plan provision.
 {% if gpu_info %}
 
 **Hardware available for this plan:** a GPU is present in this environment: {{ gpu_info }}. Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.

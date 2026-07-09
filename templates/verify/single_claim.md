@@ -66,15 +66,7 @@ underlying computation is correct — avoid both:
 
 ## How your verdict is used (read first)
 
-For **scalar / scalar_range / table** claims you are the **comparator**: your job
-is to extract the replicated value *accurately and objectively* into `structured`.
-A separate deterministic grader (not an LLM) then decides `match | partial |
-no_match` from your extracted value against `paper_value` and the run's
-tolerance policy (defaults shown per type below) — so your numeric `status` is
-only a proposal and **will be re-derived from your `structured` values**. Get
-the *values, keys, and uncertainty* right; the pass/fail is computed, not
-argued. The rules below tell you what that grader will compute, so you can
-sanity-check your extraction.
+For **scalar / scalar_range / table** claims you are the **comparator**: your job is to extract the replicated value *accurately and objectively* into `structured`. A separate deterministic grader (not an LLM) then decides `match | partial | no_match` from your extracted value against `paper_value` and the run's tolerance policy (defaults shown per type below) — so your numeric `status` is only a proposal and **will be re-derived from your `structured` values**. Get the *values, keys, and uncertainty* right; the pass/fail is computed, not argued. The rules below tell you what that grader will compute, so you can sanity-check your extraction.
 
 For **qualitative / figure** claims there is no number to compute on, so **your
 `status` is authoritative** — judge carefully.

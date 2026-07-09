@@ -65,9 +65,7 @@ Outline the file structure of your codebase before writing any code:
 - Where will entry points live?
 - What dependencies (packages, system libraries) are needed?
 
-Track Python dependencies in `pyproject.toml` or `requirements.txt`
-(your choice; pick one and be consistent); a non-Python stack
-additionally uses its native manifest (e.g. R's `DESCRIPTION`).
+Track Python dependencies in `pyproject.toml` or `requirements.txt` (your choice; pick one and be consistent); a non-Python stack additionally uses its native manifest (e.g. R's `DESCRIPTION`).
 
 ### 2.5. Capture the plan to disk
 
@@ -170,10 +168,7 @@ For each Python module you wrote, run:
 python -c "import <module_name>"
 ```
 
-Fix any `ImportError`, `SyntaxError`, or `ModuleNotFoundError`. The
-codebase must be importable end-to-end before you exit. For non-Python
-components, run the equivalent smoke check (the C/C++ code compiles;
-R sources parse).
+Fix any `ImportError`, `SyntaxError`, or `ModuleNotFoundError`. The codebase must be importable end-to-end before you exit. For non-Python components, run the equivalent smoke check (the C/C++ code compiles; R sources parse).
 
 #### d. Dependency completeness
 
