@@ -166,7 +166,9 @@ Surfacing a corrupted intermediate as a logged finding is far more useful than l
 This plan includes GPU-dependent steps.
 
 {% if gpu_info %}
-A GPU is available in this environment: {{ gpu_info }} — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
+A GPU is available in this environment: {{ gpu_info }} — run these
+steps on it. Do not quietly fall back to CPU (and then to a downsized
+run) when the hardware is present.
 {% else %}
 If `nvidia-smi` shows a GPU, run GPU-capable steps on it — do not quietly fall
 back to CPU (and then to a downsized run) when the hardware is present.
