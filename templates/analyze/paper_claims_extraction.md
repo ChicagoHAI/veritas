@@ -111,6 +111,6 @@ Good `verification` instructions for the verifier:
 
 ## Output
 
-Save the JSON to `{{ output_dir }}/analyze/paper_claims.json`. The pipeline reads that file; nothing else is captured.
+Save the JSON to `{{ output_dir }}/analyze/paper_claims.json`.
 
 Begin extraction now.

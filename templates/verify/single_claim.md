@@ -228,6 +228,4 @@ Save your verdict to `{{ output_dir }}/verify/{{ claim.id }}.json` with this sha
 }
 ```
 
-The pipeline reads that file; nothing else is captured.
-
 Begin verification now.

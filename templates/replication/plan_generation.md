@@ -167,6 +167,4 @@ Save the plan to `{{ output_dir }}/analyze/replication_plan.json` with this form
 }
 ```
 
-The pipeline reads that file; nothing else is captured.
-
 Begin your analysis now.
