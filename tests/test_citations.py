@@ -1645,3 +1645,63 @@ def test_audit_non_string_claim_does_not_crash():
     }
     section = ReportGenerator()._render_citation_check(citation, audit)
     assert "Citation Check" in section
+
+
+def test_audit_softening_survives_claim_paraphrase_when_pairing_unambiguous():
+    # The audit's copy of the claim is re-emitted free text by an LLM; when
+    # both the check and the audit carry exactly one faithfulness item for
+    # the key, the pairing is unambiguous and paraphrase drift must not
+    # silently drop the softening.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "para2024", "claim": "The method improves accuracy by 12%",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "para2024", "kind": "faithfulness",
+             "claim": "the approach yields a 12 percent accuracy gain",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_unmatched_audit_items_are_reported_not_silently_dropped():
+    # Two claims share the key, so a paraphrased audit claim cannot be
+    # paired safely; the verdict is ignored, but the report must say so
+    # instead of silently under-reporting the audit.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness",
+             "claim": "a paraphrase matching neither row",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    view = gen._citation_view(citation, audit)
+    assert view["unmatched_audit"] == 1
+    section = gen._render_citation_check(citation, audit)
+    assert "could not be matched" in section

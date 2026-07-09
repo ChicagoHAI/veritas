@@ -4,6 +4,7 @@ import json
 import math
 import re
 import subprocess
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -135,13 +136,17 @@ def _build_audit_lookup(audit) -> dict:
     return lookup
 
 
-def _audit_verdict_for(lookup: dict, key, kind, claim=None):
-    """Exact normalized-claim match first. A sole claim-less item for
-    ``(key, kind)`` applies regardless — that covers integrity items and
-    audits recorded before claim tracking. An item that names a claim only
-    ever applies to that claim's row; when nothing matches, no verdict
-    applies (conservative: better to keep the first-pass verdict than to
-    soften the wrong row)."""
+def _audit_verdict_for(lookup: dict, key, kind, claim=None, sole_row=False,
+                       consumed=None):
+    """Exact normalized-claim match first. A sole item for ``(key, kind)``
+    also applies when it names no claim (integrity items and audits recorded
+    before claim tracking) or when the check side has exactly one auditable
+    row for the key (``sole_row``) — an unambiguous pairing, so the audit's
+    paraphrase of the claim text cannot drop the verdict. Otherwise no
+    verdict applies (conservative: better to keep the first-pass verdict
+    than to soften the wrong row). Applied items are recorded in
+    ``consumed`` so the caller can report audit items that paired with no
+    row instead of dropping them silently."""
     if not isinstance(key, str):
         return None
     items = lookup.get((key, kind))
@@ -149,10 +154,14 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
         return None
     normalized = _normalize_audit_claim(claim)
     if normalized:
-        for item_claim, verdict in items:
+        for i, (item_claim, verdict) in enumerate(items):
             if item_claim == normalized:
+                if consumed is not None:
+                    consumed.add((key, kind, i))
                 return verdict
-    if len(items) == 1 and not items[0][0]:
+    if len(items) == 1 and (not items[0][0] or sole_row):
+        if consumed is not None:
+            consumed.add((key, kind, 0))
         return items[0][1]
     return None
 
@@ -596,6 +605,11 @@ class ReportGenerator:
                 f"\n_The independent audit softened {view['softened_count']} flagged "
                 f"verdict(s) it could not confirm._\n\n"
             )
+        if view["unmatched_audit"]:
+            section += (
+                f"\n_{view['unmatched_audit']} audit verdict(s) could not be "
+                f"matched to a first-pass entry and were not applied._\n\n"
+            )
 
         return section
 
@@ -877,6 +891,7 @@ class ReportGenerator:
             return None
         audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
+        consumed = set()
 
         s = citation.get("summary")
         s = s if isinstance(s, dict) else {}
@@ -886,7 +901,8 @@ class ReportGenerator:
             if not isinstance(f, dict):
                 continue
             first_status = _txt(f.get("status"))
-            audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
+            audit_verdict = _audit_verdict_for(
+                audit_lookup, f.get("key"), "integrity", consumed=consumed)
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
                 softened_count += 1
@@ -913,6 +929,13 @@ class ReportGenerator:
         fsum = s.get("faithfulness")
         fsum = fsum if isinstance(fsum, dict) else {}
         faith_rows = []
+        # Auditable rows per key: with a single row, an audit item for the
+        # key pairs unambiguously even when its claim text drifted.
+        auditable_key_counts = Counter(
+            _txt(f.get("key"))
+            for f in citation.get("faithfulness") or []
+            if isinstance(f, dict) and f.get("source_status") != "inaccessible"
+        )
         if fsum.get("checked"):
             for f in citation.get("faithfulness") or []:
                 if not isinstance(f, dict):
@@ -922,7 +945,9 @@ class ReportGenerator:
                 else:
                     first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
-                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"),
+                        sole_row=auditable_key_counts[_txt(f.get("key"))] == 1,
+                        consumed=consumed)
                     final_verdict, softened = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened:
@@ -949,6 +974,9 @@ class ReportGenerator:
             "unresolved": s.get("unresolved", 0),
             "flagged": flagged_rows,
             "has_audit": bool(audit_lookup),
+            "unmatched_audit": (
+                sum(len(v) for v in audit_lookup.values()) - len(consumed)
+            ),
             "support_not_checked": citation.get("checked_support") is False,
             "faith_checked": fsum.get("checked", 0) or 0,
             "faith_scope": s.get("faithfulness_scope", "main"),

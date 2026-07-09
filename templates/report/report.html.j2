@@ -171,6 +171,7 @@
   </ul>
   {% endif %}
   {% if citations.softened_count %}<p class="sub">The independent audit softened {{ citations.softened_count }} flagged verdict(s) it could not confirm.</p>{% endif %}
+  {% if citations.unmatched_audit %}<p class="sub">{{ citations.unmatched_audit }} audit verdict(s) could not be matched to a first-pass entry and were not applied.</p>{% endif %}
   {% endif %}
 
   <!-- DETAILS (collapsible) -->
