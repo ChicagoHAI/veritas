@@ -146,6 +146,25 @@ CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
 CITATION_AUDIT_FILE = "citation_audit.json"
 CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
 
+
+def citation_artifact_paths(output_dir) -> tuple:
+    """Every file the citation check writes under the evaluation dir.
+
+    The discard list for a restart: leaving any of these behind lets the
+    resume gates or the extraction prompt pick up a prior run's artifacts.
+    """
+    evaluation_dir = Path(output_dir) / EVALUATION_SUBDIR
+    return tuple(evaluation_dir / name for name in (
+        CITATION_CHECK_FILE,
+        CITATION_CHECK_META_FILE,
+        CITATION_CHECK_TRANSCRIPT_FILE,
+        CITATION_AUDIT_FILE,
+        CITATION_AUDIT_TRANSCRIPT_FILE,
+        CITATION_REFERENCES_FILE,
+        CITATION_RESOLVER_VERDICTS_FILE,
+        CITATION_RESOLVER_SCRIPT_FILE,
+    ))
+
 VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is

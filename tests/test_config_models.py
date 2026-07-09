@@ -149,3 +149,19 @@ def test_parse_provider_prefix_is_case_insensitive():
     assert parse_model_spec("Claude:claude-opus-4-8") == ("claude", "claude-opus-4-8")
     with pytest.raises(ValueError, match="unknown provider"):
         parse_model_spec("OpenRuter:x")
+
+
+def test_citation_artifact_paths_cover_all_config_citation_outputs(tmp_path):
+    # The --restart discard list must track every citation artifact Config
+    # owns, or a stale prior-paper file survives for the resume gates and
+    # the extraction prompt to pick up.
+    from veritas.core.config import citation_artifact_paths
+
+    cfg = _mk_config(tmp_path)
+    expected = {
+        cfg.citation_check_path, cfg.citation_check_meta_path,
+        cfg.citation_check_transcript_path, cfg.citation_audit_path,
+        cfg.citation_audit_transcript_path, cfg.references_path,
+        cfg.resolver_verdicts_path, cfg.resolver_script_path,
+    }
+    assert set(citation_artifact_paths(cfg.output_dir)) == expected

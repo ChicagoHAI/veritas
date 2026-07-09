@@ -6,16 +6,7 @@ from typing import Optional
 from rich.console import Console
 
 from veritas.core.runner import ReplicationRunner
-from veritas.core.config import (
-    BUCKETS,
-    Config,
-    EVALUATION_SUBDIR,
-    CITATION_CHECK_FILE,
-    CITATION_CHECK_META_FILE,
-    CITATION_CHECK_TRANSCRIPT_FILE,
-    CITATION_AUDIT_FILE,
-    CITATION_AUDIT_TRANSCRIPT_FILE,
-)
+from veritas.core.config import BUCKETS, Config, citation_artifact_paths
 from veritas.core.pipeline_state import read_state_dict, state_file_path
 
 def _recovered_engine_kwargs(replicate_dir, provider, explicit):
@@ -260,13 +251,7 @@ def replicate(
         # state; discard those too so --restart truly starts fresh. Transcripts
         # included: resource-usage accounting sums them, so a stale one would
         # bill the previous run's citation tokens to this run.
-        for stale in (
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_META_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_TRANSCRIPT_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_TRANSCRIPT_FILE,
-        ):
+        for stale in citation_artifact_paths(output_dir):
             stale.unlink(missing_ok=True)
 
     # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
