@@ -1260,9 +1260,18 @@ cmd_evaluate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # Forward an explicitly-set model override so the evaluation manager's LLM
+    # pass pins the same model as replication. Passed as a direct -e. No-op
+    # unless the host exports ANTHROPIC_MODEL.
+    local model_flag=""
+    if [ -n "$ANTHROPIC_MODEL" ]; then
+        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
+        $model_flag \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
