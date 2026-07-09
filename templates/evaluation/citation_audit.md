@@ -58,6 +58,5 @@ Write `{{ citation_audit_path }}` as a single JSON object:
 - `claim` ties a faithfulness verdict to the specific claim it audits — two
   claims can cite the same reference, and your verdict must apply to exactly
   the one you re-checked.
-- Print the JSON to stdout as well.
 
 Begin now.
