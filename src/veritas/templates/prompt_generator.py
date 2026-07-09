@@ -34,6 +34,19 @@ def _parse_gpu_available(raw: Optional[str]) -> Optional[bool]:
     return raw.strip().lower() == "true"
 
 
+def _parse_gpu_info(raw: Optional[str]) -> Optional[str]:
+    """Parse VERITAS_GPU_INFO: a semicolon-joined "name, VRAM" string per
+    reachable GPU, set by the same wrapper probe as VERITAS_GPU_AVAILABLE.
+
+    None means no detail is available (unset, or the probe returned nothing
+    usable) — a bare gpu_available boolean doesn't tell codegen whether the
+    paper's methodology actually fits in the available VRAM.
+    """
+    if not raw or not raw.strip():
+        return None
+    return "; ".join(part.strip() for part in raw.split(";") if part.strip())
+
+
 class PromptGenerator:
     """Generates prompts for claim extraction, replication, and verification."""
 
@@ -66,6 +79,7 @@ class PromptGenerator:
             "skills_dir": os.environ.get("VERITAS_SKILLS_DIR", _DEFAULT_SKILLS_DIR),
             "venv_dir": os.environ.get("VERITAS_VENV_DIR", _DEFAULT_VENV_DIR),
             "gpu_available": _parse_gpu_available(os.environ.get("VERITAS_GPU_AVAILABLE")),
+            "gpu_info": _parse_gpu_info(os.environ.get("VERITAS_GPU_INFO")),
         }
         if output_dir is not None:
             output_abs = Path(output_dir).absolute()

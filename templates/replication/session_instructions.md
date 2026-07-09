@@ -56,7 +56,7 @@ A step is only "unreproducible" once distinct strategies have each failed for a 
 {% endif %}{% if has_paper %}- **Paper:** `{{ paper_path }}` — the paper you are replicating. Consult it for methodology, parameters, and experimental setup. See **Reporting Discipline** below for how to treat any result values it reports.
 {% endif %}{% if has_data %}- **Pre-positioned data:** `{{ data_path }}/` (read-only). User-supplied inputs for this paper.
 {% endif %}- **Output directory:** `{{ replication_dir }}/` — save logs and evidence here.
-{% if gpu_available == true %}- **Hardware:** a GPU is available in this environment (confirmed at launch) — use it for GPU-capable steps.
+{% if gpu_available == true %}- **Hardware:** a GPU is available in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %} — use it for GPU-capable steps.
 {% elif gpu_available == false %}- **Hardware:** no GPU is available in this environment (confirmed at launch) — do not plan around GPU-only code paths; use CPU fallbacks.
 {% endif %}
 
@@ -139,6 +139,7 @@ Run each step at the **scale the plan/methodology specifies** — the full grid,
 There is **no hidden time budget**. A heavy step is allowed to run for hours; a full-scale run that takes hours beats a fast toy run. When a step looks expensive, make it *efficient at full scale* first — use the compiled/vectorized code path, run on the GPU if one is available, split the work into resumable chunks — rather than shrinking the problem.
 
 - Only downsize if a genuine resource limit forces it (out of memory, required hardware absent, a step that would clearly run for days) — and only after trying to make the full-scale run work.
+- Before concluding a resource limit forces a downsize, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) and cite its actual numbers in your notes — a downsize justified by a guessed constraint is not genuine.
 - If you must downsize, **say so explicitly in that step's `notes`**: what you reduced, from what to what, and why (the specific resource limit). A downsized run that is clearly labeled is a finding; an unlabeled one is a silent flaw.
 
 **When to stop trying:** Only after you have tried several genuinely different approaches (see the strategies above) and the problem is fundamental — core algorithm wrong, essential data paywalled with no alternative, hardware genuinely unavailable. Document what you tried, the distinct approaches, and why each failed, then move on.
@@ -168,7 +169,7 @@ This plan includes GPU-dependent steps.
 {% if gpu_available == false %}
 No GPU is available in this environment (confirmed at launch).
 {% elif gpu_available %}
-A GPU is available in this environment (confirmed at launch) — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
+A GPU is available in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %} — run these steps on it. Do not quietly fall back to CPU (and then to a downsized run) when the hardware is present.
 {% else %}
 If `nvidia-smi` shows a GPU, run GPU-capable steps on it — do not quietly fall
 back to CPU (and then to a downsized run) when the hardware is present.

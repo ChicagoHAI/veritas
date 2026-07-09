@@ -101,6 +101,19 @@ detect_gpu_available() {
     fi
 }
 
+# "name, VRAM" per reachable GPU, semicolon-joined into one env-var-safe
+# line, or empty if none. Mirrors get_gpu_info() in docker/run.sh — a bare
+# yes/no doesn't tell codegen whether the paper's methodology actually fits
+# in the available VRAM.
+detect_gpu_info() {
+    if command -v nvidia-smi &> /dev/null; then
+        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
+            | tr '\n' ';' | sed 's/;$//'
+    else
+        echo ""
+    fi
+}
+
 # Resolve --output to the same value veritas's config.py would compute.
 # Mirrors the fallback chain at src/veritas/core/config.py:106-115.
 resolve_output_dir() {
@@ -248,6 +261,7 @@ cmd_replicate() {
     export VERITAS_SKILLS_DIR="$skills_dst"
     export VERITAS_VENV_DIR="$output_dir/.venv"
     export VERITAS_GPU_AVAILABLE="$(detect_gpu_available)"
+    export VERITAS_GPU_INFO="$(detect_gpu_info)"
 
     run_veritas_cli replicate "$@"
 }

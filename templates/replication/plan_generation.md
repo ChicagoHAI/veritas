@@ -136,7 +136,7 @@ decision, made only under a genuine resource limit and recorded explicitly —
 never a plan provision.
 {% if gpu_available == true %}
 
-**Hardware available for this plan:** a GPU is present in this environment (confirmed at launch). Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.
+**Hardware available for this plan:** a GPU is present in this environment (confirmed at launch){% if gpu_info %}: {{ gpu_info }}{% endif %}. Steps whose method benefits from GPU acceleration should plan to use it, and `setup_hints` should say so, rather than assuming a CPU-only path.
 {% elif gpu_available == false %}
 
 **Hardware available for this plan:** no GPU is present in this environment (confirmed at launch). Do not plan steps around GPU-only code paths; scope compiled or vectorized CPU paths instead.

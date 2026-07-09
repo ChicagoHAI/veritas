@@ -127,6 +127,28 @@ get_gpu_flags() {
 }
 
 # -----------------------------------------------------------------------------
+# Return a "name, VRAM" line per reachable GPU (semicolon-joined for a single
+# env-var-safe line), or empty if none. A bare "GPU present" boolean doesn't
+# tell codegen whether the paper's methodology actually fits in the available
+# VRAM; this reuses the same nvidia-smi probe get_gpu_flags already runs, just
+# keeping its output instead of discarding it. Empty whenever get_gpu_flags
+# would also report no GPU (same toolkit/reachability checks).
+# -----------------------------------------------------------------------------
+get_gpu_info() {
+    if ! docker info 2>/dev/null | grep -qi nvidia; then
+        echo ""
+        return
+    fi
+    if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
+        echo ""
+        return
+    fi
+    docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_NAME" \
+        --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null \
+        | tr '\n' ';' | sed 's/;$//'
+}
+
+# -----------------------------------------------------------------------------
 # On macOS, force linux/amd64 because nvidia/cuda base images have no arm64
 # build. Docker Desktop uses Rosetta emulation.
 # -----------------------------------------------------------------------------
@@ -1184,6 +1206,16 @@ cmd_replicate() {
         gpu_available_flag="-e VERITAS_GPU_AVAILABLE=true"
     fi
 
+    # Actual GPU model/VRAM per device, when available — lets the prompt say
+    # e.g. "2x NVIDIA RTX A6000, 49140 MiB" instead of a bare yes/no, so
+    # codegen can reason about whether the paper's methodology fits.
+    local gpu_info_flag=""
+    local gpu_info
+    gpu_info=$(get_gpu_info)
+    if [ -n "$gpu_info" ]; then
+        gpu_info_flag="-e VERITAS_GPU_INFO=\"$gpu_info\""
+    fi
+
     # Replication API keys: pass .env into the container only on subcommands
     # that run paper code. The key-name list lets the Python layer scope
     # visibility to the replicate phase (see runner.py::_invoke_provider).
@@ -1211,6 +1243,7 @@ cmd_replicate() {
         $platform_flag \
         $gpu_flags \
         $gpu_available_flag \
+        $gpu_info_flag \
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
