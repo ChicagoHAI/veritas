@@ -490,12 +490,17 @@ PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN AN
 # estimate) resolve the same engines as the run that produced the output dir.
 FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL VERITAS_CITATION_FAITHFULNESS_SCOPE"
 
+# Non-engine config that rides the same mechanism: ANTHROPIC_MODEL pins the
+# claude CLI's default model in every container; VERITAS_CONTACT_EMAIL is the
+# citation resolver's polite-pool contact. Both are no-ops when unset.
+FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL VERITAS_CONTACT_EMAIL"
+
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the
 # docker invocation.
 load_provider_auth_env() {
     local var val
-    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS; do
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS; do
         if [ -z "${!var}" ]; then
             val="$(get_env_value "$var")"
             if [ -n "$val" ]; then
@@ -508,7 +513,7 @@ load_provider_auth_env() {
 get_provider_auth_flags() {
     local flags=""
     local var
-    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS; do
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS; do
         if [ -n "${!var}" ]; then
             flags="$flags -e $var"
         fi
@@ -1292,9 +1297,8 @@ cmd_replicate() {
     ensure_credential_perms
 
     # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
-    # can thread into codegen/plan/replicate prompts (issue #92: codegen
-    # previously defaulted to CPU-only code blind to whether a GPU would even
-    # be present at replicate time). Empty when get_gpu_flags found none.
+    # can thread into codegen/plan/replicate prompts. Empty when
+    # get_gpu_flags found none.
     local gpu_info_flag=""
     local gpu_info
     gpu_info=$(get_gpu_info "$gpu_flags")
@@ -1316,23 +1320,7 @@ cmd_replicate() {
         fi
     fi
 
-    # Forward an explicitly-set model override into the container so every
-    # phase's provider CLI pins the same model. Passed as a direct -e (not via
-    # .env / VERITAS_ENV_FILE_KEYS) so it is visible to all phases, not just
-    # replicate. No-op unless the host exports ANTHROPIC_MODEL.
-    local model_flag=""
-    if [ -n "$ANTHROPIC_MODEL" ]; then
-        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
-    fi
-
     local auth_flags=$(get_provider_auth_flags)
-
-    # Polite-pool contact for the citation resolver's metadata requests when
-    # --check-citations runs inline. No-op unless the host exports it.
-    local contact_flag=""
-    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
-        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
-    fi
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
@@ -1341,9 +1329,7 @@ cmd_replicate() {
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
-        $model_flag \
         $auth_flags \
-        $contact_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1440,27 +1426,10 @@ run_eval_container() {
     ensure_credential_perms
     local auth_flags=$(get_provider_auth_flags)
 
-    # Forward an explicitly-set model override so the evaluate-bucket LLM
-    # passes pin the same model as replication. No-op unless the host
-    # exports ANTHROPIC_MODEL.
-    local model_flag=""
-    if [ -n "$ANTHROPIC_MODEL" ]; then
-        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
-    fi
-
-    # Crossref/OpenAlex polite-pool contact for the citation resolver's
-    # metadata requests. No-op unless the host exports VERITAS_CONTACT_EMAIL.
-    local contact_flag=""
-    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
-        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
-    fi
-
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
         $auth_flags \
-        $model_flag \
-        $contact_flag \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
