@@ -258,8 +258,7 @@ get_env_value() {
         val=$(grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//")
     fi
     # A CRLF-authored .env would otherwise forward a corrupted value.
-    val="${val%$'
-'}"
+    val="${val%$'\r'}"
     # Strip one pair of matching surrounding quotes (dotenv-style values);
     # a quoted engine spec must not reach the model parser quote-headed.
     case "$val" in
@@ -598,7 +597,7 @@ bucket_spec_provider() {
     done
     if [ -z "$spec" ]; then
         local var
-        var="VERITAS_$(printf '%s' "${flag#--}" | tr '[:lower:]-' '[:upper:]_')"
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr 'a-z-' 'A-Z_')"
         spec="${!var}"
     fi
     # Provider prefixes parse case-insensitively on the Python side; match
@@ -607,6 +606,36 @@ bucket_spec_provider() {
     case "$spec" in
         claude:*|codex:*|gemini:*|openrouter:*) echo "${spec%%:*}" ;;
     esac
+}
+
+# Bucket model flags whose engines this run can actually invoke, as far as
+# the wrapper can tell: codegen runs only in paper-only mode, and the
+# evaluate bucket only when an evaluation/citation/loop knob is on. Buckets
+# left out are inert for the run — their engines must not be preflighted.
+active_bucket_flags() {
+    local has_paper="" has_repo="" mode="" evaluate=""
+    [ -n "$VERITAS_MAX_ITERS" ] && evaluate=1
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper|--paper=*|-p) has_paper=1 ;;
+            --repo|--repo=*|-r) has_repo=1 ;;
+            --mode) [ $# -ge 2 ] && mode="$2" ;;
+            --mode=*) mode="${1#*=}" ;;
+            --evaluate|--check-citations|--max-iters|--max-iters=*) evaluate=1 ;;
+        esac
+        shift
+    done
+    if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+        if [ -n "$has_paper" ] && [ -z "$has_repo" ]; then
+            mode="paper-only"
+        else
+            mode="full"
+        fi
+    fi
+    local flags="--analyze-model --replicate-model --assess-model --verify-model"
+    [ "$mode" = "paper-only" ] && flags="$flags --codegen-model"
+    [ -n "$evaluate" ] && flags="$flags --evaluate-model"
+    echo "$flags"
 }
 
 # Provider whose credentials a single-bucket subcommand actually needs: the
@@ -1299,23 +1328,25 @@ cmd_replicate() {
     ensure_image
     warn_if_outdated
 
-    # Fast-fail if the requested provider has no credentials on the host.
-    # Beats waiting for an inside-container LLM call to hang or error out.
-    # .env-only keys count: load them into the wrapper env first. Skipped
-    # when every bucket is explicitly pinned to its own provider — the
-    # global engine is provably unused then, and the pipeline's own
-    # bucket-scoped _check_provider_auth covers the pinned ones.
+    # Fast-fail if any provider the run will invoke has no credentials on
+    # the host. Beats waiting for an inside-container LLM call to hang or
+    # error out. .env-only keys count: load them into the wrapper env
+    # first. Each distinct pinned provider of an active bucket is checked,
+    # plus the global provider when any active bucket falls through to it.
     load_provider_auth_env
-    local bucket_flag unpinned=""
-    for bucket_flag in --analyze-model --codegen-model --replicate-model \
-                       --assess-model --verify-model --evaluate-model; do
-        if [ -z "$(bucket_spec_provider "$bucket_flag" "$@")" ]; then
+    local bucket_flag pinned unpinned="" seen=" "
+    for bucket_flag in $(active_bucket_flags "$@"); do
+        pinned=$(bucket_spec_provider "$bucket_flag" "$@")
+        if [ -z "$pinned" ]; then
             unpinned=1
-            break
+        elif [ "${seen#* $pinned }" = "$seen" ]; then
+            seen="$seen$pinned "
+            check_provider_credentials "$pinned"
         fi
     done
-    if [ -n "$unpinned" ]; then
-        check_provider_credentials "$(extract_provider "$@")"
+    pinned=$(extract_provider "$@")
+    if [ -n "$unpinned" ] && [ "${seen#* $pinned }" = "$seen" ]; then
+        check_provider_credentials "$pinned"
     fi
 
     # Surface a non-fatal hint if .env is missing — papers that need API keys

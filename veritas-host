@@ -75,6 +75,36 @@ extract_provider() {
 ' "$provider" | tr '[:upper:]' '[:lower:]'
 }
 
+# Bucket model flags whose engines this run can actually invoke, as far as
+# the wrapper can tell: codegen runs only in paper-only mode, and the
+# evaluate bucket only when an evaluation/citation/loop knob is on. Buckets
+# left out are inert for the run — their engines must not be preflighted.
+active_bucket_flags() {
+    local has_paper="" has_repo="" mode="" evaluate=""
+    [ -n "$VERITAS_MAX_ITERS" ] && evaluate=1
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper|--paper=*|-p) has_paper=1 ;;
+            --repo|--repo=*|-r) has_repo=1 ;;
+            --mode) [ $# -ge 2 ] && mode="$2" ;;
+            --mode=*) mode="${1#*=}" ;;
+            --evaluate|--check-citations|--max-iters|--max-iters=*) evaluate=1 ;;
+        esac
+        shift
+    done
+    if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+        if [ -n "$has_paper" ] && [ -z "$has_repo" ]; then
+            mode="paper-only"
+        else
+            mode="full"
+        fi
+    fi
+    local flags="--analyze-model --replicate-model --assess-model --verify-model"
+    [ "$mode" = "paper-only" ] && flags="$flags --codegen-model"
+    [ -n "$evaluate" ] && flags="$flags --evaluate-model"
+    echo "$flags"
+}
+
 # Explicit provider prefix of a bucket's model spec: the flag first, then the
 # matching VERITAS_<BUCKET>_MODEL env var. Mirrors bucket_spec_provider() in
 # docker/run.sh so the host and docker preflights agree. Empty when the
@@ -93,7 +123,7 @@ bucket_spec_provider() {
     done
     if [ -z "$spec" ]; then
         local var
-        var="VERITAS_$(printf '%s' "${flag#--}" | tr '[:lower:]-' '[:upper:]_')"
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr 'a-z-' 'A-Z_')"
         spec="${!var}"
     fi
     spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
@@ -249,9 +279,12 @@ cmd_replicate() {
     # every bucket is explicitly pinned elsewhere, and each pinned one
     # (host mode has no image with all CLIs baked in).
     require_tools python uv
+    # Engines pinned only in .env must be visible to the scan below
+    # (load_env_file exports only unset vars, so re-running it later in
+    # this function is a no-op).
+    load_env_file
     local bucket_flag pinned unpinned="" seen=" "
-    for bucket_flag in --analyze-model --codegen-model --replicate-model \
-                       --assess-model --verify-model --evaluate-model; do
+    for bucket_flag in $(active_bucket_flags "$@"); do
         pinned=$(bucket_spec_provider "$bucket_flag" "$@")
         if [ -z "$pinned" ]; then
             unpinned=1
@@ -409,7 +442,8 @@ case "$1" in
     check-citations)
         # The citation passes are LLM calls riding the evaluate bucket; fail
         # fast when that engine's CLI is missing, matching the docker
-        # wrapper's credential preflight.
+        # wrapper's credential preflight. Engines pinned only in .env count.
+        load_env_file
         require_provider_tools "$(extract_bucket_provider --evaluate-model "$@")" python
         cmd_passthrough "$@"
         ;;

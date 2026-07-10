@@ -100,25 +100,95 @@ def test_bucket_provider_bare_spec_falls_back_to_global(wrapper):
     assert out == "gemini"
 
 
-def test_replicate_preflight_skips_global_when_all_buckets_pinned():
-    # A run whose every bucket is pinned to its own provider never invokes
-    # the global one; the wrapper must not demand its credentials.
+def _docker_preflight_script(args: str) -> str:
     fns = _bash_functions("docker/run.sh", "extract_provider",
-                          "bucket_spec_provider")
+                          "bucket_spec_provider", "active_bucket_flags")
     text = (REPO_ROOT / "docker" / "run.sh").read_text(encoding="utf-8")
     m = re.search(r"^cmd_replicate\(\) \{.*?^\}", text, re.M | re.S)
     body = re.search(r"    local bucket_flag.*?^    fi$", m.group(0), re.M | re.S)
     assert body, "preflight block not found in cmd_replicate"
-    script = (fns
-              + '\ncheck_provider_credentials() { echo "CHECKED: $1"; }\n'
+    return (fns
+            + '\ncheck_provider_credentials() { echo "CHECKED: $1"; }\n'
+            + 'run_preflight() {\n' + body.group(0) + '\n}\n'
+            + 'run_preflight ' + args)
+
+
+def test_replicate_preflight_checks_each_pinned_provider():
+    # All active buckets pinned to openrouter: openrouter (and only it)
+    # still gets a credential check. Skipping every check would leave the
+    # login-based providers ungated — the pipeline's own preflight covers
+    # openrouter alone.
+    script = _docker_preflight_script(
+        '--repo ./r --analyze-model openrouter:a --replicate-model openrouter:a '
+        '--assess-model openrouter:a --verify-model openrouter:a')
+    out = _run_bash(script, env={"VERITAS_MAX_ITERS": ""})
+    assert out == "CHECKED: openrouter"
+
+
+def test_replicate_preflight_env_only_engines_are_seen():
+    # Engines set only via VERITAS_<BUCKET>_MODEL (the .env route) drive
+    # the preflight the same way flags do.
+    script = _docker_preflight_script('--repo ./r')
+    out = _run_bash(script, env={
+        "VERITAS_MAX_ITERS": "",
+        "VERITAS_ANALYZE_MODEL": "openrouter:a",
+        "VERITAS_REPLICATE_MODEL": "openrouter:a",
+        "VERITAS_ASSESS_MODEL": "openrouter:a",
+        "VERITAS_VERIFY_MODEL": "openrouter:a",
+    })
+    assert out == "CHECKED: openrouter"
+
+
+def test_replicate_preflight_checks_global_when_any_bucket_unpinned():
+    script = _docker_preflight_script('--repo ./r --analyze-model openrouter:a')
+    out = _run_bash(script, env={"VERITAS_MAX_ITERS": ""})
+    assert out == "CHECKED: openrouter\nCHECKED: claude"
+
+
+def test_replicate_preflight_ignores_inert_buckets():
+    # codegen never runs in repo-only mode and no evaluation knob is on:
+    # engines pinned on those buckets must not demand credentials.
+    script = _docker_preflight_script(
+        '--repo ./r --codegen-model gemini:g --evaluate-model gemini:g '
+        '--analyze-model openrouter:a --replicate-model openrouter:a '
+        '--assess-model openrouter:a --verify-model openrouter:a')
+    out = _run_bash(script, env={"VERITAS_MAX_ITERS": ""})
+    assert out == "CHECKED: openrouter"
+
+
+def test_host_preflight_sees_env_file_engines(tmp_path):
+    # veritas-host loads .env before the bucket scan, so an engine pinned
+    # only in .env drives the tool preflight (openrouter -> opencode)
+    # instead of demanding the unused global provider's CLI.
+    fns = _bash_functions("veritas-host", "extract_provider",
+                          "bucket_spec_provider", "active_bucket_flags",
+                          "load_env_file", "require_provider_tools")
+    (tmp_path / ".env").write_text(
+        "\n".join(f"VERITAS_{b}_MODEL=openrouter:m" for b in
+                  ("ANALYZE", "REPLICATE", "ASSESS", "VERIFY")) + "\n",
+        encoding="utf-8")
+    text = (REPO_ROOT / "veritas-host").read_text(encoding="utf-8")
+    m = re.search(r"^cmd_replicate\(\) \{.*?^\}", text, re.M | re.S)
+    body = re.search(r"    load_env_file.*?^    fi$", m.group(0), re.M | re.S)
+    assert body, "env-aware preflight block not found in veritas-host"
+    script = (f'VERITAS_REPO="{tmp_path.as_posix()}"\n' + fns
+              + '\nrequire_tools() { echo "TOOLS: $*"; }\n'
               + 'run_preflight() {\n' + body.group(0) + '\n}\n'
-              + 'run_preflight --analyze-model openrouter:a --codegen-model openrouter:a '
-              + '--replicate-model openrouter:a --assess-model openrouter:a '
-              + '--verify-model openrouter:a --evaluate-model openrouter:a\n'
-              + 'echo "---"\n'
-              + 'run_preflight --analyze-model openrouter:a')
-    out = _run_bash(script)
-    assert out == "---\nCHECKED: claude"
+              + 'run_preflight --repo ./r')
+    out = _run_bash(script, env={"VERITAS_MAX_ITERS": ""})
+    assert "opencode" in out
+    assert "claude" not in out
+
+
+def test_get_env_value_strips_carriage_return(tmp_path):
+    # Discriminating on Linux only: MSYS grep strips the CR itself, which
+    # is exactly what masked a broken strip here before.
+    fns = _bash_functions("docker/run.sh", "get_env_value")
+    (tmp_path / ".env").write_bytes(b"MYKEY=abc123\r\n")
+    script = (f'PROJECT_ROOT="{tmp_path.as_posix()}"\n' + fns
+              + '\nv=$(get_env_value MYKEY)\n'
+              + '[ "$v" = "abc123" ] && echo OK || printf "BAD(%s)" "$v"')
+    assert _run_bash(script) == "OK"
 
 
 def _shell_var_list(name: str) -> set:
