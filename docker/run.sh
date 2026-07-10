@@ -498,12 +498,17 @@ FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL
 # contact. All are no-ops when unset.
 FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL GEMINI_MODEL VERITAS_CONTACT_EMAIL"
 
+# Loaded from .env into the wrapper env for preflight decisions only. Not
+# forwarded with -e: cmd_replicate already mounts .env via --env-file, and
+# no other subcommand reads it.
+PREFLIGHT_ONLY_VARS="VERITAS_MAX_ITERS"
+
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the
 # docker invocation.
 load_provider_auth_env() {
     local var val
-    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS; do
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS                $PREFLIGHT_ONLY_VARS; do
         if [ -z "${!var}" ]; then
             val="$(get_env_value "$var")"
             if [ -n "$val" ]; then

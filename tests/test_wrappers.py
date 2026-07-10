@@ -243,3 +243,19 @@ def test_shell_var_lists_match_python():
     python_config = set(PROVIDER_NATIVE_MODEL_VARS.values()) | {
         "VERITAS_CONTACT_EMAIL"}
     assert _shell_var_list("FORWARDED_CONFIG_VARS") == python_config
+
+
+def test_docker_wrapper_loads_max_iters_from_env_file(tmp_path):
+    # The host wrapper loads .env before the bucket scan, so a .env-set
+    # VERITAS_MAX_ITERS reaches active_bucket_flags there; the docker
+    # wrapper must agree, or the evaluate engine's preflight depends on
+    # which runtime you use.
+    fns = _bash_functions("docker/run.sh", "get_env_value",
+                          "load_provider_auth_env")
+    (tmp_path / ".env").write_text("VERITAS_MAX_ITERS=3\n", encoding="utf-8")
+    lists = 'eval "$(grep -E \'^(PROVIDER_AUTH_VARS|FORWARDED_ENGINE_VARS|FORWARDED_CONFIG_VARS|PREFLIGHT_ONLY_VARS)=\' "$RUN_SH")"'
+    script = (f'PROJECT_ROOT="{tmp_path.as_posix()}"\n'
+              f'RUN_SH="{(REPO_ROOT / "docker" / "run.sh").as_posix()}"\n'
+              + lists + "\n" + fns
+              + '\nload_provider_auth_env\nprintf "%s" "$VERITAS_MAX_ITERS"')
+    assert _run_bash(script, env={"VERITAS_MAX_ITERS": ""}) == "3"
