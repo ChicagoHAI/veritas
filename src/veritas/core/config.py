@@ -167,6 +167,17 @@ def citation_artifact_paths(output_dir) -> tuple:
 
 VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 
+# Model env vars native to each provider's CLI, honored as the lowest
+# precedence level of engine resolution (below the global model). Resolving
+# them here keeps engines the single model channel: the choice reaches the
+# report provenance and the resume fingerprint, and the CLI is pinned with an
+# explicit model flag.
+PROVIDER_NATIVE_MODEL_VARS = {
+    "claude": "ANTHROPIC_MODEL",
+    "codex": "OPENAI_MODEL",
+    "gemini": "GEMINI_MODEL",
+}
+
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
@@ -292,6 +303,15 @@ class Config:
         for field_name, env_name in self._MODEL_ENV_VARS.items():
             if getattr(self, field_name) is None:
                 setattr(self, field_name, _env_opt_str(env_name))
+
+        # Provider-native model env vars (the CLIs would honor these on
+        # their own); captured once so engine resolution is stable for the
+        # run and the selected model surfaces in provenance and the resume
+        # fingerprint instead of silently repointing the CLI.
+        self._native_env_models = {
+            provider: _env_opt_str(env_name)
+            for provider, env_name in PROVIDER_NATIVE_MODEL_VARS.items()
+        }
 
         # Faithfulness scope: same CLI-then-env-then-default resolution.
         if self.faithfulness_scope is None:
@@ -471,7 +491,9 @@ class Config:
 
         Precedence: the bucket's own spec (flag or VERITAS_<BUCKET>_MODEL,
         already merged in __post_init__) -> the global ``model`` with the
-        global ``provider``. ``model=None`` means the provider CLI's default.
+        global ``provider`` -> the resolved provider's native model env var
+        (PROVIDER_NATIVE_MODEL_VARS). ``model=None`` means the provider
+        CLI's default.
         """
         if bucket not in BUCKETS:
             raise ValueError(f"Unknown bucket: {bucket}. Valid: {BUCKETS}")
@@ -479,7 +501,11 @@ class Config:
         if spec is not None:
             prefix, model = parse_model_spec(spec)
             return (prefix or self.provider.lower(), model)
-        return (self.provider.lower(), self.model)
+        provider = self.provider.lower()
+        model = self.model
+        if model is None:
+            model = self._native_env_models.get(provider)
+        return (provider, model)
 
     def resolved_engines(self) -> Dict[str, str]:
         """Canonical ``bucket -> 'provider:model'`` (or ``'provider'``) map."""

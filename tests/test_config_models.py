@@ -165,3 +165,35 @@ def test_citation_artifact_paths_cover_all_config_citation_outputs(tmp_path):
         cfg.resolver_verdicts_path, cfg.resolver_script_path,
     }
     assert set(citation_artifact_paths(cfg.output_dir)) == expected
+
+
+# -- provider-native model env vars -------------------------------------------
+
+def test_native_model_env_fills_claude_engine(tmp_path, monkeypatch):
+    # ANTHROPIC_MODEL is honored as the lowest precedence level, so the
+    # model it selects surfaces in provenance and the resume fingerprint
+    # instead of silently repointing the CLI.
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+    config = _mk_config(tmp_path)
+    assert config.engine_for("verify") == ("claude", "claude-opus-4-8")
+    assert config.resolved_engines()["verify"] == "claude:claude-opus-4-8"
+
+
+def test_global_model_beats_native_model_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+    config = _mk_config(tmp_path, model="claude-opus-4-8")
+    assert config.engine_for("verify") == ("claude", "claude-opus-4-8")
+
+
+def test_native_model_env_scoped_to_its_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+    config = _mk_config(tmp_path, provider="codex")
+    assert config.engine_for("verify") == ("codex", None)
+
+
+def test_native_model_env_applies_per_resolved_provider(tmp_path, monkeypatch):
+    # A bucket pinned to another provider resolves that provider's own
+    # native var, not the global provider's.
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.5")
+    config = _mk_config(tmp_path)
+    assert config.engine_for("verify") == ("claude", None)

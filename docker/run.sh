@@ -490,10 +490,11 @@ PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN AN
 # estimate) resolve the same engines as the run that produced the output dir.
 FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL VERITAS_CITATION_FAITHFULNESS_SCOPE"
 
-# Non-engine config that rides the same mechanism: ANTHROPIC_MODEL pins the
-# claude CLI's default model in every container; VERITAS_CONTACT_EMAIL is the
-# citation resolver's polite-pool contact. Both are no-ops when unset.
-FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL VERITAS_CONTACT_EMAIL"
+# Non-engine config that rides the same mechanism: the provider-native
+# model vars feed engine resolution's lowest precedence level in every
+# container; VERITAS_CONTACT_EMAIL is the citation resolver's polite-pool
+# contact. All are no-ops when unset.
+FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL OPENAI_MODEL GEMINI_MODEL VERITAS_CONTACT_EMAIL"
 
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the

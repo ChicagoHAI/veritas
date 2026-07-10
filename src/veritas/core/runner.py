@@ -2406,16 +2406,11 @@ class ReplicationRunner:
         except Exception:
             usage.disk_bytes = None
 
-        # cost estimate: each phase is priced by its bucket's resolved model,
-        # falling back to the provider's model env var when the engine names
-        # no explicit model. Known models use KNOWN_MODEL_PRICING; if any
-        # phase that consumed tokens has no known price, the total is None so
-        # the field is omitted rather than silently wrong.
-        provider_model_env = {
-            "claude": "ANTHROPIC_MODEL",
-            "codex": "OPENAI_MODEL",
-            "gemini": "GEMINI_MODEL",
-        }
+        # cost estimate: each phase is priced by its bucket's resolved model
+        # (engine_for already folds in the provider-native model env vars).
+        # Known models use KNOWN_MODEL_PRICING; if any phase that consumed
+        # tokens has no known price, the total is None so the field is
+        # omitted rather than silently wrong.
         phase_buckets = {
             "analyze": "analyze", "codegen": "codegen", "plan": "analyze",
             "resource_estimate": "analyze", "replicate": "replicate",
@@ -2444,9 +2439,6 @@ class ReplicationRunner:
             if not p.input_tokens and not p.output_tokens:
                 continue
             phase_provider, phase_model = self.config.engine_for(phase_buckets[phase])
-            if phase_model is None:
-                env_var = provider_model_env.get(phase_provider)
-                phase_model = os.environ.get(env_var) if env_var else None
             pricing = _price_for(phase_model)
             if pricing is None:
                 unpriced_phases.append(phase)

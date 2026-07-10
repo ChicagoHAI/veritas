@@ -13,3 +13,5 @@ def _clear_model_env(monkeypatch):
     for key in list(os.environ):
         if (key.startswith("VERITAS_") and key.endswith("_MODEL")) or key == "VERITAS_MODEL":
             monkeypatch.delenv(key, raising=False)
+    for key in ("ANTHROPIC_MODEL", "OPENAI_MODEL", "GEMINI_MODEL"):
+        monkeypatch.delenv(key, raising=False)
