@@ -171,10 +171,10 @@ VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 # precedence level of engine resolution (below the global model). Resolving
 # them here keeps engines the single model channel: the choice reaches the
 # report provenance and the resume fingerprint, and the CLI is pinned with an
-# explicit model flag.
+# explicit model flag. Only vars the CLIs verifiably read belong here — codex
+# has none (its model comes from -m or config.toml).
 PROVIDER_NATIVE_MODEL_VARS = {
     "claude": "ANTHROPIC_MODEL",
-    "codex": "OPENAI_MODEL",
     "gemini": "GEMINI_MODEL",
 }
 

@@ -197,3 +197,12 @@ def test_native_model_env_applies_per_resolved_provider(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "gpt-5.5")
     config = _mk_config(tmp_path)
     assert config.engine_for("verify") == ("claude", None)
+
+
+def test_codex_has_no_native_model_env(tmp_path, monkeypatch):
+    # The codex CLI takes its model from -m/config.toml only; it has no
+    # model env var. Honoring OPENAI_MODEL here would silently repoint
+    # codex off a var other tooling commonly exports.
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    config = _mk_config(tmp_path, provider="codex")
+    assert config.engine_for("verify") == ("codex", None)

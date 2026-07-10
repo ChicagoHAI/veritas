@@ -258,7 +258,8 @@ get_env_value() {
         val=$(grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//")
     fi
     # A CRLF-authored .env would otherwise forward a corrupted value.
-    val="${val%$''}"
+    val="${val%$'
+'}"
     # Strip one pair of matching surrounding quotes (dotenv-style values);
     # a quoted engine spec must not reach the model parser quote-headed.
     case "$val" in
@@ -496,7 +497,7 @@ FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL
 # model vars feed engine resolution's lowest precedence level in every
 # container; VERITAS_CONTACT_EMAIL is the citation resolver's polite-pool
 # contact. All are no-ops when unset.
-FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL OPENAI_MODEL GEMINI_MODEL VERITAS_CONTACT_EMAIL"
+FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL GEMINI_MODEL VERITAS_CONTACT_EMAIL"
 
 # Export .env-fallback values into the wrapper environment. Must run in the
 # parent shell (NOT inside a $() substitution) so the exports survive to the
