@@ -203,16 +203,18 @@ class ReportGenerator:
         citation = self._load_citation_check(replicate_dir)
         citation_audit = self._load_citation_audit(replicate_dir)
 
+        engines = read_engines_from_state(replicate_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=mode,
             output_dir=replicate_dir,
             citation=citation, citation_audit=citation_audit,
+            engines=engines,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
-            citation=citation, citation_audit=citation_audit,
+            citation=citation, citation_audit=citation_audit, engines=engines,
         ))
 
         if output_path is None:
@@ -252,16 +254,18 @@ class ReportGenerator:
         evaluation = self._load_evaluation(output_dir)
         citation = self._load_citation_check(output_dir)
         citation_audit = self._load_citation_audit(output_dir)
+        engines = read_engines_from_state(output_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=config.mode,
             output_dir=output_dir,
             citation=citation, citation_audit=citation_audit,
+            engines=engines,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
-            citation=citation, citation_audit=citation_audit,
+            citation=citation, citation_audit=citation_audit, engines=engines,
         ))
 
         report_dir = config.report_dir
@@ -389,10 +393,11 @@ class ReportGenerator:
         output_dir: Optional[Path] = None,
         citation: Optional[dict] = None,
         citation_audit: Optional[dict] = None,
+        engines: Optional[dict] = None,
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report = f"# Replication Report\n\n**Generated:** {now}\n\n"
-        engines = read_engines_from_state(output_dir)
+        engines = engines or {}
         if engines:
             report += "**Models:** " + ", ".join(
                 f"{bucket}: {engine}" for bucket, engine in engines.items()
@@ -988,7 +993,7 @@ class ReportGenerator:
 
     def _build_html_context(
         self, claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
-        citation=None, citation_audit=None,
+        citation=None, citation_audit=None, engines=None,
     ) -> dict:
         verdict_by_id = {v.claim_id: v for v in verdicts}
         claim_list = claims.claims if claims is not None else []
@@ -1090,6 +1095,7 @@ class ReportGenerator:
             "flags": (score.flags if (score is not None and score.flags) else []),
             "has_evaluation": evaluation is not None,
             "citations": self._citation_view(citation, citation_audit),
+            "engines": engines or {},
         }
 
     def _generate_pdf_from_html(self, html_content: str, output_path: Path) -> bool:
