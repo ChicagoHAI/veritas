@@ -2765,7 +2765,19 @@ class ReplicationRunner:
         exempt = ReplicationRunner._auth_exemptions(provider)
         if expose_api_keys:
             exempt = exempt | ReplicationRunner._env_file_keys()
-        return ReplicationRunner._stripped_env(exempt)
+        env = ReplicationRunner._stripped_env(exempt)
+        if expose_api_keys:
+            # Name (never value) any key that was present but withheld, so
+            # paper code that needed it fails with a pointer instead of an
+            # opaque auth error deep in the run.
+            withheld = sorted(set(os.environ) - set(env))
+            if withheld:
+                print(
+                    "  Note: not exposed to the replicate subprocess (list "
+                    "them in .env if the paper code needs them): "
+                    + ", ".join(withheld)
+                )
+        return env
 
     def _collect_usage_if_tracked(self) -> None:
         """Best-effort resource_usage refresh for standalone entry points,

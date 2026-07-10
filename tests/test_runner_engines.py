@@ -715,3 +715,34 @@ def test_no_web_lock_warning_for_normal_engines(tmp_path, capsys):
                     model="claude-opus-4-8")
     ReplicationRunner(config)._warn_web_locked_engines()
     assert "WARNING" not in capsys.readouterr().out
+
+
+def test_replicate_env_notes_withheld_auth_vars(monkeypatch, capsys):
+    # When the replicate scoping strips a key that was actually present,
+    # say so once (names only) — otherwise paper code that needed it fails
+    # deep in the run with an opaque auth error.
+    monkeypatch.setenv("VERITAS_ENV_FILE_KEYS", "HF_TOKEN")
+    monkeypatch.setenv("HF_TOKEN", "hf-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-host-only")
+
+    ReplicationRunner._subprocess_env("claude", expose_api_keys=True)
+    out = capsys.readouterr().out
+    assert "OPENROUTER_API_KEY" in out
+    assert "sk-or-host-only" not in out          # names only, never values
+    assert ".env" in out
+
+
+def test_no_withheld_note_when_nothing_stripped(monkeypatch, capsys):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("VERITAS_ENV_FILE_KEYS", raising=False)
+    ReplicationRunner._subprocess_env("claude", expose_api_keys=True)
+    assert capsys.readouterr().out == ""
+
+
+def test_non_replicate_env_stays_silent(monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-host-only")
+    ReplicationRunner._subprocess_env("claude", expose_api_keys=False)
+    assert capsys.readouterr().out == ""
