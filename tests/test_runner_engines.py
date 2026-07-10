@@ -685,3 +685,33 @@ def test_codegen_model_change_keeps_completed_repo_only_run(tmp_path):
     ReplicationRunner(changed)._reconcile_with_prior_run(state)
     assert state.is_stage_completed("replicate")
     assert state.is_stage_completed("verify")
+
+
+# -- web-locked engine warnings ------------------------------------------------
+
+def test_web_locked_verify_engine_warns(tmp_path, capsys):
+    # A web-locked judge can fetch the paper's published values and score
+    # against them instead of the evidence — corrupting the score directly.
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    verify_model="openrouter:perplexity/sonar:online")
+    ReplicationRunner(config)._warn_web_locked_engines()
+    out = capsys.readouterr().out
+    assert "verify bucket" in out
+    assert "always-on web access" in out
+
+
+def test_web_locked_replicate_engine_warns(tmp_path, capsys):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    replicate_model="openrouter:openrouter/fusion")
+    ReplicationRunner(config)._warn_web_locked_engines()
+    assert "replicate bucket" in capsys.readouterr().out
+
+
+def test_no_web_lock_warning_for_normal_engines(tmp_path, capsys):
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out",
+                    model="claude-opus-4-8")
+    ReplicationRunner(config)._warn_web_locked_engines()
+    assert "WARNING" not in capsys.readouterr().out

@@ -328,16 +328,7 @@ class ReplicationRunner:
             else:
                 self._reconcile_with_prior_run(state)
 
-            for leak_bucket in self._leak_buckets():
-                _, leak_model = self.config.engine_for(leak_bucket)
-                if is_web_locked_slug(leak_model):
-                    print(
-                        f"WARNING: the {leak_bucket} bucket is configured with "
-                        f"'{leak_model}', which has always-on web access. Its "
-                        f"output can reach the replication agent, so fetched "
-                        f"paper values can leak into replication, defeating "
-                        f"the anti-leakage design. Proceeding anyway."
-                    )
+            self._warn_web_locked_engines()
 
             # analyze (claims extraction only)
             if state.is_stage_completed('analyze'):
@@ -2801,6 +2792,33 @@ class ReplicationRunner:
         if self.config.max_iters > 1:
             buckets.append("evaluate")
         return buckets
+
+    def _warn_web_locked_engines(self) -> None:
+        """Warn wherever an always-on-web engine can corrupt the run: the
+        buckets whose output reaches the replication agent, and the verify
+        bucket, whose judge could fetch the paper's published values and
+        adjudicate against them instead of the evidence. Advisory; never
+        blocks."""
+        for leak_bucket in self._leak_buckets():
+            _, leak_model = self.config.engine_for(leak_bucket)
+            if is_web_locked_slug(leak_model):
+                print(
+                    f"WARNING: the {leak_bucket} bucket is configured with "
+                    f"'{leak_model}', which has always-on web access. Its "
+                    f"output can reach the replication agent, so fetched "
+                    f"paper values can leak into replication, defeating "
+                    f"the anti-leakage design. Proceeding anyway."
+                )
+        _, verify_model = self.config.engine_for("verify")
+        if is_web_locked_slug(verify_model):
+            print(
+                f"WARNING: the verify bucket is configured with "
+                f"'{verify_model}', which has always-on web access. The "
+                f"verifier can fetch the paper's published values and "
+                f"adjudicate against them instead of the replication "
+                f"evidence, corrupting the Replication Score. Proceeding "
+                f"anyway."
+            )
 
     def _active_buckets(self, dry_run: bool = False) -> set:
         """Buckets whose engines this run will actually invoke."""
