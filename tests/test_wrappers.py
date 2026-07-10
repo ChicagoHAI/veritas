@@ -156,6 +156,34 @@ def test_replicate_preflight_ignores_inert_buckets():
     assert out == "CHECKED: openrouter"
 
 
+@pytest.mark.parametrize("wrapper", ["docker/run.sh", "veritas-host"])
+@pytest.mark.parametrize("args,env,evaluate_active", [
+    # The manager loop -- and with it every evaluate-bucket call -- engages
+    # only above 1, so a single-pass run must not preflight that engine.
+    # Mirrors Config.max_iters / ReplicationRunner._active_buckets.
+    ("--repo ./r", {}, False),
+    ("--repo ./r --max-iters 1", {}, False),
+    ("--repo ./r --max-iters=1", {}, False),
+    ("--repo ./r --max-iters 3", {}, True),
+    ("--repo ./r --max-iters=3", {}, True),
+    ("--repo ./r", {"VERITAS_MAX_ITERS": "1"}, False),
+    ("--repo ./r", {"VERITAS_MAX_ITERS": "3"}, True),
+    # A flag beats the env var, the way Config resolves it.
+    ("--repo ./r --max-iters 1", {"VERITAS_MAX_ITERS": "3"}, False),
+    # Unparseable env value: Config falls back to its default of 3 (loop on).
+    ("--repo ./r", {"VERITAS_MAX_ITERS": "abc"}, True),
+    # The explicit evaluation knobs activate the bucket regardless.
+    ("--repo ./r --evaluate", {}, True),
+    ("--repo ./r --check-citations", {}, True),
+])
+def test_active_bucket_flags_gates_evaluate_on_the_loop_engaging(
+        wrapper, args, env, evaluate_active):
+    fns = _bash_functions(wrapper, "active_bucket_flags")
+    out = _run_bash(fns + f"\nactive_bucket_flags {args}",
+                    env={"VERITAS_MAX_ITERS": "", **env})
+    assert ("--evaluate-model" in out.split()) is evaluate_active
+
+
 def test_host_preflight_sees_env_file_engines(tmp_path):
     # veritas-host loads .env before the bucket scan, so an engine pinned
     # only in .env drives the tool preflight (openrouter -> opencode)

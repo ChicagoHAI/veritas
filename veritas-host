@@ -80,18 +80,28 @@ extract_provider() {
 # evaluate bucket only when an evaluation/citation/loop knob is on. Buckets
 # left out are inert for the run — their engines must not be preflighted.
 active_bucket_flags() {
-    local has_paper="" has_repo="" mode="" evaluate=""
-    [ -n "$VERITAS_MAX_ITERS" ] && evaluate=1
+    local has_paper="" has_repo="" mode="" evaluate="" max_iters="$VERITAS_MAX_ITERS"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --paper|--paper=*|-p) has_paper=1 ;;
             --repo|--repo=*|-r) has_repo=1 ;;
             --mode) [ $# -ge 2 ] && mode="$2" ;;
             --mode=*) mode="${1#*=}" ;;
-            --evaluate|--check-citations|--max-iters|--max-iters=*) evaluate=1 ;;
+            --max-iters) [ $# -ge 2 ] && max_iters="$2" ;;
+            --max-iters=*) max_iters="${1#*=}" ;;
+            --evaluate|--check-citations) evaluate=1 ;;
         esac
         shift
     done
+    # The manager loop, and with it every evaluate-bucket call, engages only
+    # above 1; a single-pass run never reaches that engine. An unparseable
+    # value resolves to the Config default (3), which does engage the loop.
+    if [ -n "$max_iters" ]; then
+        case "$max_iters" in
+            *[!0-9]*) evaluate=1 ;;
+            *) if [ "$max_iters" -gt 1 ]; then evaluate=1; fi ;;
+        esac
+    fi
     if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
         if [ -n "$has_paper" ] && [ -z "$has_repo" ]; then
             mode="paper-only"
