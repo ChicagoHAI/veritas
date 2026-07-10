@@ -75,12 +75,12 @@ extract_provider() {
 ' "$provider" | tr '[:upper:]' '[:lower:]'
 }
 
-# Provider for a specific engine bucket: a [provider:]model spec on the given
-# flag overrides the global --provider. Mirrors extract_bucket_provider() in
-# docker/run.sh so the host and docker preflights agree.
-extract_bucket_provider() {
+# Explicit provider prefix of a bucket's model spec: the flag first, then the
+# matching VERITAS_<BUCKET>_MODEL env var. Mirrors bucket_spec_provider() in
+# docker/run.sh so the host and docker preflights agree. Empty when the
+# bucket is unpinned or its spec carries no provider prefix.
+bucket_spec_provider() {
     local flag="$1"; shift
-    local provider=$(extract_provider "$@")
     local spec=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -91,11 +91,28 @@ extract_bucket_provider() {
             *) shift ;;
         esac
     done
+    if [ -z "$spec" ]; then
+        local var
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr '[:lower:]-' '[:upper:]_')"
+        spec="${!var}"
+    fi
     spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
     case "$spec" in
-        claude:*|codex:*|gemini:*|openrouter:*) provider="${spec%%:*}" ;;
+        claude:*|codex:*|gemini:*|openrouter:*) echo "${spec%%:*}" ;;
     esac
-    echo "$provider"
+}
+
+# Provider for a specific engine bucket: the pinned provider when the spec
+# names one, else the global --provider.
+extract_bucket_provider() {
+    local flag="$1"; shift
+    local pinned
+    pinned=$(bucket_spec_provider "$flag" "$@")
+    if [ -n "$pinned" ]; then
+        echo "$pinned"
+    else
+        extract_provider "$@"
+    fi
 }
 
 # Provider-aware tool preflight: the base tools passed as extra args are
@@ -227,9 +244,25 @@ load_env_file() {
 }
 
 cmd_replicate() {
-    # Tool check is provider-aware: python+uv are always needed, but the
-    # agent CLI is only required for the provider the user actually picked.
-    require_provider_tools "$(extract_provider "$@")" python uv
+    # Tool check is provider-aware: python+uv are always needed, plus the
+    # CLI of every provider a bucket resolves to — the global one unless
+    # every bucket is explicitly pinned elsewhere, and each pinned one
+    # (host mode has no image with all CLIs baked in).
+    require_tools python uv
+    local bucket_flag pinned unpinned="" seen=" "
+    for bucket_flag in --analyze-model --codegen-model --replicate-model \
+                       --assess-model --verify-model --evaluate-model; do
+        pinned=$(bucket_spec_provider "$bucket_flag" "$@")
+        if [ -z "$pinned" ]; then
+            unpinned=1
+        elif [ "${seen#* $pinned }" = "$seen" ]; then
+            seen="$seen$pinned "
+            require_provider_tools "$pinned"
+        fi
+    done
+    if [ -n "$unpinned" ]; then
+        require_provider_tools "$(extract_provider "$@")"
+    fi
 
     local output_dir
     output_dir="$(resolve_output_dir "$@")"

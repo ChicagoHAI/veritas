@@ -575,13 +575,14 @@ check_provider_credentials() {
     esac
 }
 
-# Provider whose credentials a single-bucket subcommand actually needs: the
-# bucket's model flag ($1, e.g. --evaluate-model for evaluate/check-citations
-# or --analyze-model for estimate) with a provider prefix overrides the
-# global --provider for the preflight check, since only that bucket runs.
-extract_bucket_provider() {
+# Explicit provider prefix of a bucket's model spec: the bucket's model flag
+# ($1, e.g. --evaluate-model) first, then the matching VERITAS_<BUCKET>_MODEL
+# env var — the same precedence the Python layer resolves, minus the global
+# fallback (callers run load_provider_auth_env first, so .env-only values are
+# already in the wrapper environment). Empty when the bucket is unpinned or
+# its spec carries no provider prefix.
+bucket_spec_provider() {
     local flag="$1"; shift
-    local provider=$(extract_provider "$@")
     local spec=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -592,13 +593,31 @@ extract_bucket_provider() {
             *) shift ;;
         esac
     done
+    if [ -z "$spec" ]; then
+        local var
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr '[:lower:]-' '[:upper:]_')"
+        spec="${!var}"
+    fi
     # Provider prefixes parse case-insensitively on the Python side; match
     # the same way here (tr, not ${var,,}: macOS ships bash 3.2).
     spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
     case "$spec" in
-        claude:*|codex:*|gemini:*|openrouter:*) provider="${spec%%:*}" ;;
+        claude:*|codex:*|gemini:*|openrouter:*) echo "${spec%%:*}" ;;
     esac
-    echo "$provider"
+}
+
+# Provider whose credentials a single-bucket subcommand actually needs: the
+# bucket's pinned provider when its spec names one, else the global
+# --provider, since only that bucket runs.
+extract_bucket_provider() {
+    local flag="$1"; shift
+    local pinned
+    pinned=$(bucket_spec_provider "$flag" "$@")
+    if [ -n "$pinned" ]; then
+        echo "$pinned"
+    else
+        extract_provider "$@"
+    fi
 }
 
 # Return 0 if Claude OAuth credentials are present on this host, 1 otherwise.
@@ -1279,10 +1298,22 @@ cmd_replicate() {
 
     # Fast-fail if the requested provider has no credentials on the host.
     # Beats waiting for an inside-container LLM call to hang or error out.
-    # .env-only keys count: load them into the wrapper env first.
+    # .env-only keys count: load them into the wrapper env first. Skipped
+    # when every bucket is explicitly pinned to its own provider — the
+    # global engine is provably unused then, and the pipeline's own
+    # bucket-scoped _check_provider_auth covers the pinned ones.
     load_provider_auth_env
-    local provider=$(extract_provider "$@")
-    check_provider_credentials "$provider"
+    local bucket_flag unpinned=""
+    for bucket_flag in --analyze-model --codegen-model --replicate-model \
+                       --assess-model --verify-model --evaluate-model; do
+        if [ -z "$(bucket_spec_provider "$bucket_flag" "$@")" ]; then
+            unpinned=1
+            break
+        fi
+    done
+    if [ -n "$unpinned" ]; then
+        check_provider_credentials "$(extract_provider "$@")"
+    fi
 
     # Surface a non-fatal hint if .env is missing — papers that need API keys
     # for their own LLM calls will fail without it.
