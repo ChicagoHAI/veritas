@@ -111,9 +111,11 @@ def _cfg(tmp_path, **kw):
 
 
 def test_fingerprint_always_includes_engines(tmp_path):
+    # Every bucket that can run in this mode; codegen is mode-scoped and
+    # covered by the paper-only tests below.
     fp = build_config_fingerprint(_cfg(tmp_path))
     assert fp["provider"] == "claude"
-    for bucket in ("analyze", "codegen", "replicate", "assess", "verify", "evaluate"):
+    for bucket in ("analyze", "replicate", "assess", "verify", "evaluate"):
         assert fp[f"engine_{bucket}"] == "claude"
 
 
@@ -645,3 +647,41 @@ def test_invoke_provider_scopes_env_even_with_exposed_keys(tmp_path, monkeypatch
     assert captured["env"] is not None
     assert captured["env"]["HF_TOKEN"] == "hf-test"
     assert "OPENROUTER_API_KEY" not in captured["env"]
+
+
+# -- codegen engine scoping to paper-only mode ---------------------------------
+
+def test_fingerprint_omits_codegen_engine_outside_paper_only(tmp_path):
+    # codegen never runs outside paper-only mode; its engine cannot affect
+    # any output, so it must not be able to invalidate anything either.
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    config = Config(repo_path=repo, output_dir=tmp_path / "out")
+    assert "engine_codegen" not in build_config_fingerprint(config)
+
+
+def test_fingerprint_records_codegen_engine_in_paper_only(tmp_path):
+    paper = tmp_path / "paper.pdf"; paper.write_text("x", encoding="utf-8")
+    config = Config(paper_path=paper, output_dir=tmp_path / "out")
+    assert build_config_fingerprint(config)["engine_codegen"] == "claude"
+
+
+def test_codegen_model_change_keeps_completed_repo_only_run(tmp_path):
+    # Adding --codegen-model to a completed repo-only run must not discard
+    # the replicate/verify outputs of a bucket that never executes.
+    from veritas.core.pipeline_state import PipelineState
+
+    repo = tmp_path / "repo"; repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    base = Config(repo_path=repo, output_dir=out)
+    state = PipelineState(out)
+    state.record_inputs(base.repo_path, base.paper_path, data_path=None)
+    state.record_config(build_config_fingerprint(base))
+    for stage in ("analyze", "plan", "replicate", "assess_fixes", "verify"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+
+    changed = Config(repo_path=repo, output_dir=out,
+                     codegen_model="claude-opus-4-8")
+    ReplicationRunner(changed)._reconcile_with_prior_run(state)
+    assert state.is_stage_completed("replicate")
+    assert state.is_stage_completed("verify")

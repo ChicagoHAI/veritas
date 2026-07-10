@@ -175,6 +175,13 @@ def build_config_fingerprint(config: Config) -> Dict[str, Any]:
         'claims_path': str(config.claims_path) if config.claims_path else None,
     }
     for bucket, engine in config.resolved_engines().items():
+        # codegen only executes in paper-only mode; in the other modes its
+        # engine cannot affect any output, so recording it would let an inert
+        # knob invalidate completed stages. detect_config_changes ignores
+        # recorded-only fields, so states written before this scoping compare
+        # clean.
+        if bucket == "codegen" and config.mode != "paper-only":
+            continue
         fingerprint[f'engine_{bucket}'] = engine
     return fingerprint
 
