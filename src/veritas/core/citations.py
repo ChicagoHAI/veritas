@@ -376,7 +376,8 @@ def parse_crossref(payload: Dict[str, Any]) -> List[SourceRecord]:
             for a in item.get("author", []) or []
         ]
         parts = ((item.get("issued") or {}).get("date-parts") or [])
-        year = _coerce_year(parts[0][0]) if parts and parts[0] else None
+        first = parts[0] if parts and isinstance(parts[0], (list, tuple)) else None
+        year = _coerce_year(first[0]) if first else None
         out.append(SourceRecord(
             source="crossref",
             title=_first(item.get("title", [])),

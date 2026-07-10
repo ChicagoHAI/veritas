@@ -1745,3 +1745,17 @@ def test_audit_pairing_ignores_rows_the_audit_never_rechecks(tmp_path):
     }
     section = ReportGenerator()._render_citation_check(citation, audit)
     assert section.count("audit softened from contradicted") == 1
+
+
+def test_parse_crossref_tolerates_flat_date_parts():
+    # date-parts is normally [[y, m, d]]; a flat [y] must cost only that
+    # record's year, not raise out of the resolver.
+    from veritas.core.citations import parse_crossref
+
+    payload = {"message": {"items": [{
+        "title": ["Some Paper"], "author": [],
+        "issued": {"date-parts": [2024]},
+        "DOI": "10.1/x", "URL": "", "container-title": [],
+    }]}}
+    recs = parse_crossref(payload)
+    assert recs[0].year is None
