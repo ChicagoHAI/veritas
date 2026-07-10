@@ -259,3 +259,45 @@ def test_docker_wrapper_loads_max_iters_from_env_file(tmp_path):
               + lists + "\n" + fns
               + '\nload_provider_auth_env\nprintf "%s" "$VERITAS_MAX_ITERS"')
     assert _run_bash(script, env={"VERITAS_MAX_ITERS": ""}) == "3"
+
+
+@pytest.mark.parametrize("wrapper", ["docker/run.sh", "veritas-host"])
+@pytest.mark.parametrize("argv,python_cfg", [
+    ("--repo ./r",                        {"repo": True}),
+    ("--paper p.pdf",                     {"paper": True}),
+    ("--repo ./r --max-iters 3",          {"repo": True, "max_iters": 3}),
+    ("--repo ./r --evaluate",             {"repo": True, "run_evaluation": True}),
+    ("--paper p.pdf --check-citations",   {"paper": True, "run_citation_check": True}),
+])
+def test_wrapper_active_buckets_match_python(wrapper, argv, python_cfg, tmp_path):
+    # active_bucket_flags is a bash restatement of Config mode resolution
+    # plus ReplicationRunner._active_buckets; this pins the two rules to
+    # each other across the flag matrix so they cannot drift apart again.
+    from veritas.core.config import Config
+    from veritas.core.runner import ReplicationRunner
+
+    cfg = dict(python_cfg)
+    kwargs = {"output_dir": tmp_path / "out", "max_iters": cfg.pop("max_iters", 1)}
+    if cfg.pop("repo", False):
+        repo = tmp_path / "r"; repo.mkdir(exist_ok=True)
+        kwargs["repo_path"] = repo
+    if cfg.pop("paper", False):
+        paper = tmp_path / "p.pdf"; paper.write_text("x", encoding="utf-8")
+        kwargs["paper_path"] = paper
+    kwargs.update(cfg)
+    python_buckets = ReplicationRunner(Config(**kwargs))._active_buckets()
+
+    fns = _bash_functions(wrapper, "active_bucket_flags")
+    out = _run_bash(fns + f"\nactive_bucket_flags {argv}",
+                    env={"VERITAS_MAX_ITERS": ""})
+    shell_buckets = {flag[2:-len("-model")] for flag in out.split()}
+    assert shell_buckets == python_buckets
+
+
+def test_wrappers_are_lf_in_the_working_tree():
+    # .gitattributes pins the extensionless wrappers to LF; a CRLF blob
+    # would break the shebang on Linux (bad interpreter: /bin/bash^M).
+    for wrapper in ("veritas", "veritas-host"):
+        assert b"\r" not in (REPO_ROOT / wrapper).read_bytes(), (
+            f"{wrapper} contains CR bytes"
+        )
