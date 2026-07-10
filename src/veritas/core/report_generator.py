@@ -197,7 +197,7 @@ class ReportGenerator:
         # any malformed shape costs the evidence section, never the render.
         try:
             evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
-        except Exception:
+        except (KeyError, AttributeError, TypeError, ValueError, OSError):
             evidence = None
         fix_assessment = self._load_fix_assessment(replicate_dir)
         citation = self._load_citation_check(replicate_dir)

@@ -257,6 +257,8 @@ get_env_value() {
     if [ -f "$PROJECT_ROOT/.env" ]; then
         val=$(grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//")
     fi
+    # A CRLF-authored .env would otherwise forward a corrupted value.
+    val="${val%$''}"
     # Strip one pair of matching surrounding quotes (dotenv-style values);
     # a quoted engine spec must not reach the model parser quote-headed.
     case "$val" in

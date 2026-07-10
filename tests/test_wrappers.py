@@ -119,3 +119,29 @@ def test_replicate_preflight_skips_global_when_all_buckets_pinned():
               + 'run_preflight --analyze-model openrouter:a')
     out = _run_bash(script)
     assert out == "---\nCHECKED: claude"
+
+
+def _shell_var_list(name: str) -> set:
+    text = (REPO_ROOT / "docker" / "run.sh").read_text(encoding="utf-8")
+    m = re.search(rf'^{name}="([^"]*)"', text, re.M)
+    assert m, f"{name} not found in docker/run.sh"
+    return set(m.group(1).split())
+
+
+def test_shell_var_lists_match_python():
+    # The wrapper's forward lists and the Python strip/resolve tables are
+    # the same contract in two languages; drift is silent and asymmetric
+    # (a var added only to the shell is forwarded but never scoped).
+    from veritas.core.config import Config, PROVIDER_NATIVE_MODEL_VARS
+    from veritas.core.runner import PROVIDER_AUTH_VARS
+
+    python_auth = {var for vars_ in PROVIDER_AUTH_VARS.values() for var in vars_}
+    assert _shell_var_list("PROVIDER_AUTH_VARS") == python_auth
+
+    python_engine = set(Config._MODEL_ENV_VARS.values()) | {
+        "VERITAS_CITATION_FAITHFULNESS_SCOPE"}
+    assert _shell_var_list("FORWARDED_ENGINE_VARS") == python_engine
+
+    python_config = set(PROVIDER_NATIVE_MODEL_VARS.values()) | {
+        "VERITAS_CONTACT_EMAIL"}
+    assert _shell_var_list("FORWARDED_CONFIG_VARS") == python_config
