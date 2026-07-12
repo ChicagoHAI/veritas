@@ -27,8 +27,13 @@ work, and you must not accept it just because the agent declared itself done.
   *factual* checks computed for you: planned vs. executed step counts and which
   planned steps produced no record; per-step exit codes (nonzero = a failure);
   per-step declared output files (present/absent); byte-identical repeated
-  commands; counts of fixes, durations. These are **only facts** — deliberately
-  they contain **no diligence verdict**. The diligence judgment is **yours**.
+  commands; granular tool-call repeats parsed from the replicate transcript
+  (`transcript_tool_calls`, `max_consecutive_tool_repeat` = the longest run of
+  the same tool call issued back-to-back, `repeated_tool_calls`) — zeros there
+  can mean the transcript was not parseable for this provider, not that the
+  run was clean; counts of fixes, durations. These are **only facts** —
+  deliberately they contain **no diligence verdict**. The diligence judgment
+  is **yours**.
 
 **You own the diligence judgment.** Whether a step was *skipped* or *downsized*,
 whether the agent *gave up early* (premature stop), whether an output is a
