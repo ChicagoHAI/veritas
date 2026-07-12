@@ -1105,7 +1105,11 @@ class ReplicationRunner:
         manager judges diligence.
         """
         try:
-            facts = compute_execution_facts(evidence, plan=replication_plan)
+            facts = compute_execution_facts(
+                evidence,
+                plan=replication_plan,
+                transcript_path=self.config.replication_transcript_path,
+            )
 
             out_path = self.config.diligence_signals_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
