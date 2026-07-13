@@ -230,7 +230,6 @@ def test_to_dict_is_json_serializable_and_has_expected_keys():
                 "total_duration_seconds", "no_evidence", "transcript_tool_calls",
                 "max_consecutive_tool_repeat", "max_consecutive_tool_call"):
         assert key in d
-    assert "repeated_tool_calls" not in d
     json.dumps(d)
 
 
@@ -291,8 +290,8 @@ def test_real_replication_log_exit_codes_all_zero():
 # One planned step = many granular tool calls, so the step-level command
 # comparison above structurally cannot see intra-step retry/polling loops.
 # These facts come from parsing the replicate transcript (claude stream-json
-# JSONL) for tool_use blocks: byte-identical consecutive runs and
-# anywhere-counts. Still facts only — no verdict.
+# JSONL) for tool_use blocks: the longest run of consecutive identical calls.
+# Still facts only — no verdict.
 
 
 _CALL_ID_COUNTER = itertools.count(1)
