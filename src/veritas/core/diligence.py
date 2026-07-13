@@ -26,9 +26,9 @@ What counts as an objective fact here:
     keywords — a fact);
   * granular tool-call repeats parsed from the replicate transcript: one planned
     step spans many tool calls, so the step-level command comparison cannot see
-    intra-step retry/polling loops. Identical consecutive runs and
-    anywhere-counts over the transcript's tool_use events are still string
-    equality over each call's identity fields — facts. Only the claude-style
+    intra-step retry/polling loops. Identical consecutive runs over the
+    transcript's tool_use events are still string equality over each call's
+    identity fields — facts. Only the claude-style
     stream-json schema (tool_use blocks under ``message.content``) is parsed;
     transcripts in other schemas yield zero tool calls, which is
     indistinguishable from a run that made none — consumers must not read
@@ -51,12 +51,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from .models.replication import ExecutionEvidence, ReplicationPlan, StepOutcome
 
-# Anywhere-counts below this floor are omitted from ``repeated_tool_calls``
-# (running the same call twice is unremarkable; the dict would otherwise drown
-# in incidental pairs on long transcripts).
-_TOOL_CALL_REPEAT_FLOOR = 3
-# At most this many entries are kept (highest counts first, then key order).
-_TOOL_CALL_REPEAT_TOP = 10
 # Keys longer than this are truncated with a content-hash suffix so the facts
 # file stays readable while distinct long commands remain distinguishable.
 _TOOL_CALL_KEY_MAX = 160
@@ -109,9 +103,6 @@ class ExecutionFacts:
     # actual repeat (run >= 2).
     max_consecutive_tool_repeat: int = 0
     max_consecutive_tool_call: str = ""
-    # Normalized tool call -> anywhere-count (>= _TOOL_CALL_REPEAT_FLOOR,
-    # top _TOOL_CALL_REPEAT_TOP entries).
-    repeated_tool_calls: Dict[str, int] = field(default_factory=dict)
 
     # --- effort accounting -------------------------------------------------
     total_fixes_applied: int = 0
@@ -140,7 +131,6 @@ class ExecutionFacts:
             "transcript_tool_calls": self.transcript_tool_calls,
             "max_consecutive_tool_repeat": self.max_consecutive_tool_repeat,
             "max_consecutive_tool_call": self.max_consecutive_tool_call,
-            "repeated_tool_calls": dict(self.repeated_tool_calls),
             "total_fixes_applied": self.total_fixes_applied,
             "total_duration_seconds": self.total_duration_seconds,
             "no_evidence": self.no_evidence,
@@ -221,20 +211,19 @@ def _truncate_key(key: str) -> str:
 
 def _scan_transcript_tool_calls(
     transcript_path: Union[str, Path, None],
-) -> "tuple[int, int, str, Dict[str, int]]":
+) -> "tuple[int, int, str]":
     """Single streaming pass over a claude-style stream-json transcript.
 
-    Returns ``(total, best_run_len, best_run_key, anywhere_counts)`` computed
-    over truncated call keys, so memory stays bounded regardless of transcript
-    size. One file can hold several appended provider invocations (a
-    JSON-repair re-prompt appends a short second session); totals and counts
-    accumulate across all of them, but a ``system``/``init`` line breaks the
-    consecutive-run tracking so runs never splice across session boundaries.
-    Duplicate tool_use block ids are counted once. Degrades to all-neutral on
-    a missing/unreadable file, on malformed lines, or on any unforeseen parse
-    failure — never raises.
+    Returns ``(total, best_run_len, best_run_key)`` computed over truncated
+    call keys, so memory stays bounded regardless of transcript size. One file
+    can hold several appended provider invocations (a JSON-repair re-prompt
+    appends a short second session); the total accumulates across all of them,
+    but a ``system``/``init`` line breaks the consecutive-run tracking so runs
+    never splice across session boundaries. Duplicate tool_use block ids are
+    counted once. Degrades to all-neutral on a missing/unreadable file, on
+    malformed lines, or on any unforeseen parse failure — never raises.
     """
-    neutral: "tuple[int, int, str, Dict[str, int]]" = (0, 0, "", {})
+    neutral: "tuple[int, int, str]" = (0, 0, "")
     if not transcript_path:
         return neutral
     total = 0
@@ -242,7 +231,6 @@ def _scan_transcript_tool_calls(
     run_len = 0
     best_len = 0
     best_key = ""
-    counts: Dict[str, int] = {}
     seen_ids: set = set()
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
@@ -280,7 +268,6 @@ def _scan_transcript_tool_calls(
                         _normalize_tool_call(str(block.get("name", "")), block.get("input"))
                     )
                     total += 1
-                    counts[key] = counts.get(key, 0) + 1
                     run_len = run_len + 1 if key == prev_key else 1
                     prev_key = key
                     if run_len > best_len:
@@ -290,7 +277,7 @@ def _scan_transcript_tool_calls(
         # computed after this): OSError, MemoryError on a single giant line,
         # or anything else unforeseen all degrade to neutral.
         return neutral
-    return total, best_len, best_key, counts
+    return total, best_len, best_key
 
 
 def _step_id(step: StepOutcome) -> Optional[int]:
@@ -338,16 +325,11 @@ def compute_execution_facts(
     manager owns that.
     """
     facts = ExecutionFacts()
-    total, best_len, best_key, counts = _scan_transcript_tool_calls(transcript_path)
+    total, best_len, best_key = _scan_transcript_tool_calls(transcript_path)
     if total:
         facts.transcript_tool_calls = total
         facts.max_consecutive_tool_repeat = best_len
         facts.max_consecutive_tool_call = best_key if best_len >= 2 else ""
-        top = sorted(
-            ((k, n) for k, n in counts.items() if n >= _TOOL_CALL_REPEAT_FLOOR),
-            key=lambda kv: (-kv[1], kv[0]),
-        )[:_TOOL_CALL_REPEAT_TOP]
-        facts.repeated_tool_calls = dict(top)
 
     steps = list(getattr(evidence, "step_outcomes", None) or []) if evidence is not None else []
 

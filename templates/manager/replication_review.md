@@ -29,7 +29,7 @@ work, and you must not accept it just because the agent declared itself done.
   per-step declared output files (present/absent); byte-identical repeated
   commands; granular tool-call repeats parsed from the replicate transcript
   (`transcript_tool_calls`, `max_consecutive_tool_repeat` = the longest run of
-  the same tool call issued back-to-back, `repeated_tool_calls`) — zeros there
+  the same tool call issued back-to-back) — zeros there
   can mean the transcript was not parseable for this provider, not that the
   run was clean; counts of fixes, durations. These are **only facts** —
   deliberately they contain **no diligence verdict**. The diligence judgment

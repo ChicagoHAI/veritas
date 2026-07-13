@@ -228,9 +228,9 @@ def test_to_dict_is_json_serializable_and_has_expected_keys():
                 "steps_without_output_files", "total_output_files",
                 "repeated_commands", "max_command_repeat", "total_fixes_applied",
                 "total_duration_seconds", "no_evidence", "transcript_tool_calls",
-                "max_consecutive_tool_repeat", "max_consecutive_tool_call",
-                "repeated_tool_calls"):
+                "max_consecutive_tool_repeat", "max_consecutive_tool_call"):
         assert key in d
+    assert "repeated_tool_calls" not in d
     json.dumps(d)
 
 
@@ -335,17 +335,18 @@ def test_consecutive_identical_tool_calls_counted(tmp_path):
     assert "cat /tmp/task.output" in facts.max_consecutive_tool_call
 
 
-def test_interleaved_repeats_counted_anywhere_not_consecutively(tmp_path):
+def test_interleaved_repeats_not_reported(tmp_path):
+    # Only back-to-back repetition is measured; interleaved repeats (A B A B)
+    # deliberately read as no run. Facts report the consecutive signal only.
     lines = []
     for _ in range(3):
         lines.append(_tool_use_line("Read", {"file_path": "/work/run.log"}))
         lines.append(_tool_use_line("Bash", {"command": "date"}))
     path = _write_transcript(tmp_path, lines)
     facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 6
     assert facts.max_consecutive_tool_repeat == 1
     assert facts.max_consecutive_tool_call == ""
-    # Both calls ran 3x anywhere -> both appear in the anywhere-counts.
-    assert sorted(facts.repeated_tool_calls.values()) == [3, 3]
 
 
 def test_distinct_inputs_are_distinct_calls(tmp_path):
@@ -354,7 +355,6 @@ def test_distinct_inputs_are_distinct_calls(tmp_path):
     facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
     assert facts.transcript_tool_calls == 4
     assert facts.max_consecutive_tool_repeat == 1
-    assert facts.repeated_tool_calls == {}
 
 
 def test_bash_presentation_metadata_ignored_for_identity(tmp_path):
@@ -392,7 +392,6 @@ def test_missing_transcript_is_neutral(tmp_path):
     assert facts.transcript_tool_calls == 0
     assert facts.max_consecutive_tool_repeat == 0
     assert facts.max_consecutive_tool_call == ""
-    assert facts.repeated_tool_calls == {}
 
 
 def test_no_transcript_arg_is_neutral():
@@ -459,10 +458,10 @@ def test_unknown_transcript_schema_is_neutral(tmp_path):
 
 def test_invocation_boundary_breaks_consecutive_runs(tmp_path):
     # One transcript file can hold several appended provider invocations (a
-    # JSON-repair re-prompt appends a short second session). Totals and
-    # anywhere-counts accumulate across all of them — it is all replicate-phase
-    # work — but identical calls on either side of a system/init boundary are
-    # different sessions, not one consecutive run.
+    # JSON-repair re-prompt appends a short second session). Totals accumulate
+    # across all of them — it is all replicate-phase work — but identical
+    # calls on either side of a system/init boundary are different sessions,
+    # not one consecutive run.
     lines = (
         [_init_line()]
         + _tool_use_lines("Bash", {"command": "make"}, 3)
@@ -473,7 +472,6 @@ def test_invocation_boundary_breaks_consecutive_runs(tmp_path):
     facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
     assert facts.transcript_tool_calls == 5
     assert facts.max_consecutive_tool_repeat == 3
-    assert list(facts.repeated_tool_calls.values()) == [5]
 
 
 def test_duplicate_tool_use_ids_counted_once(tmp_path):
@@ -486,33 +484,12 @@ def test_duplicate_tool_use_ids_counted_once(tmp_path):
     assert facts.max_consecutive_tool_repeat == 1
 
 
-def test_repeated_tool_calls_floor_is_three(tmp_path):
-    lines = _tool_use_lines("Bash", {"command": "pip install x"}, 2)
-    lines += _tool_use_lines("Bash", {"command": "python run.py"}, 3)
-    path = _write_transcript(tmp_path, lines)
-    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
-    assert list(facts.repeated_tool_calls.values()) == [3]
-    assert "python run.py" in next(iter(facts.repeated_tool_calls))
-
-
-def test_repeated_tool_calls_capped_at_ten(tmp_path):
-    lines = []
-    for i in range(12):
-        lines += _tool_use_lines("Bash", {"command": f"make target{i}"}, 3)
-    path = _write_transcript(tmp_path, lines)
-    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
-    assert len(facts.repeated_tool_calls) == 10
-    assert all(n == 3 for n in facts.repeated_tool_calls.values())
-
-
 def test_long_tool_call_keys_truncated_in_facts(tmp_path):
     long_cmd = "python train.py " + " ".join(f"--flag{i}=value{i}" for i in range(40))
     path = _write_transcript(tmp_path, _tool_use_lines("Bash", {"command": long_cmd}, 4))
     facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
     assert facts.max_consecutive_tool_repeat == 4
     assert len(facts.max_consecutive_tool_call) <= 200
-    for key in facts.repeated_tool_calls:
-        assert len(key) <= 200
     json.dumps(facts.to_dict())
 
 
