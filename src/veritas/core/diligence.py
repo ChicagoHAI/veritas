@@ -1,10 +1,11 @@
 """Objective execution facts over replicate evidence.
 
-These are *pure* functions: given the replicate evidence (``ExecutionEvidence``,
-parsed from ``replication_log.json``) and the replication plan, they compute
-cheap, structured, **objective facts** about what the replication run actually
-did. They do NOT judge diligence — that is the manager's (an LLM's) job, reading
-this evidence plus the full trajectory.
+Given the replicate evidence (``ExecutionEvidence``, parsed from
+``replication_log.json``), the replication plan, and a read-only parse of the
+replicate transcript, these functions compute cheap, structured, **objective
+facts** about what the replication run actually did. They do NOT judge
+diligence — that is the manager's (an LLM's) job, reading this evidence plus
+the full trajectory.
 
 Design intent (Haokun, 2026-06): deterministic code asserts only OBJECTIVE
 FACTS. Semantic questions — "is this a placeholder?", "was a step
@@ -23,19 +24,36 @@ What counts as an objective fact here:
     ``output_files`` list — a fact about what it recorded producing);
   * stuck/looping == byte-identical consecutive commands (string equality, not
     keywords — a fact);
+  * granular tool-call repeats parsed from the replicate transcript: one planned
+    step spans many tool calls, so the step-level command comparison cannot see
+    intra-step retry/polling loops. Identical consecutive runs over the
+    transcript's tool_use events are still string equality over each call's
+    identity fields — facts. Only the claude-style
+    stream-json schema (tool_use blocks under ``message.content``) is parsed;
+    transcripts in other schemas yield zero tool calls, which is
+    indistinguishable from a run that made none — consumers must not read
+    zeros as "verified clean";
   * counts: total / succeeded / failed steps, fixes applied, durations.
 
-Everything here is a pure function and the module never raises on malformed or
-missing input (it degrades to empty/zero facts). The manager consumes these
-facts as evidence; it owns every semantic verdict.
+Everything here is deterministic — the only I/O is the read-only transcript
+parse — and the module never raises on malformed or missing input (it degrades
+to empty/zero facts). The manager consumes these facts as evidence; it owns
+every semantic verdict.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from .models.replication import ExecutionEvidence, ReplicationPlan, StepOutcome
+
+# Keys longer than this are truncated with a content-hash suffix so the facts
+# file stays readable while distinct long commands remain distinguishable.
+_TOOL_CALL_KEY_MAX = 160
 
 
 @dataclass
@@ -43,8 +61,9 @@ class ExecutionFacts:
     """Objective, deterministic facts about one replicate run.
 
     Pure facts only — no diligence verdict. Every field is something a careful
-    reader could confirm directly from ``replication_log.json`` + the plan. The
-    manager (LLM) reads these as evidence and makes the accept/revise judgment.
+    reader could confirm directly from ``replication_log.json``, the plan, or
+    the replicate transcript. The manager (LLM) reads these as evidence and
+    makes the accept/revise judgment.
     """
 
     # --- step coverage (set arithmetic over step IDs) ----------------------
@@ -73,6 +92,18 @@ class ExecutionFacts:
     repeated_commands: Dict[str, int] = field(default_factory=dict)
     max_command_repeat: int = 1
 
+    # --- granular tool-call repeats (from the replicate transcript) --------
+    # Parsed from the transcript's tool_use events, so intra-step retry and
+    # polling loops are visible. All zero/empty when no transcript was
+    # available or its schema yielded no tool calls — zeros mean "nothing
+    # measured", not "verified clean".
+    transcript_tool_calls: int = 0
+    # Longest run of consecutive tool calls identical over their identity
+    # fields, and that call (truncated); the call is only recorded for an
+    # actual repeat (run >= 2).
+    max_consecutive_tool_repeat: int = 0
+    max_consecutive_tool_call: str = ""
+
     # --- effort accounting -------------------------------------------------
     total_fixes_applied: int = 0
     total_duration_seconds: float = 0.0
@@ -97,6 +128,9 @@ class ExecutionFacts:
             "total_output_files": self.total_output_files,
             "repeated_commands": dict(self.repeated_commands),
             "max_command_repeat": self.max_command_repeat,
+            "transcript_tool_calls": self.transcript_tool_calls,
+            "max_consecutive_tool_repeat": self.max_consecutive_tool_repeat,
+            "max_consecutive_tool_call": self.max_consecutive_tool_call,
             "total_fixes_applied": self.total_fixes_applied,
             "total_duration_seconds": self.total_duration_seconds,
             "no_evidence": self.no_evidence,
@@ -105,7 +139,13 @@ class ExecutionFacts:
     def summary_line(self) -> str:
         """One-line human/log summary of the facts (no verdict)."""
         if self.no_evidence:
-            return "execution facts: no replication evidence collected"
+            line = "execution facts: no replication evidence collected"
+            if self.transcript_tool_calls:
+                extra = f"tool_calls={self.transcript_tool_calls}"
+                if self.max_consecutive_tool_repeat >= 2:
+                    extra += f", max_consec_tool_repeat={self.max_consecutive_tool_repeat}"
+                line += f" (transcript: {extra})"
+            return line
         parts = [f"steps={self.executed_steps}/{self.planned_steps}"]
         if self.missing_step_ids:
             parts.append(f"missing={self.missing_step_ids}")
@@ -117,6 +157,10 @@ class ExecutionFacts:
             parts.append(f"no_output_steps={self.steps_without_output_files}")
         if self.max_command_repeat > 1:
             parts.append(f"max_cmd_repeat={self.max_command_repeat}")
+        if self.transcript_tool_calls:
+            parts.append(f"tool_calls={self.transcript_tool_calls}")
+        if self.max_consecutive_tool_repeat >= 2:
+            parts.append(f"max_consec_tool_repeat={self.max_consecutive_tool_repeat}")
         parts.append(f"fixes={self.total_fixes_applied}")
         return "; ".join(parts)
 
@@ -129,6 +173,111 @@ def _normalize_command(cmd: str) -> str:
     command counts as identical. This is string equality, not a keyword match:
     the only thing it asserts is "the same command text ran again"."""
     return " ".join((cmd or "").split())
+
+
+# --- granular tool-call extraction (replicate transcript) -------------------
+
+# Tool-input fields that identify the ACTION for repeat detection. claude's
+# Bash inputs carry per-call presentation metadata (a free-text `description`,
+# a `timeout`) that the model rewrites across retries of the same command;
+# including them would hide genuine repeats. Tools not listed use their full
+# input — whitespace and all — since e.g. Write/Edit content is semantic.
+_TOOL_IDENTITY_FIELDS: Dict[str, frozenset] = {
+    "Bash": frozenset({"command"}),
+}
+
+
+def _normalize_tool_call(name: str, tool_input: Any) -> str:
+    """One tool call as a canonical string: tool name + its identity fields
+    serialized with sorted keys. Two calls map to the same key only when the
+    same tool ran the same action — string equality, no keywords."""
+    if isinstance(tool_input, dict):
+        identity = _TOOL_IDENTITY_FIELDS.get(name)
+        if identity:
+            tool_input = {k: v for k, v in tool_input.items() if k in identity}
+    canon = json.dumps(tool_input, sort_keys=True, ensure_ascii=False, default=str)
+    return f"{name} {canon}"
+
+
+def _truncate_key(key: str) -> str:
+    """Bound a call key at collection time so the scan never holds unbounded
+    strings; the content-hash suffix keeps distinct long calls distinct (a
+    plain prefix cut would merge them into false repeats)."""
+    if len(key) <= _TOOL_CALL_KEY_MAX:
+        return key
+    digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"{key[:_TOOL_CALL_KEY_MAX]}…{digest}"
+
+
+def _scan_transcript_tool_calls(
+    transcript_path: Union[str, Path, None],
+) -> "tuple[int, int, str]":
+    """Single streaming pass over a claude-style stream-json transcript.
+
+    Returns ``(total, best_run_len, best_run_key)`` computed over truncated
+    call keys, so memory stays bounded regardless of transcript size. One file
+    can hold several appended provider invocations (a JSON-repair re-prompt
+    appends a short second session); the total accumulates across all of them,
+    but a ``system``/``init`` line breaks the consecutive-run tracking so runs
+    never splice across session boundaries. Duplicate tool_use block ids are
+    counted once. Degrades to all-neutral on a missing/unreadable file, on
+    malformed lines, or on any unforeseen parse failure — never raises.
+    """
+    neutral: "tuple[int, int, str]" = (0, 0, "")
+    if not transcript_path:
+        return neutral
+    total = 0
+    prev_key = ""
+    run_len = 0
+    best_len = 0
+    best_key = ""
+    seen_ids: set = set()
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (ValueError, RecursionError):
+                    # JSONDecodeError is a ValueError, but json.loads can also
+                    # raise bare ValueError (>4300-digit ints, Py3.11+) and
+                    # RecursionError (deep nesting); all just skip the line.
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                if obj.get("type") == "system" and obj.get("subtype") == "init":
+                    prev_key, run_len = "", 0
+                    continue
+                message = obj.get("message")
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not (isinstance(block, dict) and block.get("type") == "tool_use"):
+                        continue
+                    block_id = block.get("id")
+                    if isinstance(block_id, str) and block_id:
+                        if block_id in seen_ids:
+                            continue
+                        seen_ids.add(block_id)
+                    key = _truncate_key(
+                        _normalize_tool_call(str(block.get("name", "")), block.get("input"))
+                    )
+                    total += 1
+                    run_len = run_len + 1 if key == prev_key else 1
+                    prev_key = key
+                    if run_len > best_len:
+                        best_len, best_key = run_len, key
+    except Exception:
+        # Facts must never take down the pipeline (nor the step-level facts
+        # computed after this): OSError, MemoryError on a single giant line,
+        # or anything else unforeseen all degrade to neutral.
+        return neutral
+    return total, best_len, best_key
 
 
 def _step_id(step: StepOutcome) -> Optional[int]:
@@ -158,18 +307,29 @@ def _exit_code(step: StepOutcome) -> Optional[int]:
 def compute_execution_facts(
     evidence: Optional[ExecutionEvidence],
     plan: Optional[ReplicationPlan] = None,
+    transcript_path: Union[str, Path, None] = None,
 ) -> ExecutionFacts:
     """Compute objective execution facts for one replicate run.
 
-    Pure function. ``evidence`` is the parsed ``replication_log.json``; ``plan``
+    ``evidence`` is the parsed ``replication_log.json``; ``plan``
     the replication plan (used only for the planned-vs-executed step set
-    comparison). Either may be ``None``; the facts degrade to empty/zero. Never
-    raises on malformed input — bad records are simply skipped.
+    comparison); ``transcript_path`` the replicate transcript JSONL, parsed for
+    granular tool-call repeats. Any may be ``None``; the facts degrade to
+    empty/zero. Deterministic — the only I/O is the read-only transcript parse.
+    Never raises on malformed input — bad records are simply skipped. The
+    transcript facts are computed even when the step evidence is absent (a
+    hard-terminated run leaves a transcript but no log), and a transcript
+    failure never affects the step-level facts.
 
     Returns an :class:`ExecutionFacts`. It makes no diligence judgment; the
     manager owns that.
     """
     facts = ExecutionFacts()
+    total, best_len, best_key = _scan_transcript_tool_calls(transcript_path)
+    if total:
+        facts.transcript_tool_calls = total
+        facts.max_consecutive_tool_repeat = best_len
+        facts.max_consecutive_tool_call = best_key if best_len >= 2 else ""
 
     steps = list(getattr(evidence, "step_outcomes", None) or []) if evidence is not None else []
 

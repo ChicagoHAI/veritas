@@ -10,6 +10,7 @@ judgments belong to the manager (an LLM); deterministic code asserts only facts.
 The module must also never raise on malformed or missing evidence.
 """
 
+import itertools
 import json
 from pathlib import Path
 
@@ -226,7 +227,8 @@ def test_to_dict_is_json_serializable_and_has_expected_keys():
                 "last_step_failed", "steps_with_output_files",
                 "steps_without_output_files", "total_output_files",
                 "repeated_commands", "max_command_repeat", "total_fixes_applied",
-                "total_duration_seconds", "no_evidence"):
+                "total_duration_seconds", "no_evidence", "transcript_tool_calls",
+                "max_consecutive_tool_repeat", "max_consecutive_tool_call"):
         assert key in d
     json.dumps(d)
 
@@ -281,3 +283,244 @@ def test_real_replication_log_exit_codes_all_zero():
     facts = compute_execution_facts(ev, plan=None)
     assert all(code == 0 for code in facts.exit_codes.values())
     assert facts.succeeded_steps == facts.executed_steps
+
+
+# --- granular tool-call repeats (replication transcript) --------------------
+#
+# One planned step = many granular tool calls, so the step-level command
+# comparison above structurally cannot see intra-step retry/polling loops.
+# These facts come from parsing the replicate transcript (claude stream-json
+# JSONL) for tool_use blocks: the longest run of consecutive identical calls.
+# Still facts only — no verdict.
+
+
+_CALL_ID_COUNTER = itertools.count(1)
+
+
+def _tool_use_line(name, tool_input, call_id=None):
+    # Real transcripts carry a unique id per tool_use block; mirror that unless
+    # a test wants to pin a specific id (e.g. the duplicate-id dedup test).
+    if call_id is None:
+        call_id = f"toolu_{next(_CALL_ID_COUNTER)}"
+    return json.dumps({
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": call_id, "name": name, "input": tool_input},
+        ]},
+    })
+
+
+def _tool_use_lines(name, tool_input, n):
+    return [_tool_use_line(name, tool_input) for _ in range(n)]
+
+
+def _init_line():
+    return json.dumps({"type": "system", "subtype": "init", "session_id": "s"})
+
+
+def _write_transcript(tmp_path, lines):
+    p = tmp_path / "replication_transcript.jsonl"
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return p
+
+
+def test_consecutive_identical_tool_calls_counted(tmp_path):
+    lines = _tool_use_lines("Bash", {"command": "cat /tmp/task.output"}, 5)
+    lines.append(_tool_use_line("Bash", {"command": "ls results/"}))
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 6
+    assert facts.max_consecutive_tool_repeat == 5
+    assert "cat /tmp/task.output" in facts.max_consecutive_tool_call
+
+
+def test_interleaved_repeats_not_reported(tmp_path):
+    # Only back-to-back repetition is measured; interleaved repeats (A B A B)
+    # deliberately read as no run. Facts report the consecutive signal only.
+    lines = []
+    for _ in range(3):
+        lines.append(_tool_use_line("Read", {"file_path": "/work/run.log"}))
+        lines.append(_tool_use_line("Bash", {"command": "date"}))
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 6
+    assert facts.max_consecutive_tool_repeat == 1
+    assert facts.max_consecutive_tool_call == ""
+
+
+def test_distinct_inputs_are_distinct_calls(tmp_path):
+    lines = [_tool_use_line("Bash", {"command": f"echo {i}"}) for i in range(4)]
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 4
+    assert facts.max_consecutive_tool_repeat == 1
+
+
+def test_bash_presentation_metadata_ignored_for_identity(tmp_path):
+    # claude rewrites Bash's free-text description (and may bump timeout) on
+    # each retry of the same command; identity is the command itself.
+    lines = [
+        _tool_use_line("Bash", {"command": "python run.py",
+                                "description": "Run the pipeline", "timeout": 120000}),
+        _tool_use_line("Bash", {"command": "python run.py",
+                                "description": "Retry the pipeline run", "timeout": 300000}),
+    ]
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.max_consecutive_tool_repeat == 2
+    assert "python run.py" in facts.max_consecutive_tool_call
+
+
+def test_internal_whitespace_is_significant_for_identity(tmp_path):
+    # Whitespace inside tool inputs (file contents!) is semantic; two Write
+    # calls differing only by internal spacing are NOT the same call.
+    lines = [
+        _tool_use_line("Write", {"file_path": "/w/a.py", "content": "x  = 1"}),
+        _tool_use_line("Write", {"file_path": "/w/a.py", "content": "x = 1"}),
+    ]
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.max_consecutive_tool_repeat == 1
+
+
+def test_missing_transcript_is_neutral(tmp_path):
+    facts = compute_execution_facts(
+        _evidence([_step(1)]), _plan([1]),
+        transcript_path=tmp_path / "does-not-exist.jsonl",
+    )
+    assert facts.transcript_tool_calls == 0
+    assert facts.max_consecutive_tool_repeat == 0
+    assert facts.max_consecutive_tool_call == ""
+
+
+def test_no_transcript_arg_is_neutral():
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]))
+    assert facts.transcript_tool_calls == 0
+    assert facts.max_consecutive_tool_repeat == 0
+
+
+def test_transcript_facts_computed_even_without_step_evidence(tmp_path):
+    # The hard-terminated-run shape: no replication_log.json was ever written,
+    # but the transcript exists and shows a polling loop.
+    path = _write_transcript(
+        tmp_path, _tool_use_lines("Bash", {"command": "cat /tmp/task.output"}, 12)
+    )
+    facts = compute_execution_facts(None, None, transcript_path=path)
+    assert facts.no_evidence is True
+    assert facts.transcript_tool_calls == 12
+    assert facts.max_consecutive_tool_repeat == 12
+
+
+def test_malformed_transcript_lines_skipped(tmp_path):
+    good = _tool_use_line("Bash", {"command": "ls"})
+    path = _write_transcript(tmp_path, ["{not json", "", '{"type": 3}', good])
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 1
+
+
+def test_pathological_json_lines_skipped_without_raising(tmp_path):
+    # json.loads raises RecursionError on deep nesting and a plain ValueError
+    # on >4300-digit ints (Python 3.11+); neither is a JSONDecodeError. Both
+    # must degrade to a skipped line, not an exception.
+    deep = "[" * 100000 + "]" * 100000
+    bigint = '{"n": ' + "9" * 5000 + "}"
+    path = _write_transcript(tmp_path, [deep, bigint, _tool_use_line("Bash", {"command": "ls"})])
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 1
+
+
+def test_transcript_trouble_never_destroys_step_facts(tmp_path):
+    # Step-level facts come from replication_log.json and must survive any
+    # transcript-parsing failure.
+    deep = "[" * 100000 + "]" * 100000
+    path = _write_transcript(tmp_path, [deep])
+    facts = compute_execution_facts(
+        _evidence([_step(1, exit_code=2)]), _plan([1, 2]), transcript_path=path
+    )
+    assert facts.executed_steps == 1
+    assert facts.failed_step_ids == [1]
+    assert facts.missing_step_ids == [2]
+    assert facts.transcript_tool_calls == 0
+
+
+def test_unknown_transcript_schema_is_neutral(tmp_path):
+    # A non-claude provider transcript parses as JSONL but has no
+    # message.content tool_use blocks -> facts stay neutral, never raise.
+    path = _write_transcript(tmp_path, [
+        json.dumps({"event": "exec", "cmd": "ls"}),
+        json.dumps({"message": "plain string, not a dict"}),
+    ])
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 0
+    assert facts.max_consecutive_tool_repeat == 0
+
+
+def test_invocation_boundary_breaks_consecutive_runs(tmp_path):
+    # One transcript file can hold several appended provider invocations (a
+    # JSON-repair re-prompt appends a short second session). Totals accumulate
+    # across all of them — it is all replicate-phase work — but identical
+    # calls on either side of a system/init boundary are different sessions,
+    # not one consecutive run.
+    lines = (
+        [_init_line()]
+        + _tool_use_lines("Bash", {"command": "make"}, 3)
+        + [_init_line()]
+        + _tool_use_lines("Bash", {"command": "make"}, 2)
+    )
+    path = _write_transcript(tmp_path, lines)
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 5
+    assert facts.max_consecutive_tool_repeat == 3
+
+
+def test_duplicate_tool_use_ids_counted_once(tmp_path):
+    # A replayed/duplicated stream event carrying the same tool_use id must
+    # not double-count or fabricate a consecutive run.
+    line = _tool_use_line("Bash", {"command": "ls"}, call_id="toolu_dup")
+    path = _write_transcript(tmp_path, [line, line])
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.transcript_tool_calls == 1
+    assert facts.max_consecutive_tool_repeat == 1
+
+
+def test_long_tool_call_keys_truncated_in_facts(tmp_path):
+    long_cmd = "python train.py " + " ".join(f"--flag{i}=value{i}" for i in range(40))
+    path = _write_transcript(tmp_path, _tool_use_lines("Bash", {"command": long_cmd}, 4))
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    assert facts.max_consecutive_tool_repeat == 4
+    assert len(facts.max_consecutive_tool_call) <= 200
+    json.dumps(facts.to_dict())
+
+
+def test_summary_line_shows_consecutive_tool_repeats(tmp_path):
+    path = _write_transcript(
+        tmp_path, _tool_use_lines("Read", {"file_path": "/work/run.log"}, 11)
+    )
+    facts = compute_execution_facts(_evidence([_step(1)]), _plan([1]), transcript_path=path)
+    line = facts.summary_line()
+    assert "tool_calls=11" in line
+    assert "max_consec_tool_repeat=11" in line
+    # Still no verdict language.
+    assert "stuck" not in line.lower()
+    assert "loop" not in line.lower()
+
+
+def test_summary_line_no_evidence_still_reports_transcript_facts(tmp_path):
+    path = _write_transcript(
+        tmp_path, _tool_use_lines("Bash", {"command": "cat /tmp/task.output"}, 12)
+    )
+    line = compute_execution_facts(None, None, transcript_path=path).summary_line()
+    assert "no replication evidence" in line
+    assert "tool_calls=12" in line
+    assert "max_consec_tool_repeat=12" in line
+
+
+def test_summary_line_no_evidence_suppresses_nonrepeat(tmp_path):
+    # Both summary branches apply the same >= 2 gate: a repeat count of 1 is
+    # not a repeat and is not rendered.
+    lines = [_tool_use_line("Bash", {"command": f"echo {i}"}) for i in range(3)]
+    path = _write_transcript(tmp_path, lines)
+    line = compute_execution_facts(None, None, transcript_path=path).summary_line()
+    assert "no replication evidence" in line
+    assert "tool_calls=3" in line
+    assert "max_consec_tool_repeat" not in line
