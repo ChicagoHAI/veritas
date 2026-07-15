@@ -166,6 +166,52 @@ $EDITOR .env
 Keys are passed into the container only on the replicate phase, which runs the
 paper's code. Every other phase gets a stripped environment.
 
+### Per-step models and the OpenRouter provider
+
+Every pipeline bucket (`analyze`, `codegen`, `replicate`, `assess`, `verify`,
+`evaluate`) can run on its own engine, written as `[provider:]model`:
+
+```bash
+# pin one model globally
+./veritas replicate --repo ./my-project --provider claude --model claude-opus-4-8
+
+# vary the replicator, pin the judge (comparable scores across sweeps)
+./veritas replicate --repo ./my-project \
+    --replicate-model claude-opus-4-8 \
+    --verify-model openrouter:openai/gpt-5.5
+
+# run the whole pipeline on an OpenRouter model (needs OPENROUTER_API_KEY)
+./veritas replicate --repo ./my-project \
+    --provider openrouter --model moonshotai/kimi-k2.6
+```
+
+The same settings work file-based via `VERITAS_MODEL` /
+`VERITAS_<BUCKET>_MODEL` in `.env` (flags win). Changing only
+`--verify-model` on an existing output directory re-runs verification
+alone — cheap re-adjudication under a different judge.
+
+**Auth.** Provider API keys are read from your host shell and forwarded
+into the container (a key set only in `.env` is forwarded too; the host environment wins when both are set): `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`,
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`. For claude/codex/gemini an API key is
+accepted as an alternative to `./veritas login <provider>`; OpenRouter is
+API-key-only (there is no login flow). Note: when an
+`ANTHROPIC_API_KEY` is visible to claude, billing is expected to follow
+the key rather than your subscription (verify on your console).
+
+**OpenRouter routes.** `--provider openrouter` runs opencode, which
+reaches any OpenRouter slug. Two pass-through alternatives need no veritas
+support: codex reads `[model_providers.openrouter]` from your own
+`~/.codex/config.toml` (copied into the container), and Claude Code
+honors `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` pointed at OpenRouter's
+Anthropic-compatible endpoint (Anthropic-family models, best-effort).
+
+**Fusion.** OpenRouter's Fusion is reachable as a normal slug:
+`--verify-model openrouter:openrouter/fusion`. Fusion's panel and judge
+have always-on web search, so veritas prints a leakage warning if you
+configure it (or any `:online` variant) for `replicate`/`codegen`.
+As of 2026-07-02 the `openrouter/fusion` slug is confirmed to exist on OpenRouter, but driving veritas's file-reading tool loop through Fusion has not been verified end to end.
+
 ## Claim types and tiers
 
 Five shape-typed claim categories; each claim carries a tier that sets its weight.

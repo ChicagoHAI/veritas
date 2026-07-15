@@ -234,12 +234,16 @@ extract_provider() {
     local provider="claude"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --provider) provider="$2"; shift 2 ;;
+            --provider)
+                [ $# -ge 2 ] || break
+                provider="$2"; shift 2 ;;
             --provider=*) provider="${1#*=}"; shift ;;
             *) shift ;;
         esac
     done
-    echo "$provider"
+    # Providers are case-insensitive throughout; canonicalize like the
+    # Python layer does.
+    printf '%s\n' "$provider" | tr '[:upper:]' '[:lower:]'
 }
 
 # -----------------------------------------------------------------------------
@@ -249,9 +253,19 @@ extract_provider() {
 # Read the current value of an env var from .env (uncommented lines only).
 get_env_value() {
     local var_name="$1"
+    local val=""
     if [ -f "$PROJECT_ROOT/.env" ]; then
-        grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//"
+        val=$(grep -E "^${var_name}=" "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | sed "s/^${var_name}=//")
     fi
+    # A CRLF-authored .env would otherwise forward a corrupted value.
+    val="${val%$'\r'}"
+    # Strip one pair of matching surrounding quotes (dotenv-style values);
+    # a quoted engine spec must not reach the model parser quote-headed.
+    case "$val" in
+        \"*\") val="${val#\"}"; val="${val%\"}" ;;
+        \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    printf '%s\n' "$val"
 }
 
 # Mask a secret for display (first 4 + last 4 chars; values <=8 chars show ****).
@@ -462,6 +476,60 @@ compute_env_file_keys() {
 }
 
 # -----------------------------------------------------------------------------
+# Provider auth keys: forwarded so any configured provider can authenticate
+# with an API key in every phase. The host environment wins; a key set only
+# in .env is exported into the wrapper's own environment first, so
+# subcommands that do not mount the full .env (evaluate) still deliver
+# provider keys. Forwarding uses docker's name-only `-e VAR` form: docker
+# reads the value from the client environment, so no secret ever appears on
+# the docker command line (visible to other users via /proc/<pid>/cmdline
+# for the duration of the run).
+# -----------------------------------------------------------------------------
+PROVIDER_AUTH_VARS="OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
+
+# Per-bucket engine settings ride the same load/forward mechanism, so
+# subcommands whose containers never mount .env (evaluate, check-citations,
+# estimate) resolve the same engines as the run that produced the output dir.
+FORWARDED_ENGINE_VARS="VERITAS_MODEL VERITAS_ANALYZE_MODEL VERITAS_CODEGEN_MODEL VERITAS_REPLICATE_MODEL VERITAS_ASSESS_MODEL VERITAS_VERIFY_MODEL VERITAS_EVALUATE_MODEL VERITAS_CITATION_FAITHFULNESS_SCOPE"
+
+# Non-engine config that rides the same mechanism: the provider-native
+# model vars feed engine resolution's lowest precedence level in every
+# container; VERITAS_CONTACT_EMAIL is the citation resolver's polite-pool
+# contact. All are no-ops when unset.
+FORWARDED_CONFIG_VARS="ANTHROPIC_MODEL GEMINI_MODEL VERITAS_CONTACT_EMAIL"
+
+# Loaded from .env into the wrapper env for preflight decisions only. Not
+# forwarded with -e: cmd_replicate already mounts .env via --env-file, and
+# no other subcommand reads it.
+PREFLIGHT_ONLY_VARS="VERITAS_MAX_ITERS"
+
+# Export .env-fallback values into the wrapper environment. Must run in the
+# parent shell (NOT inside a $() substitution) so the exports survive to the
+# docker invocation.
+load_provider_auth_env() {
+    local var val
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS                $PREFLIGHT_ONLY_VARS; do
+        if [ -z "${!var}" ]; then
+            val="$(get_env_value "$var")"
+            if [ -n "$val" ]; then
+                export "$var=$val"
+            fi
+        fi
+    done
+}
+
+get_provider_auth_flags() {
+    local flags=""
+    local var
+    for var in $PROVIDER_AUTH_VARS $FORWARDED_ENGINE_VARS $FORWARDED_CONFIG_VARS; do
+        if [ -n "${!var}" ]; then
+            flags="$flags -e $var"
+        fi
+    done
+    echo "$flags"
+}
+
+# -----------------------------------------------------------------------------
 # Verify the requested provider has usable credentials on the host. Exits
 # with a clear actionable error BEFORE launching the container, so users
 # don't watch an LLM-call hang for several minutes before realising they
@@ -470,38 +538,133 @@ compute_env_file_keys() {
 # macOS note: Claude Code stores credentials in the Keychain rather than
 # ~/.claude/.credentials.json, so on Darwin we also probe the Keychain.
 # -----------------------------------------------------------------------------
+# Callers run load_provider_auth_env first, so keys set only in .env are
+# already exported here and every [ -n "$VAR" ] check below sees them.
 check_provider_credentials() {
     local provider="$1"
     case "$provider" in
         claude)
-            if is_claude_configured; then
+            if is_claude_configured || [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
                 return 0
             fi
             echo -e "${RED}Claude credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login claude${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login claude${NC} (or set ANTHROPIC_API_KEY in your shell or .env)" >&2
             exit 1
             ;;
         codex)
-            if [ -d "$HOME/.codex" ] && [ -n "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; then
+            if { [ -d "$HOME/.codex" ] && [ -n "$(ls -A "$HOME/.codex" 2>/dev/null)" ]; } || [ -n "$OPENAI_API_KEY" ]; then
                 return 0
             fi
             echo -e "${RED}Codex credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login codex${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login codex${NC} (or set OPENAI_API_KEY in your shell or .env)" >&2
             exit 1
             ;;
         gemini)
-            if [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+            if { [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; } || [ -n "$GEMINI_API_KEY" ] || [ -n "$GOOGLE_API_KEY" ]; then
                 return 0
             fi
             echo -e "${RED}Gemini credentials not found.${NC}" >&2
-            echo -e "Run: ${BOLD}./veritas login gemini${NC}" >&2
+            echo -e "Run: ${BOLD}./veritas login gemini${NC} (or set GEMINI_API_KEY in your shell or .env)" >&2
+            exit 1
+            ;;
+        openrouter)
+            if [ -n "$OPENROUTER_API_KEY" ]; then
+                return 0
+            fi
+            echo -e "${RED}OpenRouter API key not found.${NC}" >&2
+            echo -e "Export ${BOLD}OPENROUTER_API_KEY${NC} or add it to .env (${BOLD}./veritas config${NC})." >&2
             exit 1
             ;;
         *)
-            echo -e "${RED}Unknown provider:${NC} $provider (expected claude|codex|gemini)" >&2
+            echo -e "${RED}Unknown provider:${NC} $provider (expected claude|codex|gemini|openrouter)" >&2
             exit 1
             ;;
     esac
+}
+
+# Explicit provider prefix of a bucket's model spec: the bucket's model flag
+# ($1, e.g. --evaluate-model) first, then the matching VERITAS_<BUCKET>_MODEL
+# env var — the same precedence the Python layer resolves, minus the global
+# fallback (callers run load_provider_auth_env first, so .env-only values are
+# already in the wrapper environment). Empty when the bucket is unpinned or
+# its spec carries no provider prefix.
+bucket_spec_provider() {
+    local flag="$1"; shift
+    local spec=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "$flag")
+                [ $# -ge 2 ] || break
+                spec="$2"; shift 2 ;;
+            "$flag"=*) spec="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    if [ -z "$spec" ]; then
+        local var
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr 'a-z-' 'A-Z_')"
+        spec="${!var}"
+    fi
+    # Provider prefixes parse case-insensitively on the Python side; match
+    # the same way here (tr, not ${var,,}: macOS ships bash 3.2).
+    spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
+    case "$spec" in
+        claude:*|codex:*|gemini:*|openrouter:*) echo "${spec%%:*}" ;;
+    esac
+}
+
+# Bucket model flags whose engines this run can actually invoke, as far as
+# the wrapper can tell: codegen runs only in paper-only mode, and the
+# evaluate bucket only when an evaluation/citation/loop knob is on. Buckets
+# left out are inert for the run — their engines must not be preflighted.
+active_bucket_flags() {
+    local has_paper="" has_repo="" mode="" evaluate="" max_iters="$VERITAS_MAX_ITERS"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper|--paper=*|-p) has_paper=1 ;;
+            --repo|--repo=*|-r) has_repo=1 ;;
+            --mode) [ $# -ge 2 ] && mode="$2" ;;
+            --mode=*) mode="${1#*=}" ;;
+            --max-iters) [ $# -ge 2 ] && max_iters="$2" ;;
+            --max-iters=*) max_iters="${1#*=}" ;;
+            --evaluate|--check-citations) evaluate=1 ;;
+        esac
+        shift
+    done
+    # The manager loop, and with it every evaluate-bucket call, engages only
+    # above 1; a single-pass run never reaches that engine. An unparseable
+    # value resolves to the Config default (3), which does engage the loop.
+    if [ -n "$max_iters" ]; then
+        case "$max_iters" in
+            *[!0-9]*) evaluate=1 ;;
+            *) if [ "$max_iters" -gt 1 ]; then evaluate=1; fi ;;
+        esac
+    fi
+    if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+        if [ -n "$has_paper" ] && [ -z "$has_repo" ]; then
+            mode="paper-only"
+        else
+            mode="full"
+        fi
+    fi
+    local flags="--analyze-model --replicate-model --assess-model --verify-model"
+    [ "$mode" = "paper-only" ] && flags="$flags --codegen-model"
+    [ -n "$evaluate" ] && flags="$flags --evaluate-model"
+    echo "$flags"
+}
+
+# Provider whose credentials a single-bucket subcommand actually needs: the
+# bucket's pinned provider when its spec names one, else the global
+# --provider, since only that bucket runs.
+extract_bucket_provider() {
+    local flag="$1"; shift
+    local pinned
+    pinned=$(bucket_spec_provider "$flag" "$@")
+    if [ -n "$pinned" ]; then
+        echo "$pinned"
+    else
+        extract_provider "$@"
+    fi
 }
 
 # Return 0 if Claude OAuth credentials are present on this host, 1 otherwise.
@@ -1180,10 +1343,26 @@ cmd_replicate() {
     ensure_image
     warn_if_outdated
 
-    # Fast-fail if the requested provider has no credentials on the host.
-    # Beats waiting for an inside-container LLM call to hang or error out.
-    local provider=$(extract_provider "$@")
-    check_provider_credentials "$provider"
+    # Fast-fail if any provider the run will invoke has no credentials on
+    # the host. Beats waiting for an inside-container LLM call to hang or
+    # error out. .env-only keys count: load them into the wrapper env
+    # first. Each distinct pinned provider of an active bucket is checked,
+    # plus the global provider when any active bucket falls through to it.
+    load_provider_auth_env
+    local bucket_flag pinned unpinned="" seen=" "
+    for bucket_flag in $(active_bucket_flags "$@"); do
+        pinned=$(bucket_spec_provider "$bucket_flag" "$@")
+        if [ -z "$pinned" ]; then
+            unpinned=1
+        elif [ "${seen#* $pinned }" = "$seen" ]; then
+            seen="$seen$pinned "
+            check_provider_credentials "$pinned"
+        fi
+    done
+    pinned=$(extract_provider "$@")
+    if [ -n "$unpinned" ] && [ "${seen#* $pinned }" = "$seen" ]; then
+        check_provider_credentials "$pinned"
+    fi
 
     # Surface a non-fatal hint if .env is missing — papers that need API keys
     # for their own LLM calls will fail without it.
@@ -1199,9 +1378,8 @@ cmd_replicate() {
     ensure_credential_perms
 
     # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
-    # can thread into codegen/plan/replicate prompts (issue #92: codegen
-    # previously defaulted to CPU-only code blind to whether a GPU would even
-    # be present at replicate time). Empty when get_gpu_flags found none.
+    # can thread into codegen/plan/replicate prompts. Empty when
+    # get_gpu_flags found none.
     local gpu_info_flag=""
     local gpu_info
     gpu_info=$(get_gpu_info "$gpu_flags")
@@ -1223,21 +1401,7 @@ cmd_replicate() {
         fi
     fi
 
-    # Forward an explicitly-set model override into the container so every
-    # phase's provider CLI pins the same model. Passed as a direct -e (not via
-    # .env / VERITAS_ENV_FILE_KEYS) so it is visible to all phases, not just
-    # replicate. No-op unless the host exports ANTHROPIC_MODEL.
-    local model_flag=""
-    if [ -n "$ANTHROPIC_MODEL" ]; then
-        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
-    fi
-
-    # Polite-pool contact for the citation resolver's metadata requests when
-    # --check-citations runs inline. No-op unless the host exports it.
-    local contact_flag=""
-    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
-        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
-    fi
+    local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
@@ -1246,8 +1410,7 @@ cmd_replicate() {
         $credential_mounts \
         $env_file_flag \
         $env_keys_flag \
-        $model_flag \
-        $contact_flag \
+        $auth_flags \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1280,65 +1443,20 @@ cmd_report() {
 }
 
 # -----------------------------------------------------------------------------
-# Evaluate: run the evaluation manager + report on an existing replication dir
-# (the product layer, decoupled from replicate). Needs provider credentials
-# because the manager is an LLM pass; reads everything from the mounted output
-# dir, so the original paper/repo need not be re-supplied.
+# Shared launcher for the post-hoc eval-layer subcommands (evaluate,
+# check-citations). Both operate on an existing replication dir: resolve and
+# mount it, rewrite a --paper flag onto a read-only mount, and run the CLI
+# verb in the container. Verb-independent by design — the forwarded flags
+# (auth/engine vars, ANTHROPIC_MODEL, VERITAS_CONTACT_EMAIL) are no-ops when
+# the host does not export them.
 # -----------------------------------------------------------------------------
-cmd_evaluate() {
-    ensure_image
-    warn_if_outdated
-    check_provider_credentials "$(extract_provider "$@")"
-
-    local eval_dir="$1"; shift
-    local host_eval_dir
-    host_eval_dir=$(realpath "$eval_dir" 2>/dev/null || echo "$eval_dir")
-    if [ ! -d "$host_eval_dir" ]; then
-        echo -e "${RED}Replication output dir not found:${NC} $eval_dir" >&2
-        exit 1
-    fi
-
-    local tty_flag=$(get_tty_flag)
-    local platform_flag=$(get_platform_flags)
-    local credential_mounts=$(get_cli_credential_mounts)
-    ensure_credential_perms
-
-    # Forward an explicitly-set model override so the evaluation manager's LLM
-    # pass pins the same model as replication. Passed as a direct -e. No-op
-    # unless the host exports ANTHROPIC_MODEL.
-    local model_flag=""
-    if [ -n "$ANTHROPIC_MODEL" ]; then
-        model_flag="-e ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
-    fi
-
-    eval "docker run $tty_flag --rm \
-        $platform_flag \
-        $credential_mounts \
-        $model_flag \
-        -v \"$host_eval_dir:/workspace/eval\" \
-        -w /workspace \
-        \"$IMAGE_NAME\" \
-        veritas evaluate /workspace/eval $@"
-}
-
-# -----------------------------------------------------------------------------
-# Citation check: reference integrity + faithfulness on an existing replication
-# dir (the post-hoc twin of `replicate --check-citations`). Advisory: never
-# changes the Replication Score. Needs provider credentials because the
-# extraction and faithfulness passes are LLM calls. A --paper given here is
-# mounted read-only and its path rewritten; without it the CLI falls back to
-# the paper path saved in the run's config, which for containerized runs is a
-# container path that no longer resolves.
-# -----------------------------------------------------------------------------
-cmd_check_citations() {
-    if [ $# -eq 0 ]; then
-        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
-        exit 1
-    fi
+run_eval_container() {
+    local verb="$1"; shift
 
     ensure_image
     warn_if_outdated
-    check_provider_credentials "$(extract_provider "$@")"
+    load_provider_auth_env
+    check_provider_credentials "$(extract_bucket_provider --evaluate-model "$@")"
 
     local eval_dir="$1"; shift
     local host_eval_dir
@@ -1351,7 +1469,7 @@ cmd_check_citations() {
     # normalize permissions like rewrite_paths does for --output.
     chmod -R a+rwX "$host_eval_dir" 2>/dev/null || true
 
-    # --paper is the subcommand's only path flag; mount it read-only and
+    # --paper is the subcommands' only path flag; mount it read-only and
     # rewrite the argument. Everything else passes through unchanged.
     local paper_mount=""
     local args=""
@@ -1363,6 +1481,7 @@ cmd_check_citations() {
                 continue
                 ;;
             --paper)
+                [ $# -ge 2 ] || break
                 local host_paper
                 host_paper=$(realpath "$2" 2>/dev/null || echo "$2")
                 if [ ! -f "$host_paper" ]; then
@@ -1386,23 +1505,44 @@ cmd_check_citations() {
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
-
-    # Crossref/OpenAlex polite-pool contact for the resolver's requests.
-    # No-op unless the host exports VERITAS_CONTACT_EMAIL.
-    local contact_flag=""
-    if [ -n "$VERITAS_CONTACT_EMAIL" ]; then
-        contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
-    fi
+    local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $credential_mounts \
-        $contact_flag \
+        $auth_flags \
         $paper_mount \
         -v \"$host_eval_dir:/workspace/eval\" \
         -w /workspace \
         \"$IMAGE_NAME\" \
-        veritas check-citations /workspace/eval $args"
+        veritas $verb /workspace/eval $args"
+}
+
+# -----------------------------------------------------------------------------
+# Evaluate: run the evaluation manager + report on an existing replication dir
+# (the product layer, decoupled from replicate). Needs provider credentials
+# because the manager is an LLM pass; reads everything from the mounted output
+# dir, so the original paper/repo need not be re-supplied.
+# -----------------------------------------------------------------------------
+cmd_evaluate() {
+    run_eval_container evaluate "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Citation check: reference integrity + faithfulness on an existing replication
+# dir (the post-hoc twin of `replicate --check-citations`). Advisory: never
+# changes the Replication Score. Needs provider credentials because the
+# extraction and faithfulness passes are LLM calls. A --paper given here is
+# mounted read-only and its path rewritten; without it the CLI falls back to
+# the paper path saved in the run's config, which for containerized runs is a
+# container path that no longer resolves.
+# -----------------------------------------------------------------------------
+cmd_check_citations() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage:${NC} ./veritas check-citations <replicate-dir> [--paper <pdf>] [flags...]" >&2
+        exit 1
+    fi
+    run_eval_container check-citations "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -1411,17 +1551,20 @@ cmd_check_citations() {
 cmd_estimate() {
     ensure_image
     warn_if_outdated
-    check_provider_credentials "$(extract_provider "$@")"
+    load_provider_auth_env
+    check_provider_credentials "$(extract_bucket_provider --analyze-model "$@")"
     rewrite_paths "$@"
 
     local tty_flag=$(get_tty_flag)
     local platform_flag=$(get_platform_flags)
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
+    local auth_flags=$(get_provider_auth_flags)
 
     eval "docker run $tty_flag --rm \\
         $platform_flag \\
         $credential_mounts \\
+        $auth_flags \\
         $MOUNTS \\
         -w /workspace \\
         \"$IMAGE_NAME\" \\

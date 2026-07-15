@@ -4,8 +4,8 @@
 #
 # For use on environments where docker is not available (HPC clusters,
 # managed compute) but you still want the veritas pipeline. Assumes the
-# host already has the runtime deps (claude/codex/gemini CLI, python, uv,
-# pandoc/latex if you want PDF reports) on PATH.
+# host already has the runtime deps (claude/codex/gemini/opencode CLI,
+# python, uv, pandoc/latex if you want PDF reports) on PATH.
 #
 # Mirrors the layout the docker `entrypoint.sh` would set up:
 #   <--output>/veritas-skills/         (copy of templates/skills, runtime read-only)
@@ -34,7 +34,7 @@ require_tools() {
     done
     if [ ${#missing[@]} -gt 0 ]; then
         echo "ERROR: missing required tools on PATH: ${missing[*]}" >&2
-        echo "Install them and re-run. (claude/codex/gemini via curl|bash, python+uv via your package manager.)" >&2
+        echo "Install them and re-run. (claude/codex/gemini via curl|bash, opencode via npm, python+uv via your package manager.)" >&2
         exit 1
     fi
 }
@@ -62,12 +62,111 @@ extract_provider() {
     local provider="claude"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --provider) provider="$2"; shift 2 ;;
+            --provider)
+                [ $# -ge 2 ] || break
+                provider="$2"; shift 2 ;;
             --provider=*) provider="${1#*=}"; shift ;;
             *) shift ;;
         esac
     done
-    echo "$provider"
+    # Providers are case-insensitive throughout; canonicalize like the
+    # Python layer does.
+    printf '%s
+' "$provider" | tr '[:upper:]' '[:lower:]'
+}
+
+# Bucket model flags whose engines this run can actually invoke, as far as
+# the wrapper can tell: codegen runs only in paper-only mode, and the
+# evaluate bucket only when an evaluation/citation/loop knob is on. Buckets
+# left out are inert for the run — their engines must not be preflighted.
+active_bucket_flags() {
+    local has_paper="" has_repo="" mode="" evaluate="" max_iters="$VERITAS_MAX_ITERS"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --paper|--paper=*|-p) has_paper=1 ;;
+            --repo|--repo=*|-r) has_repo=1 ;;
+            --mode) [ $# -ge 2 ] && mode="$2" ;;
+            --mode=*) mode="${1#*=}" ;;
+            --max-iters) [ $# -ge 2 ] && max_iters="$2" ;;
+            --max-iters=*) max_iters="${1#*=}" ;;
+            --evaluate|--check-citations) evaluate=1 ;;
+        esac
+        shift
+    done
+    # The manager loop, and with it every evaluate-bucket call, engages only
+    # above 1; a single-pass run never reaches that engine. An unparseable
+    # value resolves to the Config default (3), which does engage the loop.
+    if [ -n "$max_iters" ]; then
+        case "$max_iters" in
+            *[!0-9]*) evaluate=1 ;;
+            *) if [ "$max_iters" -gt 1 ]; then evaluate=1; fi ;;
+        esac
+    fi
+    if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+        if [ -n "$has_paper" ] && [ -z "$has_repo" ]; then
+            mode="paper-only"
+        else
+            mode="full"
+        fi
+    fi
+    local flags="--analyze-model --replicate-model --assess-model --verify-model"
+    [ "$mode" = "paper-only" ] && flags="$flags --codegen-model"
+    [ -n "$evaluate" ] && flags="$flags --evaluate-model"
+    echo "$flags"
+}
+
+# Explicit provider prefix of a bucket's model spec: the flag first, then the
+# matching VERITAS_<BUCKET>_MODEL env var. Mirrors bucket_spec_provider() in
+# docker/run.sh so the host and docker preflights agree. Empty when the
+# bucket is unpinned or its spec carries no provider prefix.
+bucket_spec_provider() {
+    local flag="$1"; shift
+    local spec=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "$flag")
+                [ $# -ge 2 ] || break
+                spec="$2"; shift 2 ;;
+            "$flag"=*) spec="${1#*=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+    if [ -z "$spec" ]; then
+        local var
+        var="VERITAS_$(printf '%s' "${flag#--}" | tr 'a-z-' 'A-Z_')"
+        spec="${!var}"
+    fi
+    spec=$(printf '%s' "$spec" | tr '[:upper:]' '[:lower:]')
+    case "$spec" in
+        claude:*|codex:*|gemini:*|openrouter:*) echo "${spec%%:*}" ;;
+    esac
+}
+
+# Provider for a specific engine bucket: the pinned provider when the spec
+# names one, else the global --provider.
+extract_bucket_provider() {
+    local flag="$1"; shift
+    local pinned
+    pinned=$(bucket_spec_provider "$flag" "$@")
+    if [ -n "$pinned" ]; then
+        echo "$pinned"
+    else
+        extract_provider "$@"
+    fi
+}
+
+# Provider-aware tool preflight: the base tools passed as extra args are
+# always required, plus the CLI of the provider that will be invoked.
+require_provider_tools() {
+    local provider="$1"; shift
+    case "$provider" in
+        claude|codex|gemini) require_tools "$@" "$provider" ;;
+        openrouter)          require_tools "$@" opencode ;;
+        *)
+            echo "ERROR: unknown provider: $provider (expected claude|codex|gemini|openrouter)" >&2
+            exit 1
+            ;;
+    esac
 }
 
 # Compute a comma-separated list of var names defined in $VERITAS_REPO/.env
@@ -145,20 +244,68 @@ run_veritas_cli() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Load .env values without executing the file: KEY=VALUE lines only, one pair
+# of surrounding quotes stripped, comments and malformed lines skipped. An
+# already-exported shell var wins (host environment beats .env, matching the
+# docker wrapper), and values with spaces, #, or $ stay literal instead of
+# breaking a `set -a` source.
+# -----------------------------------------------------------------------------
+load_env_file() {
+    [ -f "$VERITAS_REPO/.env" ] || return 0
+    chmod 600 "$VERITAS_REPO/.env" 2>/dev/null || true
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        val="${line#*=}"
+        case "$key" in
+            [A-Za-z_]*) ;;
+            *) continue ;;
+        esac
+        case "$key" in
+            *[!A-Za-z0-9_]*) continue ;;
+        esac
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        if [ -z "${!key}" ]; then
+            export "$key=$val"
+        fi
+    done < "$VERITAS_REPO/.env"
+}
+
 cmd_replicate() {
-    # Tool check is provider-aware: python+uv are always needed, but the
-    # agent CLI is only required for the provider the user actually picked.
-    # Hardcoding `claude` here broke `--provider codex` runs (Filbert
-    # caught this in review of the initial PR).
-    local provider
-    provider="$(extract_provider "$@")"
-    case "$provider" in
-        claude|codex|gemini) require_tools python uv "$provider" ;;
-        *)
-            echo "ERROR: unknown --provider: $provider (expected claude|codex|gemini)" >&2
-            exit 1
-            ;;
-    esac
+    # Tool check is provider-aware: python+uv are always needed, plus the
+    # CLI of every provider a bucket resolves to — the global one unless
+    # every bucket is explicitly pinned elsewhere, and each pinned one
+    # (host mode has no image with all CLIs baked in).
+    require_tools python uv
+    # Engines pinned only in .env must be visible to the scan below
+    # (load_env_file exports only unset vars, so re-running it later in
+    # this function is a no-op).
+    load_env_file
+    local bucket_flag pinned unpinned="" seen=" "
+    for bucket_flag in $(active_bucket_flags "$@"); do
+        pinned=$(bucket_spec_provider "$bucket_flag" "$@")
+        if [ -z "$pinned" ]; then
+            unpinned=1
+        elif [ "${seen#* $pinned }" = "$seen" ]; then
+            seen="$seen$pinned "
+            require_provider_tools "$pinned"
+        fi
+    done
+    if [ -n "$unpinned" ]; then
+        require_provider_tools "$(extract_provider "$@")"
+    fi
 
     local output_dir
     output_dir="$(resolve_output_dir "$@")"
@@ -166,20 +313,13 @@ cmd_replicate() {
     mkdir -p "$output_dir"
 
     # Load $VERITAS_REPO/.env if present and set VERITAS_ENV_FILE_KEYS so
-    # the Python runner exposes those vars only during the replicate
-    # phase. Mirrors the docker wrapper's `--env-file` + `-e
-    # VERITAS_ENV_FILE_KEYS=...` plumbing — without this, papers that
-    # call OpenAI/Anthropic from inside their own code would lose their
-    # keys silently on a cluster while working fine in docker (Filbert
-    # caught this in review).
+    # the Python runner scopes those vars per phase. Mirrors the docker
+    # wrapper's `--env-file` + `-e VERITAS_ENV_FILE_KEYS=...` plumbing —
+    # without this, papers that call OpenAI/Anthropic from inside their own
+    # code would lose their keys silently on a cluster while working fine
+    # in docker.
     if [ -f "$VERITAS_REPO/.env" ]; then
-        # `set -a` exports every var assigned by the sourced file, so the
-        # subsequent python subprocess inherits them. Restrict perms first
-        # since .env holds raw keys.
-        chmod 600 "$VERITAS_REPO/.env" 2>/dev/null || true
-        set -a
-        . "$VERITAS_REPO/.env"
-        set +a
+        load_env_file
         local keys
         keys="$(compute_env_file_keys)"
         if [ -n "$keys" ]; then
@@ -256,8 +396,16 @@ cmd_replicate() {
 
 cmd_passthrough() {
     # report / evaluate / estimate / check-citations — no pre/post staging
-    # needed; just forward to the python CLI.
+    # needed; load .env (provider keys + engine settings, host env wins)
+    # and forward to the python CLI. VERITAS_ENV_FILE_KEYS keeps the
+    # Python-side per-phase key scoping working for these entry points too.
     local subcmd="$1"; shift
+    load_env_file
+    local keys
+    keys="$(compute_env_file_keys)"
+    if [ -n "$keys" ]; then
+        export VERITAS_ENV_FILE_KEYS="$keys"
+    fi
     run_veritas_cli "$subcmd" "$@"
 }
 
@@ -302,16 +450,11 @@ case "$1" in
         cmd_passthrough "$@"
         ;;
     check-citations)
-        # The citation passes are LLM calls; fail fast when the provider CLI
-        # is missing, matching the docker wrapper's credential preflight.
-        cc_provider="$(extract_provider "$@")"
-        case "$cc_provider" in
-            claude|codex|gemini) require_tools python "$cc_provider" ;;
-            *)
-                echo "ERROR: unknown --provider: $cc_provider (expected claude|codex|gemini)" >&2
-                exit 1
-                ;;
-        esac
+        # The citation passes are LLM calls riding the evaluate bucket; fail
+        # fast when that engine's CLI is missing, matching the docker
+        # wrapper's credential preflight. Engines pinned only in .env count.
+        load_env_file
+        require_provider_tools "$(extract_bucket_provider --evaluate-model "$@")" python
         cmd_passthrough "$@"
         ;;
     -h|--help|help)

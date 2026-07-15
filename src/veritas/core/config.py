@@ -1,19 +1,76 @@
 """Configuration for Veritas."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional, Tuple
 
-from veritas.core.config_env import _env_int, _env_opt_int, _env_str
+from veritas.core.config_env import _env_int, _env_opt_int, _env_opt_str, _env_str
 
 
 # All valid AI providers
-VALID_PROVIDERS = ["claude", "codex", "gemini"]
+VALID_PROVIDERS = ["claude", "codex", "gemini", "openrouter"]
 
 # Input mode literal
 InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
+
+# Named groups of LLM call sites. Each bucket resolves its own engine
+# (provider + model) via Config.engine_for.
+BUCKETS = ("analyze", "codegen", "replicate", "assess", "verify", "evaluate")
+
+# Text before the first ':' counts as a provider prefix only when it is a
+# simple token — OpenRouter variant suffixes like 'model:free' stay parseable
+# as bare models.
+_PROVIDER_PREFIX_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+def parse_model_spec(spec: str) -> Tuple[Optional[str], str]:
+    """Parse a ``[provider:]model`` spec into ``(provider, model)``.
+
+    Returns ``(None, model)`` for bare specs. Raises ``ValueError`` on a
+    typo'd provider prefix, an empty model after a valid prefix, or an
+    empty spec.
+    """
+    spec = spec.strip()
+    if not spec:
+        raise ValueError("Empty model spec")
+    head, sep, tail = spec.partition(":")
+    if not sep:
+        return None, spec
+    head_lower = head.strip().lower()
+    if head_lower in VALID_PROVIDERS:
+        if not tail.strip():
+            raise ValueError(
+                f"Model spec '{spec}': provider prefix requires a model"
+            )
+        return head_lower, tail.strip()
+    if _PROVIDER_PREFIX_RE.match(head_lower):
+        raise ValueError(
+            f"Model spec '{spec}': unknown provider '{head}'. "
+            f"Valid providers: {VALID_PROVIDERS}"
+        )
+    return None, spec
+
+
+# Model slugs whose web access cannot be disabled. On the replicate/codegen
+# buckets these can fetch the paper's published values, defeating the
+# anti-leakage design; veritas warns (never blocks) when one is configured
+# there.
+_WEB_LOCKED_MODELS = ("openrouter/fusion",)
+
+
+def is_web_locked_slug(model: Optional[str]) -> bool:
+    if not model:
+        return False
+    # Model specs may carry the slug bare ("openrouter:fusion") or with its
+    # author prefix ("openrouter:openrouter/fusion"); lock both spellings.
+    return (
+        model in _WEB_LOCKED_MODELS
+        or f"openrouter/{model}" in _WEB_LOCKED_MODELS
+        or model.endswith(":online")
+    )
 
 
 # Output directory structure — each phase writes into its own subdir.
@@ -72,9 +129,15 @@ FIX_SEVERITY_TRANSCRIPT_FILE = "fix_severity_transcript.jsonl"
 EVALUATION_FILE = "contextual_evaluation.json"
 EVALUATION_TRANSCRIPT_FILE = "contextual_evaluation_transcript.jsonl"
 
+# Sidecars recording the settings (engine, and scope for citations) that
+# produced each evaluate-bucket output. A settings change re-runs the output
+# instead of silently reusing it; outputs without a sidecar predate this
+# tracking and are kept as-is.
+EVALUATION_META_FILE = ".contextual_evaluation_meta.json"
+CITATION_CHECK_META_FILE = ".citation_check_meta.json"
+
 # Citation-check submodule filenames (opt-in, advisory; under the evaluation dir).
 CITATION_CHECK_FILE = "citation_check.json"
-CITATION_CHECK_META_FILE = ".citation_check_meta.json"
 CITATION_CHECK_TRANSCRIPT_FILE = "citation_check_transcript.jsonl"
 CITATION_REFERENCES_FILE = "references.json"
 CITATION_RESOLVER_VERDICTS_FILE = "resolver_verdicts.json"
@@ -83,7 +146,37 @@ CITATION_RESOLVER_SCRIPT_FILE = "resolve_references.py"
 CITATION_AUDIT_FILE = "citation_audit.json"
 CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
 
+
+def citation_artifact_paths(output_dir) -> tuple:
+    """Every file the citation check writes under the evaluation dir.
+
+    The discard list for a restart: leaving any of these behind lets the
+    resume gates or the extraction prompt pick up a prior run's artifacts.
+    """
+    evaluation_dir = Path(output_dir) / EVALUATION_SUBDIR
+    return tuple(evaluation_dir / name for name in (
+        CITATION_CHECK_FILE,
+        CITATION_CHECK_META_FILE,
+        CITATION_CHECK_TRANSCRIPT_FILE,
+        CITATION_AUDIT_FILE,
+        CITATION_AUDIT_TRANSCRIPT_FILE,
+        CITATION_REFERENCES_FILE,
+        CITATION_RESOLVER_VERDICTS_FILE,
+        CITATION_RESOLVER_SCRIPT_FILE,
+    ))
+
 VALID_FAITHFULNESS_SCOPES = ["main", "all"]
+
+# Model env vars native to each provider's CLI, honored as the lowest
+# precedence level of engine resolution (below the global model). Resolving
+# them here keeps engines the single model channel: the choice reaches the
+# report provenance and the resume fingerprint, and the CLI is pinned with an
+# explicit model flag. Only vars the CLIs verifiably read belong here — codex
+# has none (its model comes from -m or config.toml).
+PROVIDER_NATIVE_MODEL_VARS = {
+    "claude": "ANTHROPIC_MODEL",
+    "gemini": "GEMINI_MODEL",
+}
 
 # Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
@@ -137,6 +230,17 @@ class Config:
     verify_timeout: Optional[int] = None
     evaluate_timeout: Optional[int] = None
 
+    # Per-bucket engine selection. Each field takes a ``[provider:]model``
+    # spec; ``model`` is the bare global default (its provider is
+    # ``provider`` above). None = the provider CLI's own default model.
+    model: Optional[str] = None
+    analyze_model: Optional[str] = None
+    codegen_model: Optional[str] = None
+    replicate_model: Optional[str] = None
+    assess_model: Optional[str] = None
+    verify_model: Optional[str] = None
+    evaluate_model: Optional[str] = None
+
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
     run_evaluation: bool = False
@@ -155,9 +259,9 @@ class Config:
     # None when its flag is not set, mirroring the timeout fields.
     faithfulness_scope: Optional[str] = None
 
-    # Hard cap on manager-driven retry iterations (reserved for the later
-    # iterative-manager loop phase; no behavior wired yet). Overridable via
-    # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
+    # Hard cap on manager-driven retry iterations. 1 = single pass (the
+    # manager gate is off); >1 enables the post-replicate manager loop.
+    # Overridable via ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs use 1.
     max_iters: int = field(
         default_factory=lambda: _env_int("VERITAS_MAX_ITERS", 3)
     )
@@ -176,12 +280,38 @@ class Config:
         "citation_timeout": "VERITAS_CITATION_TIMEOUT",
     }
 
+    # Env-var names backing each model field, consulted in __post_init__
+    # when the CLI flag is absent (the field is left as None).
+    _MODEL_ENV_VARS = {
+        "model": "VERITAS_MODEL",
+        "analyze_model": "VERITAS_ANALYZE_MODEL",
+        "codegen_model": "VERITAS_CODEGEN_MODEL",
+        "replicate_model": "VERITAS_REPLICATE_MODEL",
+        "assess_model": "VERITAS_ASSESS_MODEL",
+        "verify_model": "VERITAS_VERIFY_MODEL",
+        "evaluate_model": "VERITAS_EVALUATE_MODEL",
+    }
+
     def __post_init__(self):
         # Timeouts: CLI (explicit value) wins; otherwise honor the env var as
         # the default. Code default (None) remains when neither is set.
         for field_name, env_name in self._TIMEOUT_ENV_VARS.items():
             if getattr(self, field_name) is None:
                 setattr(self, field_name, _env_opt_int(env_name, None))
+
+        # Models: CLI (explicit value) wins; otherwise honor the env var.
+        for field_name, env_name in self._MODEL_ENV_VARS.items():
+            if getattr(self, field_name) is None:
+                setattr(self, field_name, _env_opt_str(env_name))
+
+        # Provider-native model env vars (the CLIs would honor these on
+        # their own); captured once so engine resolution is stable for the
+        # run and the selected model surfaces in provenance and the resume
+        # fingerprint instead of silently repointing the CLI.
+        self._native_env_models = {
+            provider: _env_opt_str(env_name)
+            for provider, env_name in PROVIDER_NATIVE_MODEL_VARS.items()
+        }
 
         # Faithfulness scope: same CLI-then-env-then-default resolution.
         if self.faithfulness_scope is None:
@@ -211,8 +341,10 @@ class Config:
                 "Cannot determine output directory: provide --output, --repo, or --paper"
             )
 
-        # Validate provider
-        if self.provider.lower() not in VALID_PROVIDERS:
+        # Validate and canonicalize the provider (stored lowercase so
+        # fingerprints, engine strings, and wrapper checks all agree).
+        self.provider = self.provider.lower()
+        if self.provider not in VALID_PROVIDERS:
             raise ValueError(
                 f"Unknown provider: {self.provider}. Valid options: {VALID_PROVIDERS}"
             )
@@ -253,6 +385,23 @@ class Config:
                     f"{VALID_FAITHFULNESS_SCOPES}; got '{self.faithfulness_scope}'"
                 )
             self.faithfulness_scope = scope
+
+        # The global model is bare by definition — its provider is --provider.
+        if self.model is not None:
+            prefix, _ = parse_model_spec(self.model)
+            if prefix is not None:
+                raise ValueError(
+                    f"--model must be a bare model (set the provider with "
+                    f"--provider); got '{self.model}'"
+                )
+
+        # Eagerly parse every bucket spec so malformed values (flags or
+        # VERITAS_*_MODEL vars) fail at startup rather than mid-run.
+        # Provisioning requirements (openrouter needs an explicit model and a
+        # key) are checked per run against the buckets that will actually
+        # execute, not here.
+        for bucket in BUCKETS:
+            self.engine_for(bucket)
 
     def _resolve_mode(self, requested: str) -> str:
         """Resolve --mode auto into an explicit mode, or validate an explicit mode."""
@@ -335,6 +484,42 @@ class Config:
             return codebase if codebase.exists() else None
         return self.repo_path
 
+    # -- Per-bucket engine resolution -----------------------------------------
+
+    def engine_for(self, bucket: str) -> Tuple[str, Optional[str]]:
+        """Resolve the ``(provider, model)`` engine for a bucket.
+
+        Precedence: the bucket's own spec (flag or VERITAS_<BUCKET>_MODEL,
+        already merged in __post_init__) -> the global ``model`` with the
+        global ``provider`` -> the resolved provider's native model env var
+        (PROVIDER_NATIVE_MODEL_VARS). ``model=None`` means the provider
+        CLI's default.
+        """
+        if bucket not in BUCKETS:
+            raise ValueError(f"Unknown bucket: {bucket}. Valid: {BUCKETS}")
+        spec = getattr(self, f"{bucket}_model")
+        if spec is not None:
+            prefix, model = parse_model_spec(spec)
+            return (prefix or self.provider.lower(), model)
+        provider = self.provider.lower()
+        model = self.model
+        if model is None:
+            model = self._native_env_models.get(provider)
+        return (provider, model)
+
+    def resolved_engines(self) -> Dict[str, str]:
+        """Canonical ``bucket -> 'provider:model'`` (or ``'provider'``) map."""
+        engines = {}
+        for bucket in BUCKETS:
+            provider, model = self.engine_for(bucket)
+            engines[bucket] = f"{provider}:{model}" if model else provider
+        return engines
+
+    def resolved_providers(self) -> set:
+        """Set of providers any bucket resolves to."""
+        return {self.engine_for(bucket)[0] for bucket in BUCKETS}
+
+
     # -- Output subdirectories ----------------------------------------------
 
     @property
@@ -382,6 +567,10 @@ class Config:
     @property
     def evaluation_transcript_path(self) -> Path:
         return self.evaluation_dir / EVALUATION_TRANSCRIPT_FILE
+
+    @property
+    def evaluation_meta_path(self) -> Path:
+        return self.evaluation_dir / EVALUATION_META_FILE
 
     # Citation-check submodule artifacts (under evaluation/). references_path and
     # resolver_verdicts_path are produced by the agent; resolver_script_path is
@@ -442,7 +631,7 @@ class Config:
     @property
     def diligence_signals_path(self) -> Path:
         return self.replication_dir / DILIGENCE_SIGNALS_FILE
-    
+
     @property
     def resource_usage_path(self) -> Path:
         return self.output_dir / RESOURCE_USAGE_FILE

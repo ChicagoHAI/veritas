@@ -28,6 +28,10 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
 # Select provider
 ./veritas replicate --repo ./my-project --provider codex
 
+# Per-bucket engines: [provider:]model per pipeline bucket
+./veritas replicate --repo ./my-project --model claude-opus-4-8 \
+    --verify-model openrouter:openai/gpt-5.5
+
 # Select input mode explicitly (default: auto-detected from inputs)
 ./veritas replicate --paper paper.pdf --mode paper-only  # generate code from paper, then run
 ./veritas replicate --repo ./my-project --mode repo-only # extract claims from README
@@ -82,9 +86,9 @@ git clone https://github.com/ChicagoHAI/veritas.git && cd veritas
   `partially_supported`, `contradicted`, or `not_mentioned`; the first three are
   each grounded in a verbatim quote from the source. `--check-citations-faithfulness main` (default)
   limits this to the paper's central attributed claims; `all` extends it to every
-  claim-bearing citation. A scope change re-runs the check (the producing scope
-  is recorded in `evaluation/.citation_check_meta.json`); outputs from before
-  this tracking are kept as-is. An independent audit pass writes its own verdicts to
+  claim-bearing citation. A scope or evaluate-engine change re-runs the check
+  (the producing settings are recorded in `evaluation/.citation_check_meta.json`);
+  outputs from before this tracking are kept as-is. An independent audit pass writes its own verdicts to
   `evaluation/citation_audit.json`; a deterministic reconciliation softens any flagged
   verdict toward the audit only when the audit is less severe (never escalates).
   No human-review step.
@@ -108,7 +112,7 @@ Veritas resolves the input mode at startup (auto-detected by default from which 
 
 ### Key modules (`src/veritas/core/`)
 
-- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`).
+- `runner.py` — orchestrator; provider invocation via `_invoke_provider` (single method using `subprocess.Popen`, stdin for the prompt, line-streamed JSONL transcript to disk, `threading.Timer` watchdog for wall-clock timeouts); JSON repair re-prompt logic; per-provider command/flag tables (`CLI_COMMANDS`, `TRANSCRIPT_FLAGS`, `PERMISSION_FLAGS`, `PROMPT_STDIN_ARGS`, `MODEL_FLAGS`, `PROVIDER_AUTH_VARS`).
 - `config.py` — `Config` dataclass with output-path properties; `VALID_PROVIDERS`, output-structure constants (`*_SUBDIR`, `*_FILE`), per-phase timeout fields (`analyze_timeout`, `replicate_timeout`, `verify_timeout`).
 - `paper_claims.py` — `parse_paper_claims_response()` reading the analyze-phase LLM output.
 - `verify.py` — `compute_replication_score()`: pure-function tier-weighted aggregation over a list of `ClaimVerdict`s, returning a `ReplicationScore` with per-tier breakdown, missing-verdict list, and edge-case flags.
@@ -133,7 +137,7 @@ All templates are Jinja2, rendered by `src/veritas/templates/prompt_generator.py
 
 ### Docker
 
-Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), Claude/Codex/Gemini CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--data`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
+Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veritas Python package (`uv sync --frozen`), the Claude/Codex/Gemini/opencode CLIs, and pandoc + LaTeX for PDF report generation. Runs as non-root `veritas` user (UID/GID configurable at build time). The `./veritas` bash wrapper (forwarding to `docker/run.sh`) handles host-side concerns: GPU auto-detection, macOS Keychain extraction for Claude credentials, `--platform linux/amd64` on Apple Silicon, path rewriting for `--paper`/`--repo`/`--data`/`--output`, and image pull-from-GHCR with local-build fallback. `docker/entrypoint.sh` sets `umask 000` so container-created files are manageable from the host regardless of UID mismatch.
 
 ## Gotchas
 
@@ -147,18 +151,18 @@ Multi-stage CUDA 12.5.1 build (`docker/Dockerfile`). The image bakes in the veri
 - **Windows Git Bash requires `winpty` for interactive subcommands** — mintty uses Windows pipes instead of Unix ptys, so `docker run -it` fails with "the input device is not a TTY". The top-level `./veritas` wrapper auto-re-execs under `winpty` when detected; if `winpty` is missing, `get_tty_flag` falls back to `-i`-only (scripted use works; interactive sessions like `./veritas shell` and `./veritas login` are degraded). Modern Git for Windows ships with `winpty` by default. Linux and macOS are unaffected.
 - **JSON responses from LLMs are unreliable.** `core/replication.py` has multi-strategy extraction (raw → markdown blocks → brace matching) plus escape repair in `_extract_json` / `_fix_json_escapes`. Both `paper_claims.py` and the verifier consumer in `runner.py` route through `_extract_json()`.
 - **GPU is auto-detected and Linux-only** (requires NVIDIA Container Toolkit).
-- **Two runtimes: docker (`./veritas`) and host (`./veritas-host`).** Docker is the default; the wrapper manages image lifecycle (pull from GHCR on first run, build locally if pull fails). Host mode is for environments without docker (HPC clusters); the user provides claude/codex/gemini CLI, python, and uv on PATH, and `veritas-host` does the workspace pre-staging that `docker/entrypoint.sh` does in docker mode (`templates/skills/` → `<output>/veritas-skills/`, `--repo` → `<output>/replication/codebase/`, EXIT-trap codebase.diff). Both runtimes share the Python pipeline; the two `/workspace/`-derived paths in templates (skills catalog, agent venv) are parameterized via `VERITAS_SKILLS_DIR` and `VERITAS_VENV_DIR` env vars with docker-mode defaults.
+- **Two runtimes: docker (`./veritas`) and host (`./veritas-host`).** Docker is the default; the wrapper manages image lifecycle (pull from GHCR on first run, build locally if pull fails). Host mode is for environments without docker (HPC clusters); the user provides the provider CLIs they use (claude/codex/gemini, opencode for openrouter), python, and uv on PATH, and `veritas-host` does the workspace pre-staging that `docker/entrypoint.sh` does in docker mode (`templates/skills/` → `<output>/veritas-skills/`, `--repo` → `<output>/replication/codebase/`, EXIT-trap codebase.diff). Both runtimes share the Python pipeline; the two `/workspace/`-derived paths in templates (skills catalog, agent venv) are parameterized via `VERITAS_SKILLS_DIR` and `VERITAS_VENV_DIR` env vars with docker-mode defaults.
 - **Image contains the whole runtime.** Changes to `src/`, `templates/`, `pyproject.toml`, or `uv.lock` require a rebuild (`./veritas build`) or an update from GHCR (`./veritas update`). The CI workflow rebuilds automatically on main-branch pushes.
 - **GPU two-step auto-detect.** `docker/run.sh::get_gpu_flags` checks both that the NVIDIA Container Toolkit is installed (`docker info | grep nvidia`) AND that a GPU is actually reachable (`docker run --gpus all ... nvidia-smi`). The second probe catches WSL and emulated environments where the toolkit is present but no GPU adapter is accessible. If the veritas image isn't built yet, the probe is skipped. `get_gpu_info` (docker) / `detect_gpu_info` (host) reuse this same reachability result to capture each device's actual model/VRAM (`nvidia-smi --query-gpu=name,memory.total`) as `VERITAS_GPU_INFO` — a semicolon-joined string, empty when no GPU is reachable — so `prompt_generator.py` can state real GPU presence and capacity as a fact in codegen/plan/replicate prompts, instead of leaving the agent to infer it or telling it only a bare yes/no. Issue #92 traced downscaling to codegen defaulting to CPU-only code blind to whether a GPU would even be present at replicate time.
-- **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_replicate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys, but the paper code run during replicate does. `./veritas setup` and `./veritas config` subcommands manage the file.
+- **Replication API keys live in `$PROJECT_ROOT/.env`** (chmod 600, gitignored). Passed into the container via `--env-file` on `cmd_replicate` / `cmd_shell` only. The wrapper publishes the var-name list as `VERITAS_ENV_FILE_KEYS`; `runner.py::_invoke_provider` strips those vars from the subprocess env by default, and only the `_replicate` call site opts in via `expose_api_keys=True`. So analyze/plan/codegen/assess/verify agents never see the keys (except the invoked provider's own auth vars, per the auth gotcha above), but the paper code run during replicate does. `./veritas setup` and `./veritas config` subcommands manage the file.
+- **Per-bucket engines.** Every LLM call site belongs to a bucket (`analyze | codegen | replicate | assess | verify | evaluate`); `Config.engine_for` resolves each bucket's `(provider, model)` from `--<bucket>-model` flags / `VERITAS_<BUCKET>_MODEL` vars with the global `--provider`/`--model` as fallback, and the resolved provider's native model env var (`ANTHROPIC_MODEL` / `GEMINI_MODEL`; codex has none) as the lowest precedence level — so a model picked that way still surfaces in the report provenance and the resume fingerprint. The `evaluate` bucket covers manager review, research, contextual evaluation, and the citation check/audit. New call sites must pass their `bucket=` to `_invoke_provider`. Engine changes invalidate only their dependent stages (a `--verify-model` change re-runs verify alone); the contextual-evaluation and citation outputs record their producing settings in sidecar files (`evaluation/.{contextual_evaluation,citation_check}_meta.json`) and re-run on an engine or scope change — outputs from before this tracking are kept as-is (delete them to re-run).
+- **Provider auth keys: host env or `.env`, scoped per invocation.** The wrapper forwards `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` (host shell wins; `.env`-only keys are loaded into the wrapper env, so they also satisfy the preflight credential check). Inside the pipeline, `_stripped_env` exempts only the invoked provider's own auth vars — one bucket's key never reaches another provider's subprocess (the replicate call site additionally keeps the `.env` keys for the paper code, but other providers' host-shell keys stay stripped there too). Consequence: with claude running a phase, an `ANTHROPIC_API_KEY` in `.env` reaches that claude subprocess and billing is expected to follow the key (unverified).
+- **`--provider openrouter` = opencode.** Requires `OPENROUTER_API_KEY` and an explicit model. Web-locked slugs (`openrouter/fusion`, `*:online`) trigger a leakage warning on every bucket whose output reaches the replication agent (`analyze`, `replicate`, `codegen` in paper-only mode, `evaluate` when the retry loop is on) and a separate one on `verify` (the judge could fetch the paper's published values and score against them). Host mode additionally needs `opencode` on PATH.
 
 ## Testing
 
-The Python test suite was removed during the flat-Docker refactor (issue #27). Current coverage consists of:
-
-- **`scripts/test_docker.sh`** — asserts the built image has functional claude/codex/gemini/pandoc/pdflatex/python/veritas and that the entrypoint banner prints. Run locally with `./scripts/test_docker.sh <image-tag>`; CI runs it automatically against the pushed image in `.github/workflows/docker-publish.yml`.
-
-Python unit tests for `defaults`/`settings`/`paths`/`providers`/`evidence`/`verify` will be re-introduced once the current redesign stabilizes.
+- **`uv run pytest tests/ -q`** — the pytest suite covers the pure-function layers: config/env resolution, engine specs and per-bucket resolution, provider argv assembly, env stripping, fingerprint invalidation, grading, manager/research parsing, citations (resolver, dispatch, report rendering), report provenance, and CLI flag wiring.
+- **`scripts/test_docker.sh`** — asserts the built image has functional claude/codex/gemini/opencode/pandoc/pdflatex/python/veritas and that the entrypoint banner prints. Run locally with `./scripts/test_docker.sh <image-tag>`; CI runs it automatically against the pushed image in `.github/workflows/docker-publish.yml`.
 
 ## Related Work
 

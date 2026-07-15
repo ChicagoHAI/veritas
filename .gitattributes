@@ -3,6 +3,10 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 entrypoint.sh text eol=lf
+# The extensionless bash wrappers run on Linux/HPC too; a CRLF blob would
+# break their shebang (bad interpreter: /bin/bash^M).
+veritas text eol=lf
+veritas-host text eol=lf
 
 # Templates rendered by Jinja2 — keep consistent
 *.md text eol=lf

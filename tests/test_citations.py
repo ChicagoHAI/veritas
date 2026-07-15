@@ -486,7 +486,7 @@ def _citation_runner(tmp_path):
 def test_check_citations_stages_script_and_dispatches(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None, expose_api_keys=False):
         cfg.citation_check_path.write_text(
             '{"summary": {"total": 1, "verified": 1, "metadata_mismatch": 0, '
             '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0}, '
@@ -520,7 +520,7 @@ def test_check_citations_reruns_over_malformed_output(tmp_path):
     runner, cfg = _citation_runner(tmp_path)
     cfg.citation_check_path.write_text("{truncated", encoding="utf-8")
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_check_path.write_text('{"summary": {"total": 1}, "flagged": []}', encoding="utf-8")
         return True
 
@@ -536,7 +536,7 @@ def test_check_citations_meta_only_stamped_for_valid_output(tmp_path):
     # produced; the next invocation re-runs instead of resuming over it.
     runner, cfg = _citation_runner(tmp_path)
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_check_path.write_text("[1, 2", encoding="utf-8")
         return True
 
@@ -552,7 +552,7 @@ def test_check_citations_reruns_on_corrupt_meta(tmp_path):
     cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
     cfg.citation_check_meta_path.write_text("{truncated", encoding="utf-8")
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_check_path.write_text('{"summary": {"total": 0}, "flagged": []}', encoding="utf-8")
         return True
 
@@ -583,7 +583,7 @@ def test_check_citations_skip_path_still_runs_missing_audit(tmp_path):
                      "matched_record": None, "evidence": []}],
     }), encoding="utf-8")
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
 
@@ -609,7 +609,7 @@ def test_check_citations_reruns_on_scope_change(tmp_path):
     cfg.citation_check_meta_path.write_text('{"faithfulness_scope": "all"}', encoding="utf-8")
     cfg.citation_audit_path.write_text('{"items": []}', encoding="utf-8")  # stale audit
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_check_path.write_text(
             '{"summary": {"total": 1, "verified": 1}, "flagged": []}', encoding="utf-8"
         )
@@ -652,7 +652,7 @@ def test_check_citations_tolerates_non_object_json_output(tmp_path):
     # Valid JSON that is not an object (e.g. `[]`) must not raise into run().
     runner, cfg = _citation_runner(tmp_path)
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_check_path.write_text("[]", encoding="utf-8")
         return True
 
@@ -671,7 +671,7 @@ def test_audit_reruns_over_malformed_audit_output(tmp_path):
     }), encoding="utf-8")
     cfg.citation_audit_path.write_text("not json at all", encoding="utf-8")
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None):
         cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
 
@@ -1256,7 +1256,7 @@ def test_check_citations_passes_scope_to_prompt(tmp_path):
         seen["scope"] = faithfulness_scope
         return "PROMPT"
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None, expose_api_keys=False):
         cfg.citation_check_path.write_text(
             '{"summary": {"total": 0, "verified": 0, "metadata_mismatch": 0, '
             '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0, '
@@ -1280,7 +1280,7 @@ def test_audit_citations_runs_and_writes(tmp_path):
         '{"summary": {}, "flagged": [{"key": "a", "status": "likely_fabricated"}], '
         '"faithfulness": []}', encoding="utf-8")
 
-    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None, expose_api_keys=False):
         cfg.citation_audit_path.write_text(
             '{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
@@ -1306,7 +1306,7 @@ def test_audit_citations_audits_contradicted_faithfulness(tmp_path):
     cfg.citation_check_path.write_text(
         '{"summary": {}, "flagged": [], "faithfulness": '
         '[{"key": "c", "verdict": "contradicted"}]}', encoding="utf-8")
-    def fake_invoke(prompt, working_dir, log_path, timeout=None, expose_api_keys=False):
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None, expose_api_keys=False):
         cfg.citation_audit_path.write_text('{"audited_count": 1, "items": []}', encoding="utf-8")
         return True
     with patch.object(ReplicationRunner, "_invoke_provider", side_effect=fake_invoke) as m:
@@ -1480,3 +1480,282 @@ def test_check_citations_existing_runs_check_and_report(tmp_path):
     assert calls["check"] == 1 and calls["report"] == 1
     assert result.success
     assert result.report_path == out / "report" / "r.md"
+
+
+# ---------------------------------------------------------------------------
+# --- settings-aware resume (engine/scope sidecar) ---
+# ---------------------------------------------------------------------------
+
+_CHECK_OUTPUT = (
+    '{"summary": {"total": 0, "verified": 0, "metadata_mismatch": 0, '
+    '"unresolved": 0, "likely_fabricated": 0, "inconclusive": 0}, '
+    '"flagged": [], "checked_support": false, "notes": "n"}'
+)
+
+
+def test_check_citations_skips_when_settings_match(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    cfg.citation_check_meta_path.write_text(
+        json.dumps({"engine": "claude", "faithfulness_scope": "main"}),
+        encoding="utf-8",
+    )
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()
+
+
+def test_check_citations_skips_legacy_output_without_meta(tmp_path):
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    with patch.object(ReplicationRunner, "_invoke_provider") as m:
+        runner._check_citations()
+    m.assert_not_called()
+
+
+def test_check_citations_reruns_on_settings_change(tmp_path):
+    # A scope (or engine) change re-runs the check instead of silently
+    # reusing the old output, and drops the now-stale audit.
+    runner, cfg = _citation_runner(tmp_path)
+    cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+    cfg.citation_check_meta_path.write_text(
+        json.dumps({"engine": "claude", "faithfulness_scope": "all"}),
+        encoding="utf-8",
+    )
+    cfg.citation_audit_path.write_text('{"items": []}', encoding="utf-8")
+
+    def fake_invoke(prompt, working_dir, log_path, timeout=None, bucket=None,
+                    expose_api_keys=False):
+        cfg.citation_check_path.write_text(_CHECK_OUTPUT, encoding="utf-8")
+        return True
+
+    with patch.object(ReplicationRunner, "_invoke_provider",
+                      side_effect=fake_invoke) as m:
+        runner._check_citations()
+    assert m.call_count == 1
+    assert not cfg.citation_audit_path.exists()
+    meta = json.loads(cfg.citation_check_meta_path.read_text(encoding="utf-8"))
+    assert meta == {"engine": "claude", "faithfulness_scope": "main"}
+
+
+def test_audit_softening_is_claim_specific():
+    # Two distinct claims cite the same reference key; an audit item that
+    # names one claim must soften only that row.
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness", "claim": "claim one text",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    section = gen._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
+
+
+def test_audit_without_claim_field_still_softens():
+    # Audits from before claim tracking carry no claim field; their verdict
+    # applies by (key, kind) as before.
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "solo2024", "claim": "only claim",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "solo2024", "kind": "faithfulness",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    section = gen._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_claim_match_tolerates_whitespace_and_case_drift():
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "drift2024", "claim": "The method improves accuracy",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "drift2024", "kind": "faithfulness",
+             "claim": "  the method  improves\naccuracy ",
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_audit_non_string_claim_does_not_crash():
+    from veritas.core.report_generator import ReportGenerator
+
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "odd2024", "claim": ["not", "a", "string"],
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "odd2024", "kind": "faithfulness", "claim": 42,
+             "audit_verdict": "supported", "note": "holds"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "Citation Check" in section
+
+
+def test_audit_softening_survives_claim_paraphrase_when_pairing_unambiguous():
+    # The audit's copy of the claim is re-emitted free text by an LLM; when
+    # both the check and the audit carry exactly one faithfulness item for
+    # the key, the pairing is unambiguous and paraphrase drift must not
+    # silently drop the softening.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 1, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "para2024", "claim": "The method improves accuracy by 12%",
+             "verdict": "contradicted", "quote": "q", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "para2024", "kind": "faithfulness",
+             "claim": "the approach yields a 12 percent accuracy gain",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert "audit softened from contradicted" in section
+
+
+def test_unmatched_audit_items_are_reported_not_silently_dropped():
+    # Two claims share the key, so a paraphrased audit claim cannot be
+    # paired safely; the verdict is ignored, but the report must say so
+    # instead of silently under-reporting the audit.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 2,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "same2024", "claim": "claim one text",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+            {"key": "same2024", "claim": "claim two text",
+             "verdict": "contradicted", "quote": "q2", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "same2024", "kind": "faithfulness",
+             "claim": "a paraphrase matching neither row",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    gen = ReportGenerator()
+    view = gen._citation_view(citation, audit)
+    assert view["unmatched_audit"] == 1
+    section = gen._render_citation_check(citation, audit)
+    assert "could not be matched" in section
+
+
+def test_generate_degrades_on_malformed_replication_log(tmp_path):
+    # The replication log is agent-written; an entry missing a required
+    # field must cost the evidence section, not the whole re-render.
+    run = tmp_path / "run"
+    (run / "replication").mkdir(parents=True)
+    (run / "replication" / "replication_log.json").write_text(
+        '{"step_outcomes": [{"step_id": 1}]}', encoding="utf-8")
+    gen = ReportGenerator()
+    md_path, _ = gen.generate(run, generate_pdf=False)
+    assert md_path.exists()
+
+
+def test_audit_pairing_ignores_rows_the_audit_never_rechecks(tmp_path):
+    # The audit re-checks only contradicted/partially_supported rows, so a
+    # supported row sharing the key does not make the pairing ambiguous.
+    citation = {
+        "summary": {"total": 1, "verified": 1, "metadata_mismatch": 0,
+                    "unresolved": 0, "likely_fabricated": 0, "inconclusive": 0,
+                    "faithfulness": {"checked": 2, "contradicted": 1,
+                                     "partially_supported": 0}},
+        "flagged": [],
+        "faithfulness": [
+            {"key": "mix2024", "claim": "the supported claim",
+             "verdict": "supported", "quote": "q0", "source_status": "retrieved"},
+            {"key": "mix2024", "claim": "The method improves accuracy by 12%",
+             "verdict": "contradicted", "quote": "q1", "source_status": "retrieved"},
+        ],
+    }
+    audit = {
+        "audited_count": 1,
+        "items": [
+            {"key": "mix2024", "kind": "faithfulness",
+             "claim": "the approach yields a 12 percent accuracy gain",
+             "audit_verdict": "supported", "note": "holds up"},
+        ],
+    }
+    section = ReportGenerator()._render_citation_check(citation, audit)
+    assert section.count("audit softened from contradicted") == 1
+
+
+def test_parse_crossref_tolerates_flat_date_parts():
+    # date-parts is normally [[y, m, d]]; a flat [y] must cost only that
+    # record's year, not raise out of the resolver.
+    from veritas.core.citations import parse_crossref
+
+    payload = {"message": {"items": [{
+        "title": ["Some Paper"], "author": [],
+        "issued": {"date-parts": [2024]},
+        "DOI": "10.1/x", "URL": "", "container-title": [],
+    }]}}
+    recs = parse_crossref(payload)
+    assert recs[0].year is None

@@ -11,9 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from veritas.core.config import Config, OUTPUT_SUBDIRS
+from veritas.core.config import BUCKETS, Config, OUTPUT_SUBDIRS, is_web_locked_slug
 from veritas.core.models.resource_estimate import ResourceEstimate
-from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
+from veritas.core.pipeline_state import (
+    PipelineState,
+    STATUS_INSUFFICIENT_SPEC,
+    state_file_path,
+)
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
@@ -74,12 +78,15 @@ CLI_COMMANDS: Dict[str, Tuple[str, ...]] = {
     "claude": ("claude", "-p"),
     "codex":  ("codex", "exec"),
     "gemini": ("gemini",),
+    # opencode `run` is the non-interactive mode.
+    "openrouter": ("opencode", "run"),
 }
 
 TRANSCRIPT_FLAGS: Dict[str, Tuple[str, ...]] = {
     "claude": ("--verbose", "--output-format", "stream-json"),
     "codex":  ("--json",),
     "gemini": ("--output-format", "stream-json"),
+    "openrouter": ("--format", "json"),
 }
 
 PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
@@ -93,6 +100,10 @@ PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
     "codex":  ("--dangerously-bypass-approvals-and-sandbox",
                "--skip-git-repo-check"),
     "gemini": ("--yolo", "--skip-trust"),
+    # opencode: --auto approves tool use not explicitly denied — headless runs
+    # must never block on a permission prompt. Same trust as the other
+    # providers' bypass flags; the container is the isolation boundary.
+    "openrouter": ("--auto",),
 }
 
 # Trailing positional args appended after all flags. codex exec only reads
@@ -102,7 +113,132 @@ PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
     "claude": (),
     "codex":  ("-",),
     "gemini": (),
+    "openrouter": (),
 }
+
+# Flag each provider CLI uses to pin a model. Appended only when the
+# resolved engine names a model; otherwise the CLI's own default applies.
+# opencode addresses models as `openrouter/<author>/<slug>`, so the model
+# value gets that prefix in build_provider_command.
+MODEL_FLAGS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("--model",),
+    "codex":  ("-m",),
+    "gemini": ("-m",),
+    "openrouter": ("-m",),
+}
+
+# Auth vars each provider CLI reads. Each invocation's environment exempts
+# only the invoked provider's own vars from .env key-stripping, so an API key
+# placed in .env reaches its provider in every phase while other providers'
+# subprocesses never see it. Consequence when claude runs a phase: an
+# ANTHROPIC_API_KEY present in .env reaches that claude subprocess; billing is
+# expected to follow the key.
+PROVIDER_AUTH_VARS: Dict[str, Tuple[str, ...]] = {
+    "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
+    "codex": ("OPENAI_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY",),
+}
+
+
+def build_provider_command(
+    cli: str, provider: str, model: Optional[str]
+) -> List[str]:
+    """Assemble the provider argv: base command, transcript and permission
+    flags, model flag (when a model is resolved), then prompt-stdin args."""
+    cmd: List[str] = [
+        cli,
+        *CLI_COMMANDS[provider][1:],
+        *TRANSCRIPT_FLAGS[provider],
+        *PERMISSION_FLAGS[provider],
+    ]
+    if model is not None:
+        value = f"openrouter/{model}" if provider == "openrouter" else model
+        cmd.extend([*MODEL_FLAGS[provider], value])
+    cmd.extend(PROMPT_STDIN_ARGS[provider])
+    return cmd
+
+
+def build_config_fingerprint(config: Config) -> Dict[str, Any]:
+    """Config fields that affect output content.
+
+    Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
+    excluded so changing them between runs doesn't trigger needless re-runs.
+
+    The resolved engine of every bucket is always included; comparison
+    against state files recorded before engine tracking is handled by
+    ``_is_spurious_engine_change``.
+    """
+    fingerprint: Dict[str, Any] = {
+        'provider': config.provider,
+        'mode': config.mode,
+        'claims_path': str(config.claims_path) if config.claims_path else None,
+    }
+    for bucket, engine in config.resolved_engines().items():
+        # codegen only executes in paper-only mode; in the other modes its
+        # engine cannot affect any output, so recording it would let an inert
+        # knob invalidate completed stages. detect_config_changes ignores
+        # recorded-only fields, so states written before this scoping compare
+        # clean.
+        if bucket == "codegen" and config.mode != "paper-only":
+            continue
+        fingerprint[f'engine_{bucket}'] = engine
+    return fingerprint
+
+
+def _coerce_manager_target(target: str) -> str:
+    """Map a manager re-run target onto a phase the retry loop can run.
+
+    The loop body re-runs plan and replicate only; regenerating code is not
+    reachable from inside the loop, so a codegen target downgrades to plan
+    (the closest phase whose re-run the loop supports) and the codegen stage
+    and its sentinel stay intact."""
+    return "plan" if target == "codegen" else target
+
+
+def _read_engine_meta(meta_path: Path) -> Optional[Dict[str, Any]]:
+    """Sidecar describing the settings that produced an evaluate-bucket
+    output. None when absent or unreadable (outputs from before this
+    tracking, or a corrupt sidecar)."""
+    if not meta_path.exists():
+        return None
+    try:
+        data = json.loads(meta_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_engine_meta(meta_path: Path, meta: Dict[str, Any]) -> None:
+    """Best-effort sidecar write; the phases it serves are advisory and must
+    never fail over bookkeeping. A failed write is loud because an output
+    without a sidecar is treated as pre-tracking and never re-run on a
+    settings change."""
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2), encoding='utf-8')
+    except OSError as e:
+        print(f"  Warning: could not record settings sidecar {meta_path} ({e})")
+
+
+def _is_spurious_engine_change(
+    field: str, recorded: Dict[str, Any], current: Dict[str, Any]
+) -> bool:
+    """True when an engine field only appears changed because the recorded
+    run predates engine tracking.
+
+    A recorded config with no ``engine_*`` keys describes a run whose every
+    bucket resolved to the recorded global provider with no model pin, so
+    the comparison baseline for each engine is that provider string rather
+    than "missing". Without this, the first run that sets any model knob
+    against an older output dir would invalidate every stage instead of
+    only the stages whose engine actually changed.
+    """
+    if not field.startswith('engine_'):
+        return False
+    if any(key.startswith('engine_') for key in recorded):
+        return False
+    return current.get(field) == (recorded.get('provider') or '').lower()
+
 
 # Per-million-token pricing for known models (input_price, output_price).
 # Unknown models produce None for estimated_cost_usd_approximate; the
@@ -117,22 +253,37 @@ KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
     "gemini-2.0-flash":  (0.10,   0.40),
 }
 
-
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
-# pipeline state so they re-run. Every output-affecting field currently
-# invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. a knob that only affects the verify phase).
+# pipeline state so they re-run. Input and provider/mode fields invalidate the
+# full downstream pipeline; engine_* fields are scoped to the stages their
+# bucket feeds (a verify-engine change re-runs verify alone).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    # Config
-    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'data_path':     ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    # Config. The provider row invalidates nothing itself: a provider change
+    # always shows up in the per-bucket engine fields below, which scope the
+    # invalidation to the stages each bucket feeds.
+    'provider':      (),
+    'mode':          ('analyze', 'codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    # Per-bucket engines (resolved provider:model). Scoped: a verify-engine
+    # change re-adjudicates an existing run without re-replicating.
+    # engine_analyze skips codegen (codegen consumes the paper, never the
+    # claims) and covers resource_estimate (its LLM pass consumes the plan).
+    # engine_evaluate maps to no state-tracked stage: the
+    # contextual-evaluation and citation outputs track their producing
+    # settings in sidecar files and re-run on a settings change themselves;
+    # manager/research engine changes apply to future loop iterations only.
+    'engine_analyze':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'engine_codegen':   ('codegen', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'engine_replicate': ('replicate', 'assess_fixes', 'verify'),
+    'engine_assess':    ('assess_fixes',),
+    'engine_verify':    ('verify',),
+    'engine_evaluate':  (),
 }
 
 
@@ -167,14 +318,17 @@ class ReplicationRunner:
         are skipped on re-invocation. Pass ``--restart`` at the CLI level to discard state.
         """
         try:
+            self._check_provider_auth(buckets=self._active_buckets(dry_run))
             self._setup_output_dir()
             state = PipelineState(self.config.output_dir)
 
             if state.state.get('inputs') is None:
                 state.record_inputs(self.config.repo_path, self.config.paper_path, data_path=self.config.data_path)
-                state.record_config(self._config_fingerprint())
+                state.record_config(build_config_fingerprint(self.config))
             else:
                 self._reconcile_with_prior_run(state)
+
+            self._warn_web_locked_engines()
 
             # analyze (claims extraction only)
             if state.is_stage_completed('analyze'):
@@ -202,14 +356,16 @@ class ReplicationRunner:
                 if state.is_stage_completed('codegen'):
                     print("[OK] codegen: skipped (already completed)")
                 else:
+                    self._clear_stale_codegen_sentinel(state)
                     state.start_stage('codegen')
                     try:
                         self._generate_code()
                         state.complete_stage('codegen', success=True)
-                        # Invalidate any plan built before code existed (e.g. from a
-                        # prior --dry-run on the same output dir) so it regenerates
-                        # against the generated codebase.
-                        state.invalidate_stages(['plan'])
+                        # Invalidate any plan and resource estimate built before
+                        # code existed (e.g. from a prior --dry-run on the same
+                        # output dir) so they regenerate against the generated
+                        # codebase.
+                        state.invalidate_stages(['plan', 'resource_estimate'])
                     except Exception:
                         state.complete_stage('codegen', success=False)
                         raise
@@ -294,6 +450,7 @@ class ReplicationRunner:
                 print("[OK] verify: skipped (already completed)")
                 verdicts = self._load_verify_artifacts(claims)
             else:
+                self._clear_stale_verify_artifacts(state)
                 if state.get_stage_status('verify') != 'in_progress':
                     state.start_stage('verify')
                     if already_done:
@@ -314,7 +471,10 @@ class ReplicationRunner:
             # Advisory only: does not feed the Replication Score. Idempotent via
             # a file-exists check so it doesn't re-run on resume.
             if self.config.run_evaluation:
-                self._evaluate()
+                try:
+                    self._evaluate()
+                except Exception as e:
+                    print(f"  Warning: contextual evaluation failed (continuing): {e}")
 
             # Optional, opt-in citation-check submodule (reference verification).
             # Advisory only: does not feed the Replication Score. Idempotent.
@@ -475,6 +635,7 @@ class ReplicationRunner:
             working_dir=working_dir,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
+            bucket="analyze",
         )
 
         if not success:
@@ -507,6 +668,7 @@ class ReplicationRunner:
                 parser=parse_paper_claims_response,
                 timeout=self.config.analyze_timeout,
                 working_dir=working_dir,
+                bucket="analyze",
             )
 
         if claims is None:
@@ -576,6 +738,7 @@ class ReplicationRunner:
             working_dir=codebase_dir,
             log_path=log_path,
             timeout=self.config.codegen_timeout,
+            bucket="codegen",
         )
 
         if not success:
@@ -596,6 +759,14 @@ class ReplicationRunner:
 
         sentinel.parent.mkdir(parents=True, exist_ok=True)
         sentinel.touch()
+
+        # Snapshot the pristine generated tree so a later replicate re-run in
+        # paper-only mode can start from unpatched code (repo-backed modes
+        # re-stage from the repo instead).
+        snapshot = self.config.veritas_state_dir / "codegen_snapshot"
+        if snapshot.exists():
+            shutil.rmtree(snapshot)
+        shutil.copytree(codebase_dir, snapshot, symlinks=True)
 
     def _generate_replication_plan(
         self,
@@ -633,6 +804,7 @@ class ReplicationRunner:
             working_dir=effective_repo_path,
             log_path=log_path,
             timeout=self.config.analyze_timeout,
+            bucket="analyze",
         )
 
         if not success:
@@ -661,6 +833,7 @@ class ReplicationRunner:
                 parser=parse_replication_plan_response,
                 timeout=self.config.analyze_timeout,
                 working_dir=effective_repo_path,
+                bucket="analyze",
             )
 
         if plan is None:
@@ -706,6 +879,7 @@ class ReplicationRunner:
         parser,
         timeout: Optional[int],
         working_dir: Path,
+        bucket: str,
     ):
         """Re-prompt the provider to fix invalid JSON output.
 
@@ -733,6 +907,7 @@ class ReplicationRunner:
             working_dir=working_dir,
             log_path=log_path,
             timeout=timeout,
+            bucket=bucket,
             append=True,
         )
 
@@ -807,6 +982,7 @@ class ReplicationRunner:
             working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.replicate_timeout,
+            bucket="replicate",
             expose_api_keys=True,
         )
 
@@ -871,6 +1047,7 @@ class ReplicationRunner:
                     evidence, replication_plan
                 )
         else:
+            self._refresh_codebase_if_stale(state)
             state.start_stage('replicate')
             try:
                 evidence = self._replicate(replication_plan)
@@ -965,7 +1142,13 @@ class ReplicationRunner:
                 return evidence, replication_plan
 
             # --- Re-run: archive, invalidate, inject guidance, replicate ---
-            target = verdict.target_phase or "replicate"
+            requested_target = verdict.target_phase or "replicate"
+            target = _coerce_manager_target(requested_target)
+            if target != requested_target:
+                print(
+                    f"  Manager targeted '{requested_target}'; the retry loop "
+                    f"re-runs plan+replicate only — using '{target}'."
+                )
             guidance = ManagerGuidance.from_verdict(verdict, iteration=iteration + 1)
 
             # Phase 3: if the manager requested methodology/resource research,
@@ -1032,12 +1215,86 @@ class ReplicationRunner:
         ordering so a re-run cleanly discards stale downstream state (assess /
         verify) and they recompute against the new attempt.
         """
-        order = ['analyze', 'plan', 'replicate', 'assess_fixes', 'verify']
+        order = ['analyze', 'plan', 'resource_estimate',
+                 'replicate', 'assess_fixes', 'verify']
         if target_phase not in order:
             target_phase = 'replicate'
         idx = order.index(target_phase)
         to_invalidate = order[idx:]
         state.invalidate_stages(to_invalidate)
+
+    def _refresh_codebase_if_stale(self, state: PipelineState) -> None:
+        """Re-stage ``replication/codebase`` from its pristine source when a
+        prior replicate attempt was discarded (no stage record, but attempt
+        artifacts show one ran).
+
+        The source is the repo in repo-backed modes and the codegen
+        snapshot in paper-only mode. Without this, a replicate re-run
+        (e.g. after an engine change) would start from the previous
+        attempt's patched tree. Fresh runs skip — their staged tree is
+        already pristine, and re-copying it would only burn time. An
+        in_progress record is a partial attempt and is left in place. Not
+        reached inside the manager loop, which deliberately continues on
+        the patched tree.
+        """
+        if state.get_stage_status('replicate') is not None:
+            return
+        prior_attempt = (
+            self.config.replication_transcript_path.exists()
+            or (self.config.replication_dir / "codebase.diff").exists()
+        )
+        if not prior_attempt:
+            return
+        if self.config.mode == "paper-only":
+            source = self.config.veritas_state_dir / "codegen_snapshot"
+            if not source.exists():
+                return
+        elif self.config.has_repo:
+            source = self.config.repo_path
+        else:
+            return
+        codebase_dir = self.config.replication_dir / "codebase"
+        if not codebase_dir.exists() or not any(codebase_dir.iterdir()):
+            return
+        resolved = codebase_dir.resolve()
+        output_root = self.config.output_dir.resolve()
+        if output_root not in resolved.parents:
+            raise RuntimeError(
+                f"refusing to reset {resolved}: not under the output tree {output_root}"
+            )
+        print("  Re-staging replication/codebase from its pristine source for a fresh attempt")
+        shutil.rmtree(codebase_dir)
+        shutil.copytree(source, codebase_dir, symlinks=True)
+
+    def _clear_stale_verify_artifacts(self, state: PipelineState) -> None:
+        """Remove leftover per-claim verdict files when verify has no stage
+        record (fresh dir, --restart, or invalidation).
+
+        Verify resumes per claim on verdict-file existence, so files from a
+        discarded attempt would otherwise be silently reused and attributed
+        to the current engine. Runs at verify entry — never at reconcile
+        time — so a dry run or an aborted resume cannot destroy a completed
+        run's verdicts and score. A present record (in_progress) means a
+        legitimate partial resume: files are kept.
+        """
+        if state.get_stage_status('verify') is not None:
+            return
+        if not self.config.verify_dir.exists():
+            return
+        for verdict_file in self.config.verify_dir.glob('*.json'):
+            verdict_file.unlink(missing_ok=True)
+
+    def _clear_stale_codegen_sentinel(self, state: PipelineState) -> None:
+        """Remove the codegen sentinel when codegen has no stage record
+        (fresh dir, --restart, or invalidation).
+
+        The sentinel is codegen's resume primitive; one left over from a
+        discarded attempt would make ``_generate_code`` skip regeneration.
+        A present record (in_progress) means a crash between the sentinel
+        write and the stage completion: the sentinel stays authoritative.
+        """
+        if state.get_stage_status('codegen') is None:
+            self.config.codegen_complete_sentinel_path.unlink(missing_ok=True)
 
     def _workflow_replicate_record(
         self,
@@ -1184,6 +1441,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=self.config.manager_review_transcript_path,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success:
             print("  Warning: manager review pass did not succeed; defaulting to ACCEPT")
@@ -1342,6 +1600,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=transcript,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success or not out_path.exists():
             print(f"    research [{request.kind}]: no finding produced")
@@ -1416,6 +1675,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=transcript,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if success and out_path.exists():
             try:
@@ -1506,6 +1766,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=log_path,
             timeout=None,
+            bucket="assess",
         )
 
         if not success:
@@ -1543,12 +1804,28 @@ class ReplicationRunner:
 
         This phase is advisory: its output does NOT alter the Replication Score.
         It runs only when ``config.run_evaluation`` is set, and is idempotent —
-        if the output already exists it is skipped (resume-safe).
+        an existing output produced with the same evaluate engine is skipped
+        (resume-safe); an engine change re-runs it. Outputs without a sidecar
+        predate engine tracking and are kept as-is.
         """
         output_path = self.config.evaluation_path
+        meta_path = self.config.evaluation_meta_path
+        current_meta = {"engine": self.config.resolved_engines()["evaluate"]}
         if output_path.exists() and output_path.read_text(encoding='utf-8').strip():
-            print("[OK] evaluation: skipped (already produced)")
-            return
+            stored_meta = _read_engine_meta(meta_path)
+            if stored_meta == current_meta:
+                print("[OK] evaluation: skipped (already produced with this engine)")
+                return
+            if stored_meta is None:
+                print(
+                    f"[OK] evaluation: skipped (already produced; predates "
+                    f"engine tracking — delete {output_path} to re-run)"
+                )
+                return
+            print(
+                f"  Re-running evaluation: evaluate engine changed "
+                f"({stored_meta.get('engine')} -> {current_meta['engine']})"
+            )
 
         print("Running contextual-evaluation phase (external checker)...")
         self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
@@ -1568,6 +1845,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=self.config.evaluation_transcript_path,
             timeout=self.config.evaluate_timeout,
+            bucket="evaluate",
         )
         if not success:
             print(f"  Warning: evaluation phase did not succeed (transcript: {self.config.evaluation_transcript_path})")
@@ -1575,6 +1853,7 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: evaluation agent did not write {output_path}")
             return
+        _write_engine_meta(meta_path, current_meta)
         # Validate it parses; leave the agent's file in place regardless.
         try:
             data = json.loads(_extract_json(output_path.read_text(encoding='utf-8')))
@@ -1609,31 +1888,40 @@ class ReplicationRunner:
         list, runs the staged deterministic resolver (authoritative for
         existence/metadata), and escalates only unresolved references. Advisory:
         the output at ``evaluation/citation_check.json`` does NOT alter the
-        Replication Score. Idempotent (skips when already produced with the
-        current faithfulness scope) and never raises into the pipeline.
+        Replication Score. Idempotent for the same settings; a change of the
+        faithfulness scope or the evaluate engine re-runs it (and drops the
+        stale audit). Outputs without a sidecar predate settings tracking and
+        are kept as-is. Never raises into the pipeline.
 
         A self-contained method that mirrors the research sub-agent dispatch.
         """
         output_path = self.config.citation_check_path
-        if self._load_json_object(output_path) is not None:
-            if self._citation_check_scope_matches():
-                print("[OK] citation-check: skipped (already produced)")
+        meta_path = self.config.citation_check_meta_path
+        current_meta = {
+            "engine": self.config.resolved_engines()["evaluate"],
+            "faithfulness_scope": self.config.faithfulness_scope,
+        }
+        existing = self._load_json_object(output_path)
+        if existing is not None:
+            if self._citation_check_settings_match(current_meta):
+                print("[OK] citation-check: skipped (already produced with these settings)")
                 # A missing or previously failed audit still gets its pass
                 # (idempotent: no-op when the audit exists or nothing needs
                 # auditing).
-                self._audit_citations()
+                self._audit_citations(existing)
                 return
             print(
-                "  citation-check: faithfulness scope changed "
-                f"(now '{self.config.faithfulness_scope}'); re-running"
+                f"  citation-check: settings changed (now scope "
+                f"'{self.config.faithfulness_scope}', engine "
+                f"'{current_meta['engine']}'); re-running"
             )
-            # Discard the stale outputs before re-running: provider success is
+            # Discard the stale trio before re-running: provider success is
             # only the subprocess exit code, so a re-run that exits cleanly
             # without writing must not leave the old output to be stamped with
-            # the new scope. The audit re-checks the check's findings, so it
-            # is stale too.
+            # the new settings. The audit re-checks the check's findings, so
+            # it is stale too.
             output_path.unlink(missing_ok=True)
-            self.config.citation_check_meta_path.unlink(missing_ok=True)
+            meta_path.unlink(missing_ok=True)
             self.config.citation_audit_path.unlink(missing_ok=True)
 
         if not self.config.has_paper:  # defensive; config validation already enforces this
@@ -1658,6 +1946,7 @@ class ReplicationRunner:
                 working_dir=self.config.output_dir,
                 log_path=self.config.citation_check_transcript_path,
                 timeout=self.config.citation_timeout,
+                bucket="evaluate",
             )
         except Exception as e:
             print(f"  Warning: citation-check could not run ({e}); skipped")
@@ -1668,6 +1957,12 @@ class ReplicationRunner:
         if not output_path.exists():
             print(f"  Warning: citation-check agent did not write {output_path}")
             return
+        # Any audit on disk now refers to a superseded check output (covers
+        # re-runs that entered through the output-absent path, where the
+        # settings gate never removed an orphaned audit). Removed before the
+        # meta stamp so an interruption between the two re-audits on resume
+        # instead of pairing the old audit with the new output.
+        self.config.citation_audit_path.unlink(missing_ok=True)
         data = self._load_json_object(output_path)
         if data is None:
             # Not stamped with a meta sidecar: the resume gate treats unusable
@@ -1678,13 +1973,7 @@ class ReplicationRunner:
                 "valid JSON object; the check will re-run on the next invocation"
             )
             return
-        try:
-            self.config.citation_check_meta_path.write_text(
-                json.dumps({"faithfulness_scope": self.config.faithfulness_scope}),
-                encoding="utf-8",
-            )
-        except OSError as e:
-            print(f"  Warning: could not record citation-check settings ({e})")
+        _write_engine_meta(meta_path, current_meta)
         s = data.get("summary")
         s = s if isinstance(s, dict) else {}
         f = s.get("faithfulness")
@@ -1720,21 +2009,25 @@ class ReplicationRunner:
             return None
         return data if isinstance(data, dict) else None
 
-    def _citation_check_scope_matches(self) -> bool:
+    def _citation_check_settings_match(self, current_meta: Dict[str, Any]) -> bool:
         """True if the existing citation-check output was produced with the
-        current faithfulness scope. Only a missing meta sidecar (an output from
-        before scope tracking) is kept as-is; a sidecar that exists but cannot
-        be read or parsed is damaged tracking data, so the check re-runs rather
-        than trusting output of unknown scope."""
+        current settings (faithfulness scope and evaluate engine).
+
+        A missing sidecar (an output from before settings tracking) counts as
+        matching, so legacy outputs are kept as-is; a sidecar that exists but
+        cannot be read or parsed is damaged tracking data, so the check
+        re-runs rather than trusting output of unknown settings. Lenient per
+        field: a sidecar that predates a field counts as matching it."""
         meta_path = self.config.citation_check_meta_path
         if not meta_path.exists():
             return True
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
+        meta = _read_engine_meta(meta_path)
+        if meta is None:
             return False
-        recorded = meta.get("faithfulness_scope") if isinstance(meta, dict) else None
-        return recorded == self.config.faithfulness_scope
+        return all(
+            meta.get(key) is None or meta.get(key) == value
+            for key, value in current_meta.items()
+        )
 
     @staticmethod
     def _has_auditable_findings(check_data: dict) -> bool:
@@ -1785,6 +2078,7 @@ class ReplicationRunner:
                 working_dir=self.config.output_dir,
                 log_path=self.config.citation_audit_transcript_path,
                 timeout=self.config.citation_timeout,
+                bucket="evaluate",
             )
         except Exception as e:
             print(f"  Warning: citation-audit could not run ({e}); skipped")
@@ -1795,12 +2089,13 @@ class ReplicationRunner:
         if not audit_path.exists():
             print(f"  Warning: citation-audit agent did not write {audit_path}")
             return
-        try:
-            data = json.loads(_extract_json(audit_path.read_text(encoding="utf-8")))
-            n = len(data.get("items") or []) if isinstance(data, dict) else 0
-            print(f"  Citation audit written; {n} item(s) re-checked")
-        except (ValueError, json.JSONDecodeError) as e:
-            print(f"  Warning: citation-audit output is not valid JSON ({e}); left as-is")
+        data = self._load_json_object(audit_path)
+        if data is None:
+            # The resume gate treats this as not-produced; say so rather
+            # than reporting a written audit.
+            print("  Warning: citation-audit output is not a valid JSON object; the audit will re-run on the next invocation")
+        else:
+            print(f"  Citation audit written; {len(data.get('items') or [])} item(s) re-checked")
 
     # -- Phase 4: Verify ---------------------------------------------------
 
@@ -1846,6 +2141,7 @@ class ReplicationRunner:
             working_dir=self.config.effective_repo_path,
             log_path=log_path,
             timeout=self.config.verify_timeout,
+            bucket="verify",
         )
 
         if not success:
@@ -2012,15 +2308,17 @@ class ReplicationRunner:
         from veritas.utils.transcripts import sum_tokens_from_transcript
 
         phase_transcripts = {
-            "analyze":      self.config.paper_claims_transcript_path,
-            "codegen":      self.config.codegen_transcript_path,
-            "plan":         self.config.replication_plan_transcript_path,
-            "replicate":    self.config.replication_transcript_path,
-            "assess_fixes": self.config.fix_severity_transcript_path,
+            "analyze":           self.config.paper_claims_transcript_path,
+            "codegen":           self.config.codegen_transcript_path,
+            "plan":              self.config.replication_plan_transcript_path,
+            "resource_estimate": self.config.resource_estimate_transcript_path,
+            "replicate":         self.config.replication_transcript_path,
+            "assess_fixes":      self.config.fix_severity_transcript_path,
+            "evaluation":        self.config.evaluation_transcript_path,
             # Advisory citation passes (opt-in). They have no PipelineState
             # stage, so wall_seconds stays None; only their tokens are summed.
-            "citation_check": self.config.citation_check_transcript_path,
-            "citation_audit": self.config.citation_audit_transcript_path,
+            "citation_check":    self.config.citation_check_transcript_path,
+            "citation_audit":    self.config.citation_audit_transcript_path,
         }
         # verify transcripts: one per claim
         verify_transcripts = list(self.config.verify_dir.glob("*_transcript.jsonl"))
@@ -2051,6 +2349,34 @@ class ReplicationRunner:
             v_out += o
         usage.phases["verify"] = PhaseUsage(wall_seconds=v_wall, input_tokens=v_inp, output_tokens=v_out)
 
+        # Prior loop iterations live in archived attempt trees; the current
+        # iteration's files in replication/ are counted by the phase loop.
+        archived_attempts = sorted(
+            self.config.output_dir.glob("replication.attempt-*"))
+        for attempt_dir in archived_attempts:
+            i, o = sum_tokens_from_transcript(
+                attempt_dir / "replication_transcript.jsonl")
+            usage.phases["replicate"].input_tokens += i
+            usage.phases["replicate"].output_tokens += o
+
+        # manager review + research sub-agents (present only when the retry
+        # loop ran); no wall time — their stages are not state-tracked.
+        loop_transcripts = [self.config.manager_review_transcript_path]
+        loop_transcripts += sorted(
+            self.config.replication_dir.glob("research_*_transcript.jsonl"))
+        for attempt_dir in archived_attempts:
+            loop_transcripts.append(attempt_dir / "manager_review_transcript.jsonl")
+            loop_transcripts += sorted(
+                attempt_dir.glob("research_*_transcript.jsonl"))
+        m_inp, m_out = 0, 0
+        for t in loop_transcripts:
+            i, o = sum_tokens_from_transcript(t)
+            m_inp += i
+            m_out += o
+        if m_inp or m_out:
+            usage.phases["manager_loop"] = PhaseUsage(
+                wall_seconds=None, input_tokens=m_inp, output_tokens=m_out)
+
         # totals
         all_phases = list(usage.phases.values())
         walls = [p.wall_seconds for p in all_phases if p.wall_seconds is not None]
@@ -2075,29 +2401,54 @@ class ReplicationRunner:
         except Exception:
             usage.disk_bytes = None
 
-        # cost estimate: known models use KNOWN_MODEL_PRICING; unknown models
-        # produce None so the field is omitted rather than silently wrong.
-        model = (
-            os.environ.get("ANTHROPIC_MODEL")
-            or os.environ.get("OPENAI_MODEL")
-            or os.environ.get("GEMINI_MODEL")
-        )
-        # Prefer an exact match; fall back to the longest known id the model
-        # name starts with, so dated ids (e.g. claude-haiku-4-5-20251001) still
-        # price. Longest-first avoids gpt-4o matching a gpt-4o-mini id.
-        pricing = None
-        if model:
-            pricing = KNOWN_MODEL_PRICING.get(model)
+        # cost estimate: each phase is priced by its bucket's resolved model
+        # (engine_for already folds in the provider-native model env vars).
+        # Known models use KNOWN_MODEL_PRICING; if any phase that consumed
+        # tokens has no known price, the total is None so the field is
+        # omitted rather than silently wrong.
+        phase_buckets = {
+            "analyze": "analyze", "codegen": "codegen", "plan": "analyze",
+            "resource_estimate": "analyze", "replicate": "replicate",
+            "assess_fixes": "assess", "verify": "verify",
+            "evaluation": "evaluate", "citation_check": "evaluate",
+            "citation_audit": "evaluate", "manager_loop": "evaluate",
+        }
+
+        def _price_for(model_name):
+            # Exact match first; else the longest known id the model name
+            # starts with, so dated ids (e.g. claude-haiku-4-5-20251001)
+            # still price. Longest-first avoids gpt-4o matching gpt-4o-mini.
+            if not model_name:
+                return None
+            pricing = KNOWN_MODEL_PRICING.get(model_name)
             if pricing is None:
                 for key in sorted(KNOWN_MODEL_PRICING, key=len, reverse=True):
-                    if model.startswith(key):
-                        pricing = KNOWN_MODEL_PRICING[key]
-                        break
-        estimated_cost_usd = round(
-            usage.total_input_tokens / 1_000_000 * pricing[0] +
-            usage.total_output_tokens / 1_000_000 * pricing[1],
-            4,
-        ) if pricing else None
+                    if model_name.startswith(key):
+                        return KNOWN_MODEL_PRICING[key]
+            return pricing
+
+        estimated_cost_usd = 0.0
+        priced_any = False
+        unpriced_phases = []
+        for phase, p in usage.phases.items():
+            if not p.input_tokens and not p.output_tokens:
+                continue
+            phase_provider, phase_model = self.config.engine_for(phase_buckets[phase])
+            pricing = _price_for(phase_model)
+            if pricing is None:
+                unpriced_phases.append(phase)
+                continue
+            priced_any = True
+            estimated_cost_usd += (
+                p.input_tokens / 1_000_000 * pricing[0]
+                + p.output_tokens / 1_000_000 * pricing[1]
+            )
+        if unpriced_phases or not priced_any:
+            # A partial sum would read as the run's cost; report None and
+            # name the phases that could not be priced.
+            estimated_cost_usd = None
+        else:
+            estimated_cost_usd = round(estimated_cost_usd, 4)
 
         # write
         out_dict = {
@@ -2111,6 +2462,7 @@ class ReplicationRunner:
                 "output_tokens": usage.total_output_tokens,
                 "disk_bytes": usage.disk_bytes,
                 "estimated_cost_usd_approximate": estimated_cost_usd,
+                **({"unpriced_phases": unpriced_phases} if unpriced_phases else {}),
             }
         }
         with open(self.config.output_dir / RESOURCE_USAGE_FILE, "w") as f:
@@ -2160,6 +2512,7 @@ class ReplicationRunner:
             working_dir=self.config.output_dir,
             log_path=log_path,
             timeout=None,
+            bucket="analyze",
         )
 
         if not success or not output_path.exists():
@@ -2212,8 +2565,10 @@ class ReplicationRunner:
         Score.
         """
         try:
+            self._check_provider_auth(buckets=("evaluate",))
             self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
             self._check_citations()
+            self._collect_usage_if_tracked()
             if self._load_json_object(self.config.citation_check_path) is None:
                 # The check soft-fails internally; surface that as a command
                 # failure (exit 1) instead of a green message, and leave the
@@ -2242,6 +2597,36 @@ class ReplicationRunner:
             except Exception:
                 pass
 
+    def evaluate_existing(self) -> RunResult:
+        """Run the contextual evaluation on an already-completed run, then
+        refresh the report.
+
+        Assumes ``config.output_dir`` is a finished run directory. Runs only
+        the evaluation pass and regenerates the report; never reconciles
+        pipeline state or re-runs pipeline stages.
+        """
+        try:
+            self._check_provider_auth(buckets=("evaluate",))
+            self.config.evaluation_dir.mkdir(parents=True, exist_ok=True)
+            self.config.prompts_dir.mkdir(parents=True, exist_ok=True)
+            self._evaluate()
+            self._collect_usage_if_tracked()
+            report_path, pdf_path = self.report_generator.generate(
+                replicate_dir=self.config.output_dir,
+                generate_pdf=self.config.generate_pdf,
+                generate_md=True,
+            )
+            return RunResult(success=True, report_path=report_path, pdf_path=pdf_path)
+        except Exception as e:
+            return RunResult(success=False, error=str(e))
+        finally:
+            # Same API-key redaction pass run() applies; this entry point writes
+            # prompts and transcripts without going through run().
+            try:
+                sanitize_logs_directory(self.config.output_dir)
+            except Exception:
+                pass
+
     # -- Resume helpers ----------------------------------------------------
 
     def _announce_resume(self, state: PipelineState) -> None:
@@ -2249,20 +2634,6 @@ class ReplicationRunner:
         created = state.state.get('created_at', 'unknown time')
         print(f"WARNING: Found existing pipeline state from {created}. Resuming.")
         print("   Pass --restart to start fresh.")
-
-    def _config_fingerprint(self) -> Dict[str, Any]:
-        """Return config fields that affect output content.
-
-        Only fields that change what the pipeline produces are included.
-        Behavior-only flags (timeouts, ``generate_pdf``, ``verbose``) are
-        excluded so changing them between runs doesn't trigger needless
-        re-runs.
-        """
-        return {
-            'provider': self.config.provider,
-            'mode': self.config.mode,
-            'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
-        }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
         """Detect input/config changes against the recorded run and invalidate
@@ -2279,11 +2650,24 @@ class ReplicationRunner:
             self.config.repo_path, self.config.paper_path, data_path=self.config.data_path,
         )
 
-        current_config = self._config_fingerprint()
-        config_changes = state.detect_config_changes(current_config)
+        current_config = build_config_fingerprint(self.config)
+        recorded_config = state.state.get('config') or {}
+        config_changes = [
+            field for field in state.detect_config_changes(current_config)
+            if not _is_spurious_engine_change(field, recorded_config, current_config)
+        ]
+
+        # A legacy baseline (recorded before engine tracking) is upgraded to
+        # the explicit engine fields whenever it is seen, so future resumes
+        # compare directly instead of via the provider baseline.
+        recorded_lacks_engines = not any(
+            key.startswith('engine_') for key in recorded_config
+        )
 
         all_changes = input_changes + config_changes
         if not all_changes:
+            if recorded_lacks_engines:
+                state.record_config(current_config)
             return
 
         affected = set()
@@ -2301,7 +2685,7 @@ class ReplicationRunner:
                 self.config.paper_path,
                 data_path=self.config.data_path,
             )
-        if config_changes:
+        if config_changes or recorded_lacks_engines:
             state.record_config(current_config)
 
     def _load_paper_claims(self) -> PaperClaims:
@@ -2342,12 +2726,157 @@ class ReplicationRunner:
         return {k.strip() for k in raw.split(",") if k.strip()}
 
     @staticmethod
-    def _stripped_env() -> Dict[str, str]:
-        """os.environ minus the keys defined in VERITAS_ENV_FILE_KEYS."""
-        keys_to_strip = ReplicationRunner._env_file_keys()
+    def _stripped_env(exempt: frozenset = frozenset()) -> Dict[str, str]:
+        """os.environ minus the keys defined in VERITAS_ENV_FILE_KEYS and
+        minus every provider auth var not named in ``exempt``.
+
+        ``exempt`` names keys excluded from stripping — the invoked
+        provider's own auth vars (see PROVIDER_AUTH_VARS). Stripping the
+        other providers' auth vars unconditionally (not only when they came
+        from .env) keeps the scoping intact in containers that never set
+        VERITAS_ENV_FILE_KEYS (evaluate, check-citations, estimate) and for
+        host-shell-exported keys.
+        """
+        all_auth_vars = {
+            var for vars_ in PROVIDER_AUTH_VARS.values() for var in vars_
+        }
+        keys_to_strip = (
+            ReplicationRunner._env_file_keys() | all_auth_vars
+        ) - set(exempt)
         if not keys_to_strip:
             return os.environ.copy()
         return {k: v for k, v in os.environ.items() if k not in keys_to_strip}
+
+    @staticmethod
+    def _auth_exemptions(provider: str) -> frozenset:
+        """Auth vars of the provider this invocation runs on.
+
+        Scoped per invocation: each subprocess sees only its own provider's
+        auth vars, so a key configured for one bucket never reaches another
+        bucket's provider."""
+        return frozenset(PROVIDER_AUTH_VARS.get(provider, ()))
+
+    @staticmethod
+    def _subprocess_env(provider: str, expose_api_keys: bool) -> Dict[str, str]:
+        """Environment for a provider subprocess.
+
+        Every invocation keeps only its own provider's auth vars; other
+        providers' keys are stripped even at the replicate call site, so a
+        host-shell key configured for a different bucket never reaches the
+        paper code. ``expose_api_keys=True`` additionally keeps the vars
+        named in ``VERITAS_ENV_FILE_KEYS`` — the .env file is the sanctioned
+        key channel for the paper code replicate runs."""
+        exempt = ReplicationRunner._auth_exemptions(provider)
+        if expose_api_keys:
+            exempt = exempt | ReplicationRunner._env_file_keys()
+        env = ReplicationRunner._stripped_env(exempt)
+        if expose_api_keys:
+            # Name (never value) any key that was present but withheld, so
+            # paper code that needed it fails with a pointer instead of an
+            # opaque auth error deep in the run.
+            withheld = sorted(set(os.environ) - set(env))
+            if withheld:
+                print(
+                    "  Note: not exposed to the replicate subprocess (list "
+                    "them in .env if the paper code needs them): "
+                    + ", ".join(withheld)
+                )
+        return env
+
+    def _collect_usage_if_tracked(self) -> None:
+        """Best-effort resource_usage refresh for standalone entry points,
+        so their transcripts count toward the run's totals. Skipped when the
+        directory has no pipeline state (nothing established the baseline)."""
+        state_file = state_file_path(self.config.output_dir)
+        if not state_file.exists():
+            return
+        try:
+            self._collect_resource_usage(PipelineState(self.config.output_dir))
+        except Exception as e:
+            print(f"  Warning: Could not collect resource usage: {e}")
+
+    def _leak_buckets(self) -> List[str]:
+        """Buckets whose output reaches the replication agent: the plan
+        (analyze bucket) always, codegen when it runs (paper-only mode),
+        and the manager directive (evaluate bucket) when the retry loop
+        is on. A web-locked engine on any of these defeats the
+        anti-leakage design."""
+        buckets = ["analyze"]
+        if self.config.mode == "paper-only":
+            buckets.append("codegen")
+        buckets.append("replicate")
+        if self.config.max_iters > 1:
+            buckets.append("evaluate")
+        return buckets
+
+    def _warn_web_locked_engines(self) -> None:
+        """Warn wherever an always-on-web engine can corrupt the run: the
+        buckets whose output reaches the replication agent, and the verify
+        bucket, whose judge could fetch the paper's published values and
+        adjudicate against them instead of the evidence. Advisory; never
+        blocks."""
+        for leak_bucket in self._leak_buckets():
+            _, leak_model = self.config.engine_for(leak_bucket)
+            if is_web_locked_slug(leak_model):
+                print(
+                    f"WARNING: the {leak_bucket} bucket is configured with "
+                    f"'{leak_model}', which has always-on web access. Its "
+                    f"output can reach the replication agent, so fetched "
+                    f"paper values can leak into replication, defeating "
+                    f"the anti-leakage design. Proceeding anyway."
+                )
+        _, verify_model = self.config.engine_for("verify")
+        if is_web_locked_slug(verify_model):
+            print(
+                f"WARNING: the verify bucket is configured with "
+                f"'{verify_model}', which has always-on web access. The "
+                f"verifier can fetch the paper's published values and "
+                f"adjudicate against them instead of the replication "
+                f"evidence, corrupting the Replication Score. Proceeding "
+                f"anyway."
+            )
+
+    def _active_buckets(self, dry_run: bool = False) -> set:
+        """Buckets whose engines this run will actually invoke."""
+        buckets = {"analyze"}
+        if not dry_run:
+            if self.config.mode == "paper-only":
+                buckets.add("codegen")
+            buckets.update(("replicate", "assess", "verify"))
+            if (self.config.run_evaluation or self.config.run_citation_check
+                    or self.config.max_iters > 1):
+                buckets.add("evaluate")
+        return buckets
+
+    def _check_provider_auth(self, buckets=None) -> None:
+        """Fail fast when a configured provider is not provisioned to run.
+
+        The wrapper preflight only sees the global --provider; per-bucket
+        engines are validated here so a missing key or model surfaces
+        before any stage runs instead of mid-pipeline. openrouter is
+        API-key-only and has no usable default model; the other providers
+        may authenticate via mounted login state, so only openrouter is
+        checked.
+
+        ``buckets`` restricts the check to the named buckets (callers pass
+        the buckets their entry point will actually run, so a knob
+        configured for an inactive bucket cannot block the run). ``None``
+        checks every bucket.
+        """
+        for bucket in (BUCKETS if buckets is None else buckets):
+            provider, model = self.config.engine_for(bucket)
+            if provider != "openrouter":
+                continue
+            if model is None:
+                raise RuntimeError(
+                    f"Provider openrouter requires an explicit model for the "
+                    f"'{bucket}' bucket (pass --model or --{bucket}-model)"
+                )
+            if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+                raise RuntimeError(
+                    "Provider openrouter requires OPENROUTER_API_KEY. "
+                    "Export it in your shell or add it to .env."
+                )
 
     def _invoke_provider(
         self,
@@ -2355,6 +2884,7 @@ class ReplicationRunner:
         working_dir: Path,
         log_path: Path,
         timeout: Optional[int],
+        bucket: str,
         append: bool = False,
         expose_api_keys: bool = False,
     ) -> bool:
@@ -2365,6 +2895,11 @@ class ReplicationRunner:
         replication-plan JSON, per-claim verdict JSON, etc.) to known disk paths during the run.
         ``log_path`` only captures the conversation transcript — it is
         never the source of the agent's answer.
+
+        ``bucket`` names the engine group this call belongs to (see
+        ``config.BUCKETS``); the provider and model are resolved per bucket
+        via ``Config.engine_for``, so different pipeline steps can run on
+        different engines.
 
         Wall-clock timeout enforcement uses a daemon ``threading.Timer``
         that calls ``process.kill()`` after ``timeout`` seconds. A plain
@@ -2379,11 +2914,13 @@ class ReplicationRunner:
         ``expose_api_keys=True`` lets the subprocess inherit the
         replication API keys (the vars listed in
         ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
-        this — paper code it runs needs the keys. All other phases must
-        keep the default ``False`` so the keys are not exposed to
-        analyze/plan/codegen/assess/verify subprocesses.
+        this — paper code it runs needs the keys. All other phases keep
+        the default ``False``: their environment strips those keys,
+        except the invoked provider's own auth vars (see
+        ``PROVIDER_AUTH_VARS``), which the subprocess needs to reach
+        its provider.
         """
-        provider = self.config.provider.lower()
+        provider, model = self.config.engine_for(bucket)
         if provider not in CLI_COMMANDS:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -2393,21 +2930,17 @@ class ReplicationRunner:
             print(f"  {e}")
             return False
 
-        cmd: List[str] = [
-            cli,
-            *CLI_COMMANDS[provider][1:],
-            *TRANSCRIPT_FLAGS[provider],
-            *PERMISSION_FLAGS[provider],
-            *PROMPT_STDIN_ARGS[provider],
-        ]
+        cmd = build_provider_command(cli, provider, model)
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         open_mode = "a" if append else "w"
 
-        # Default: strip replication API keys (sourced from .env via --env-file)
-        # so non-replicate phases don't see them. _replicate opts in via
-        # expose_api_keys=True since the paper code it runs needs the keys.
-        env = None if expose_api_keys else self._stripped_env()
+        # Strip replication API keys (sourced from .env via --env-file) and
+        # other providers' auth vars, keeping only the invoked provider's own
+        # (PROVIDER_AUTH_VARS). _replicate opts in via expose_api_keys=True,
+        # which keeps the .env keys since the paper code it runs needs them —
+        # but other providers' host-shell keys stay stripped even there.
+        env = self._subprocess_env(provider, expose_api_keys)
 
         try:
             process = subprocess.Popen(
