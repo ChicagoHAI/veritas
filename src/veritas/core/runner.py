@@ -1040,8 +1040,8 @@ class ReplicationRunner:
         if state.is_stage_completed('replicate'):
             print("[OK] replicate: skipped (already completed)")
             evidence = gather_evidence(self.config.replication_dir)
-            # Recompute facts for the loop (cheap, pure) when the loop is on
-            # and we don't already have them from this process.
+            # Recompute facts for the loop when the loop is on and we don't
+            # already have them from this process (re-reads the transcript).
             if max_iters > 1 and self._last_facts is None:
                 self._last_facts = self._compute_and_write_execution_facts(
                     evidence, replication_plan
@@ -1362,7 +1362,11 @@ class ReplicationRunner:
         manager judges diligence.
         """
         try:
-            facts = compute_execution_facts(evidence, plan=replication_plan)
+            facts = compute_execution_facts(
+                evidence,
+                plan=replication_plan,
+                transcript_path=self.config.replication_transcript_path,
+            )
 
             out_path = self.config.diligence_signals_path
             out_path.parent.mkdir(parents=True, exist_ok=True)

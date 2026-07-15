@@ -339,3 +339,14 @@ def test_guidance_from_verdict():
     assert g.deficiency == "step 3 weak"
     assert g.directive == "rerun step 3 at scale"
     assert g.already_tried == "toy run"
+
+
+def test_build_handoff_surfaces_tool_call_loop():
+    # The hard-terminated shape: no step evidence, but the transcript showed a
+    # long identical-call run — the most actionable fact for whoever picks the
+    # run up.
+    sig = ExecutionFacts(no_evidence=True, transcript_tool_calls=541,
+                         max_consecutive_tool_repeat=82)
+    v = ManagerVerdict(decision="revise", reason="r", directive="d")
+    h = build_handoff(iteration=1, verdict=v, signals=sig, stop_reason="cap")
+    assert "82x back-to-back" in h["where_it_falls_short"]

@@ -458,6 +458,10 @@ def build_handoff(
             fact_notes.append(f"planned steps with no record: {signals.missing_step_ids}")
         if signals.failed_step_ids:
             fact_notes.append(f"steps with nonzero exit code: {signals.failed_step_ids}")
+        if signals.max_consecutive_tool_repeat >= 2:
+            fact_notes.append(
+                f"the same tool call ran {signals.max_consecutive_tool_repeat}x back-to-back"
+            )
         if fact_notes:
             where += " | execution facts: " + "; ".join(fact_notes)
     return {

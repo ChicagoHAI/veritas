@@ -10,7 +10,7 @@ This script uses a smart iterative refinement approach:
 
 Requirements:
     - OPENROUTER_API_KEY environment variable
-    - requests library
+    - Python standard library only (no third-party packages)
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -24,14 +24,10 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-
-try:
-    import requests
-except ImportError:
-    print("Error: requests library not found. Install with: pip install requests")
-    sys.exit(1)
 
 # Try to load .env file from multiple potential locations
 def _load_env_file():
@@ -185,31 +181,40 @@ IMPORTANT - NO FIGURE NUMBERS:
         
         self._log(f"Making request to {model}...")
         
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
         try:
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=120
-            )
-            
-            # Try to get response body even on error
             try:
-                response_json = response.json()
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    status = response.status
+                    body = response.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as e:
+                # Read the error response body too; the API puts details there
+                status = e.code
+                body = e.read().decode("utf-8", "replace")
+
+            try:
+                response_json = json.loads(body)
             except json.JSONDecodeError:
-                response_json = {"raw_text": response.text[:500]}
-            
+                response_json = {"raw_text": body[:500]}
+
             # Check for HTTP errors but include response body in error message
-            if response.status_code != 200:
+            if status != 200:
                 error_detail = response_json.get("error", response_json)
-                self._log(f"HTTP {response.status_code}: {error_detail}")
-                raise RuntimeError(f"API request failed (HTTP {response.status_code}): {error_detail}")
-            
+                self._log(f"HTTP {status}: {error_detail}")
+                raise RuntimeError(f"API request failed (HTTP {status}): {error_detail}")
+
             return response_json
-        except requests.exceptions.Timeout:
+        except TimeoutError:
             raise RuntimeError("API request timed out after 120 seconds")
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"API request failed: {str(e)}")
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), TimeoutError):
+                raise RuntimeError("API request timed out after 120 seconds")
+            raise RuntimeError(f"API request failed: {e}")
     
     def _extract_image_from_response(self, response: Dict[str, Any]) -> Optional[bytes]:
         """
