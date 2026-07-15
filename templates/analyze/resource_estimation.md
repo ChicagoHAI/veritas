@@ -46,6 +46,7 @@ Write your estimate to {{ output_dir }}/analyze/resource_estimate.json.
 The file must contain at minimum:
 - compute_class: "light" (under 5 min on CPU), "medium" (significant CPU/RAM or hours), "heavy" (GPU required or multi-hour run)
 - breakdown_notes: a plain-English explanation of your estimate, quoting the paper or plan where possible
+- estimated_veritas_overhead: the fixed veritas pipeline overhead breakdown (see below — copy as-is)
 
 Beyond those, include any fields that are useful and available for this paper. Examples:
 
@@ -55,17 +56,27 @@ Beyond those, include any fields that are useful and available for this paper. E
     "breakdown_notes": "Paper states 48h on 4 A100s. Current A100 rate ~$2/hr on RunPod (https://runpod.io/pricing), giving ~$384 estimated.",
     "needs_gpu": true,
     "paper_reported_compute": "4 A100 GPUs for 48 hours",
+    "paper_reported_wall_time": "48 hours on 4 A100s",
     "paper_reported_cost_usd": null,
     "estimated_cost_usd": 384.0,
     "estimated_cost_source": "https://runpod.io/pricing",
     "total_steps": 5,
     "estimated_experiment_runs": 15,
     "estimated_llm_calls": null,
-    "parallelizable": false
+    "parallelizable": false,
+    "estimated_total_run_time": "~1-2 hours (15 min experiment + 30-60 min veritas overhead)",
+    "estimated_veritas_overhead": {
+        "analyze": "1-3 min",
+        "replicate": "30-60+ min (varies by repo complexity and number of agent fixes)",
+        "verify": "1-5 min per claim"
+    }
 }
 ```
 
-Add or omit fields as the paper warrants — the schema is a suggestion, not a contract.
+Only include `paper_reported_wall_time` if the paper explicitly states a duration — omit it entirely if not mentioned.
+Always include `estimated_total_run_time` as a single human-readable rough range combining the experiment runtime and veritas overhead. Label it clearly as approximate.
+
+Add or omit other fields as the paper warrants — the schema is a suggestion, not a contract.
 Set numeric fields to null when unknown. Write the file now.
 {% if mode == "paper-only" and pre_codegen %}
 ## Note: paper-only mode
