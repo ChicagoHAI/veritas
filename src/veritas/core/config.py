@@ -125,8 +125,10 @@ class Config:
 
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
-    # is worse than letting it finish. Re-enable once there's a checkpoint /
-    # resume mechanism to recover the work.
+    # is worse than letting it finish. For replicate, this is mitigated by the
+    # session-resume heartbeat loop (see runner.py::_replicate, RESUME_CAPABLE)
+    # when the provider supports it; other phases still have no checkpoint and
+    # should stay None unless a mechanism to recover the work exists for them.
     #
     # Resolution (highest wins): CLI flag -> ``VERITAS_*_TIMEOUT`` env var ->
     # code default (None). The CLI passes an explicit value only when its flag
@@ -136,6 +138,13 @@ class Config:
     replicate_timeout: Optional[int] = None
     verify_timeout: Optional[int] = None
     evaluate_timeout: Optional[int] = None
+
+    # How often the replicate heartbeat loop checks in when replicate_timeout
+    # is set and the provider supports session resume (see runner.py::_replicate,
+    # RESUME_CAPABLE). Clamped up to MIN_HEARTBEAT_SECONDS at use — a killed
+    # session needs a brief warm-up before it's resumable at all, so an
+    # interval much shorter than that risks losing a tick's work outright.
+    replicate_heartbeat_seconds: int = 900
 
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.

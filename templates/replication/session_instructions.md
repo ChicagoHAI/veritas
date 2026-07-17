@@ -141,6 +141,13 @@ There is **no hidden time budget**. A heavy step may legitimately take hours or 
 - Before concluding a resource limit forces a downsize, run the `get-available-resources` skill (`{{ skills_dir }}/get-available-resources/scripts/detect_resources.py`) and cite its actual numbers in your notes — a downsize justified by a guessed constraint is not genuine.
 - If you must downsize, **say so explicitly in that step's `notes`**: what you reduced, from what to what, and why (the specific resource limit). A downsized run that is clearly labeled is a finding; an unlabeled one is a silent flaw.
 
+**Run long steps to completion before ending your turn — do not background them and stop.** This is a single, non-interactive invocation: nothing notifies you when a backgrounded process finishes after you've already ended your turn, and there is no later turn for that notification to reach. Saying "I'll wait for it" and ending your turn anyway does not make that true — verified by testing, that pattern silently abandons the work.
+
+Do **not** use the `Monitor` tool or `run_in_background` for anything whose result you need before finishing your turn. If a command can't run as a plain blocking foreground call (e.g. the environment blocks a bare `sleep`), do this instead:
+1. Start it detached from your own process so it survives even if your turn is interrupted: e.g. `(<your long command> && touch /tmp/.stepN_done) &disown`.
+2. Poll for its real completion yourself with repeated **separate foreground** command calls — not `Monitor`, not `run_in_background` — each one you issue and wait on synchronously, e.g. `sleep 30; test -f /tmp/.stepN_done && echo READY || echo NOT_READY`. Issue it again and again until it reports READY.
+3. Do not end your turn, and do not report the step as complete, until a poll has actually reported READY. If your turn is interrupted and resumed before that happens, check whether the detached process is still running and keep polling — don't restart it from scratch or assume it's lost.
+
 **When to stop trying:** Only after you have tried several genuinely different approaches (see the strategies above) and the problem is fundamental — core algorithm wrong, essential data paywalled with no alternative, hardware genuinely unavailable. Document what you tried, the distinct approaches, and why each failed, then move on.
 
 ### Sanity-check intermediate results before building on them
