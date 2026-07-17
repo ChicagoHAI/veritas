@@ -113,6 +113,14 @@ class ExecutionFacts:
     # manager will obviously weigh, but still just a fact, not a verdict.
     no_evidence: bool = False
 
+    # --- heartbeat cutoff ---------------------------------------------------
+    # Set when the replicate heartbeat loop cut the run off at its configured
+    # time budget (runner.py::_replicate_with_heartbeat) rather than the
+    # agent finishing or crashing on its own. A bare fact, same as the others
+    # here — the manager weighs what it means, this module doesn't.
+    terminated_early: bool = False
+    termination_reason: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "planned_steps": self.planned_steps,
@@ -134,6 +142,8 @@ class ExecutionFacts:
             "total_fixes_applied": self.total_fixes_applied,
             "total_duration_seconds": self.total_duration_seconds,
             "no_evidence": self.no_evidence,
+            "terminated_early": self.terminated_early,
+            "termination_reason": self.termination_reason,
         }
 
     def summary_line(self) -> str:
@@ -145,6 +155,8 @@ class ExecutionFacts:
                 if self.max_consecutive_tool_repeat >= 2:
                     extra += f", max_consec_tool_repeat={self.max_consecutive_tool_repeat}"
                 line += f" (transcript: {extra})"
+            if self.terminated_early:
+                line += f"; terminated_early=true ({self.termination_reason})"
             return line
         parts = [f"steps={self.executed_steps}/{self.planned_steps}"]
         if self.missing_step_ids:
@@ -162,6 +174,8 @@ class ExecutionFacts:
         if self.max_consecutive_tool_repeat >= 2:
             parts.append(f"max_consec_tool_repeat={self.max_consecutive_tool_repeat}")
         parts.append(f"fixes={self.total_fixes_applied}")
+        if self.terminated_early:
+            parts.append(f"terminated_early=true ({self.termination_reason})")
         return "; ".join(parts)
 
 
@@ -319,12 +333,18 @@ def compute_execution_facts(
     Never raises on malformed input — bad records are simply skipped. The
     transcript facts are computed even when the step evidence is absent (a
     hard-terminated run leaves a transcript but no log), and a transcript
-    failure never affects the step-level facts.
+    failure never affects the step-level facts. ``evidence.terminated_early``/
+    ``termination_reason`` (set by the replicate heartbeat loop when a run is
+    cut off at its time budget) are copied through unconditionally, before
+    any other branch, so they survive even a no-evidence run.
 
     Returns an :class:`ExecutionFacts`. It makes no diligence judgment; the
     manager owns that.
     """
     facts = ExecutionFacts()
+    facts.terminated_early = bool(getattr(evidence, "terminated_early", False))
+    facts.termination_reason = getattr(evidence, "termination_reason", "") or ""
+
     total, best_len, best_key = _scan_transcript_tool_calls(transcript_path)
     if total:
         facts.transcript_tool_calls = total

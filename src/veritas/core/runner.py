@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,7 @@ from veritas.core.manager import (
     WorkflowLog,
     archive_attempt,
     build_handoff,
+    facts_improved,
     parse_manager_verdict,
     should_stop,
 )
@@ -104,6 +107,27 @@ PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
     "gemini": (),
 }
 
+# Providers whose CLI can resume a conversation by session ID (verified for
+# claude via `claude --help`: --session-id / --resume, and empirically —
+# killing a session with SIGTERM and resuming it recovers full context.
+# codex/gemini are unconfirmed, so treated as unsupported until checked; the
+# replicate heartbeat loop falls back to a single uninterrupted invocation
+# for any provider not listed here as True.
+RESUME_CAPABLE: Dict[str, bool] = {"claude": True, "codex": False, "gemini": False}
+SESSION_ID_FLAG: Dict[str, Tuple[str, ...]] = {"claude": ("--session-id",)}
+RESUME_FLAG: Dict[str, Tuple[str, ...]] = {"claude": ("--resume",)}
+
+# Magentic-One's stall threshold (arXiv:2411.04468): keep resuming normally
+# while consecutive no-progress heartbeats stay at or below this; once
+# exceeded, switch the resume instruction from "continue" to a stuck-nudge.
+STALL_THRESHOLD = 2
+
+# Empirically, a killed `claude` session needs a several-second warm-up
+# before it becomes resumable at all — under ~5s in direct testing, resume
+# fails outright ("No conversation found"). 60s is a wide safety margin so
+# the heartbeat loop never operates anywhere near that window.
+MIN_HEARTBEAT_SECONDS = 60
+
 # Per-million-token pricing for known models (input_price, output_price).
 # Unknown models produce None for estimated_cost_usd_approximate; the
 # resource-estimation prompt instructs the LLM to search for pricing in that
@@ -159,6 +183,11 @@ class ReplicationRunner:
         # replicate runs). These are facts, not a diligence verdict — the
         # manager does the judging.
         self._last_facts: Optional[ExecutionFacts] = None
+        # Set by _invoke_provider on every call: True if that invocation was
+        # ended by the watchdog rather than exiting on its own. Consumed by
+        # _replicate_with_heartbeat to tell "ran out of time this tick" apart
+        # from a real crash.
+        self._last_invocation_timed_out: bool = False
 
     def run(self, dry_run: bool = False) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
@@ -802,18 +831,36 @@ class ReplicationRunner:
         prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
-        success = self._invoke_provider(
-            prompt=session_instructions,
-            working_dir=self.config.effective_repo_path,
-            log_path=log_path,
-            timeout=self.config.replicate_timeout,
-            expose_api_keys=True,
-        )
+        provider = self.config.provider.lower()
+        budget = self.config.replicate_timeout
+        terminated_early = False
+        termination_reason = ""
 
-        if not success:
-            print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
+        if not RESUME_CAPABLE.get(provider, False) or budget is None:
+            # No resume support for this provider, or no budget configured:
+            # unchanged single-invocation behavior.
+            success = self._invoke_provider(
+                prompt=session_instructions,
+                working_dir=self.config.effective_repo_path,
+                log_path=log_path,
+                timeout=budget,
+                expose_api_keys=True,
+            )
+            if not success:
+                print(f"  Warning: Provider invocation did not succeed (transcript: {log_path})")
+        else:
+            terminated_early, termination_reason = self._replicate_with_heartbeat(
+                session_instructions=session_instructions,
+                log_path=log_path,
+                replication_plan=replication_plan,
+                provider=provider,
+                budget=budget,
+            )
 
         evidence = gather_evidence(self.config.replication_dir)
+        if evidence is not None and terminated_early:
+            evidence.terminated_early = True
+            evidence.termination_reason = termination_reason
 
         if evidence:
             print(f"  Replication completed: {evidence.steps_succeeded}/{evidence.steps_attempted} steps succeeded")
@@ -832,6 +879,138 @@ class ReplicationRunner:
         )
 
         return evidence
+
+    def _replicate_with_heartbeat(
+        self,
+        session_instructions: str,
+        log_path: Path,
+        replication_plan: ReplicationPlan,
+        provider: str,
+        budget: int,
+    ) -> Tuple[bool, str]:
+        """Run replicate as a series of resumed invocations instead of one
+        uninterrupted call, so a time-budget cutoff ends in a clean hand-off
+        instead of a silent kill.
+
+        Only called for providers in ``RESUME_CAPABLE`` with a configured
+        ``replicate_timeout``. Each tick runs for up to
+        ``replicate_heartbeat_seconds`` (floored at ``MIN_HEARTBEAT_SECONDS``);
+        when a tick times out, the loop checks the real elapsed time against
+        ``budget`` and either resumes the same session (``--resume``) or, once
+        the budget is exhausted, sends one final resumed call asking the agent
+        to finalize its evidence instead of continuing, then stops for good.
+
+        Between resumes, progress is judged with the same objective-facts
+        comparison the post-replicate manager loop uses (``facts_improved``);
+        stalling for more than ``STALL_THRESHOLD`` consecutive ticks (the
+        Magentic-One threshold, arXiv:2411.04468) switches the resume
+        instruction from "continue" to a stuck nudge.
+
+        This is a best-effort approximation of a real checkpoint/resume
+        primitive (contrast LangGraph's checkpointer + ``interrupt()``, built
+        for exactly this), riding on the `claude` CLI's own session
+        persistence rather than a mechanism designed to guarantee it. Returns
+        ``(terminated_early, termination_reason)``.
+        """
+        heartbeat = max(self.config.replicate_heartbeat_seconds, MIN_HEARTBEAT_SECONDS)
+        session_id = str(uuid.uuid4())
+        elapsed = 0.0
+        first = True
+        stall_count = 0
+        prev_facts: Optional[ExecutionFacts] = None
+
+        while True:
+            tick_timeout = min(heartbeat, max(budget - elapsed, 1))
+            extra = (*SESSION_ID_FLAG[provider], session_id) if first else (*RESUME_FLAG[provider], session_id)
+            if first:
+                msg = session_instructions
+            elif stall_count > STALL_THRESHOLD:
+                msg = (
+                    "No progress across the last few check-ins. Don't repeat "
+                    "the same approach — try a genuinely different strategy "
+                    "for the current step, or move on if it's blocked, and "
+                    "say why in that step's notes. This is a non-interactive "
+                    "run: no one will read or answer a question you ask, so "
+                    "make the call yourself and record your reasoning in "
+                    "notes instead of stopping to ask. Do not use the Monitor "
+                    "tool or run_in_background for anything you need the "
+                    "result of before ending your turn — verified by testing, "
+                    "'I'll wait for it' followed by ending your turn silently "
+                    "abandons the work. If a step you started is still "
+                    "running detached, poll for its real completion with "
+                    "repeated separate foreground calls (e.g. `sleep 30; "
+                    "test -f <marker> && echo READY || echo NOT_READY`, "
+                    "issued again and again) rather than restarting it or "
+                    "assuming it's done."
+                )
+            else:
+                msg = (
+                    "Continue the replication plan from where you left off; "
+                    "do not repeat completed steps. This is a non-interactive "
+                    "run: no one will read or answer a question you ask. If "
+                    "the last attempt failed or was interrupted, decide how "
+                    "to proceed yourself (retry, adjust approach, or record "
+                    "the failure in that step's notes) rather than stopping "
+                    "to ask for guidance. Do not use the Monitor tool or "
+                    "run_in_background for anything you need the result of "
+                    "before ending your turn — verified by testing, 'I'll "
+                    "wait for it' followed by ending your turn silently "
+                    "abandons the work. If a step you started is still "
+                    "running detached, poll for its real completion with "
+                    "repeated separate foreground calls (e.g. `sleep 30; "
+                    "test -f <marker> && echo READY || echo NOT_READY`, "
+                    "issued again and again) rather than restarting it or "
+                    "assuming it's done."
+                )
+
+            start = time.monotonic()
+            success = self._invoke_provider(
+                prompt=msg,
+                working_dir=self.config.effective_repo_path,
+                log_path=log_path,
+                timeout=tick_timeout,
+                expose_api_keys=True,
+                extra_cli_args=extra,
+                append=not first,
+            )
+            elapsed += time.monotonic() - start
+            first = False
+
+            if success:
+                return False, ""  # finished on its own
+            if not self._last_invocation_timed_out:
+                print("  Warning: Provider invocation failed (not a timeout) — stopping.")
+                return False, ""
+
+            tick_evidence = gather_evidence(self.config.replication_dir)
+            curr_facts = compute_execution_facts(tick_evidence, replication_plan)
+            stall_count = 0 if facts_improved(prev_facts, curr_facts) else stall_count + 1
+            prev_facts = curr_facts
+
+            if elapsed >= budget:
+                self._invoke_provider(
+                    prompt=(
+                        "You've reached the time budget. Don't start new "
+                        "work — finalize replication_log.json to reflect "
+                        "exactly what you completed. This is a non-interactive "
+                        "run and this is your last turn: no one will read or "
+                        "answer a question, and there is no next turn to poll "
+                        "in — do not background or defer anything now. If the "
+                        "last step failed or was interrupted, record that "
+                        "honestly in its notes rather than asking what to do "
+                        "— just write the file and stop."
+                    ),
+                    working_dir=self.config.effective_repo_path,
+                    log_path=log_path,
+                    timeout=min(300, heartbeat),
+                    expose_api_keys=True,
+                    extra_cli_args=(*RESUME_FLAG[provider], session_id),
+                    append=True,
+                )
+                reason = f"Reached the {budget}s replicate budget after {elapsed:.0f}s."
+                return True, reason
+            # else: budget not yet exhausted — loop again, resuming with
+            # "continue" or the stall nudge decided above.
 
     # -- Phase 2 loop: replicate + manager-controlled retries --------------
 
@@ -2357,6 +2536,7 @@ class ReplicationRunner:
         timeout: Optional[int],
         append: bool = False,
         expose_api_keys: bool = False,
+        extra_cli_args: Tuple[str, ...] = (),
     ) -> bool:
         """Run the configured provider as a subprocess; stream its JSONL
         transcript to ``log_path``; return True on success.
@@ -2366,11 +2546,17 @@ class ReplicationRunner:
         ``log_path`` only captures the conversation transcript — it is
         never the source of the agent's answer.
 
-        Wall-clock timeout enforcement uses a daemon ``threading.Timer``
-        that calls ``process.kill()`` after ``timeout`` seconds. A plain
-        ``process.wait(timeout=...)`` after a streaming loop does not
-        enforce a wall-clock limit, since the loop blocks until the
-        subprocess closes stdout (which happens when it exits anyway).
+        Wall-clock timeout enforcement uses a daemon ``threading.Timer``.
+        It sends SIGTERM first (``process.terminate()``), not SIGKILL —
+        SIGTERM is catchable, so a resume-capable CLI gets a chance to flush
+        its session state before exiting (confirmed empirically: a plain
+        SIGKILL never leaves a resumable session; SIGTERM does, once the
+        session has had its brief warm-up — see ``_replicate_with_heartbeat``).
+        A second timer force-kills with SIGKILL only if the process ignores
+        SIGTERM for 5s. A plain ``process.wait(timeout=...)`` after a
+        streaming loop does not enforce a wall-clock limit on its own, since
+        the loop blocks until the subprocess closes stdout (which happens
+        when it exits anyway) — the watchdog is what actually bounds it.
 
         With ``append=True`` the transcript file is opened in append mode,
         which is used by the repair-re-invocation path so the original
@@ -2382,6 +2568,14 @@ class ReplicationRunner:
         this — paper code it runs needs the keys. All other phases must
         keep the default ``False`` so the keys are not exposed to
         analyze/plan/codegen/assess/verify subprocesses.
+
+        ``extra_cli_args`` is spliced in before the trailing stdin sentinel
+        args — used by the replicate heartbeat loop to pass
+        ``--session-id``/``--resume`` (see ``SESSION_ID_FLAG``/``RESUME_FLAG``).
+
+        Sets ``self._last_invocation_timed_out`` before returning, so a
+        caller can tell a timeout apart from a real failure (a non-zero exit
+        that wasn't the watchdog).
         """
         provider = self.config.provider.lower()
         if provider not in CLI_COMMANDS:
@@ -2398,6 +2592,7 @@ class ReplicationRunner:
             *CLI_COMMANDS[provider][1:],
             *TRANSCRIPT_FLAGS[provider],
             *PERMISSION_FLAGS[provider],
+            *extra_cli_args,
             *PROMPT_STDIN_ARGS[provider],
         ]
 
@@ -2438,9 +2633,20 @@ class ReplicationRunner:
                 nonlocal timed_out
                 timed_out = True
                 try:
-                    process.kill()
+                    process.terminate()
                 except Exception:
                     pass
+
+                def _force_kill() -> None:
+                    try:
+                        if process.poll() is None:
+                            process.kill()
+                    except Exception:
+                        pass
+
+                force_kill_timer = threading.Timer(5, _force_kill)
+                force_kill_timer.daemon = True
+                force_kill_timer.start()
 
             watchdog = threading.Timer(timeout, _kill_on_timeout)
             watchdog.daemon = True
@@ -2457,6 +2663,8 @@ class ReplicationRunner:
             if watchdog is not None:
                 watchdog.cancel()
                 watchdog.join()
+
+        self._last_invocation_timed_out = timed_out
 
         if return_code == 0:
             return True

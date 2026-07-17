@@ -102,6 +102,13 @@ def replicate(
         "--replicate-timeout",
         help="Timeout in seconds for the replicate phase. Default: no timeout.",
     ),
+    replicate_heartbeat: int = typer.Option(
+        900,
+        "--replicate-heartbeat",
+        help="Seconds between check-ins during the replicate phase when "
+             "--replicate-timeout is set and the provider supports session "
+             "resume (claude only). Default: 900 (15 min).",
+    ),
     verify_timeout: Optional[int] = typer.Option(
         None,
         "--verify-timeout",
@@ -227,6 +234,7 @@ def replicate(
             analyze_timeout=analyze_timeout,
             codegen_timeout=codegen_timeout,
             replicate_timeout=replicate_timeout,
+            replicate_heartbeat_seconds=replicate_heartbeat,
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
             run_evaluation=evaluate,
