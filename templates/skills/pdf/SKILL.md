@@ -224,7 +224,9 @@ caption_hits = page.search_for("Figure 2")
 if caption_hits:
     cap = caption_hits[0]
     # Figures usually sit above their caption; take the area above it.
-    clip = fitz.Rect(0, max(cap.y0 - 320, 0), page.rect.width, cap.y1 + 8)
+    top = max(cap.y0 - 320, 0)
+    bottom = min(cap.y1 + 8, page.rect.height)
+    clip = fitz.Rect(0, top, page.rect.width, bottom)
     page.get_pixmap(clip=clip, dpi=300).save("figure2.png")
 ```
 

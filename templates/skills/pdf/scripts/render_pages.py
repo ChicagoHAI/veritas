@@ -1,8 +1,10 @@
 """Render pages of a PDF to PNG images, one file per page.
 
 Useful for visually inspecting figures, tables, equations, and layout, or
-for preparing page images for OCR. Output files are named page_001.png,
-page_002.png, ... (numbering is 1-based and matches the PDF page order).
+for preparing page images for OCR. Output files are named page_<n>.png with
+1-based numbers matching the PDF page order, zero-padded to the width of the
+page count (page_01.png .. page_15.png for a 15-page paper; page_001.png .. for
+a 100+ page one) so the names sort correctly.
 
 Requires PyMuPDF: pip install pymupdf
 
@@ -42,7 +44,9 @@ def parse_page_spec(spec, page_count):
             start = end = int(spec)
     except ValueError:
         raise ValueError(f"Invalid page spec {spec!r}; expected 'N' or 'N-M'")
-    if start < 1 or end > page_count or start > end:
+    if start > end:
+        raise ValueError(f"Page spec {spec!r} has its start after its end")
+    if start < 1 or end > page_count:
         raise ValueError(
             f"Page spec {spec!r} is out of bounds for a "
             f"{page_count}-page document"
@@ -69,6 +73,9 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.dpi < 1:
+        sys.exit(f"--dpi must be a positive integer, got {args.dpi}")
+
     pdf_path = Path(args.pdf)
     if not pdf_path.is_file():
         sys.exit(f"No such file: {pdf_path}")
@@ -76,7 +83,10 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    doc = fitz.open(pdf_path)
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as exc:
+        sys.exit(f"Could not open {pdf_path} as a PDF: {exc}")
     try:
         try:
             indices = parse_page_spec(args.pages, doc.page_count)
