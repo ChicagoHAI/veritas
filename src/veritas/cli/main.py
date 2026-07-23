@@ -144,8 +144,8 @@ def replicate(
         "--max-iters",
         help=(
             "Max manager-controlled retry iterations for the replicate phase. "
-            "1 (default) = single-pass (loop OFF; benchmark-comparable, identical "
-            "to prior behavior). >1 enables the post-replicate manager gate that "
+            "1 (default) runs a single pass with the manager loop off. "
+            ">1 enables the post-replicate manager gate that "
             "may re-run replication with new instructions, bounded by this cap. "
             "When unset, falls back to VERITAS_MAX_ITERS if set in .env, else 1."
         ),
@@ -206,9 +206,9 @@ def replicate(
             stale.unlink(missing_ok=True)
 
     # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
-    # (only when explicitly set in the environment) -> 1 (single-pass default for
-    # `replicate`, so the benchmark stays single-pass and behavior is identical
-    # to before). The loop only engages when the resolved value is > 1.
+    # (only when explicitly set in the environment) -> 1, so `replicate` stays
+    # single-pass unless a higher value is explicitly requested. The loop only
+    # engages when the resolved value is > 1.
     import os as _os
     if max_iters is not None:
         resolved_max_iters = max_iters

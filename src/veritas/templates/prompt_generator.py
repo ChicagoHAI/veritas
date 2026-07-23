@@ -406,8 +406,8 @@ class PromptGenerator:
         mode: str = "full",
         pre_codegen: bool = False,
     ) -> str:
-        """renders the prompt template that instructs the LLM to read the paper
-          and replication plan and write a structured resource estimate JSON."""
+        """Render the prompt template instructing the LLM to read the paper
+        and replication plan, then write a structured resource-estimate JSON."""
         template = self.env.get_template("analyze/resource_estimation.md")
         context = {
             **self._runtime_paths_context(output_dir=output_dir),

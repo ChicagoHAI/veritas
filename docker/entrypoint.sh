@@ -3,7 +3,7 @@
 set -e
 
 # Make container-created files world-rw so host users (any UID) can
-# manage workspace outputs after the container exits. NeuriCo pattern.
+# manage workspace outputs after the container exits.
 umask 000
 
 export PATH="/python/bin:/usr/local/bin:${PATH}"

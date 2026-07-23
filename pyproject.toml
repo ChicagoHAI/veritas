@@ -23,6 +23,11 @@ dev = [
     "pytest>=7.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/ChicagoHAI/veritas"
+Repository = "https://github.com/ChicagoHAI/veritas"
+Issues = "https://github.com/ChicagoHAI/veritas/issues"
+
 [project.scripts]
 veritas = "veritas.cli.main:app"
 
