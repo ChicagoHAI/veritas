@@ -85,7 +85,7 @@ CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
 
 VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 
-# Manager-controlled retry loop (Phase 2) filenames. The manager review pass is
+# Manager-controlled retry loop filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
 # in the .veritas state dir.
@@ -94,7 +94,7 @@ MANAGER_REVIEW_TRANSCRIPT_FILE = "manager_review_transcript.jsonl"
 WORKFLOW_LOG_FILE = "workflow.jsonl"
 WORKFLOW_MD_FILE = "workflow.md"
 
-# Manager research sub-agents (Phase 3) filenames. Each honored research request
+# Manager research sub-agents filenames. Each honored research request
 # spawns a finder sub-agent (separate provider invocation, web access) whose
 # finding + transcript land in the replication subdir, then an LLM-redactor pass
 # whose result lands alongside. ``{kind}`` is ``resource`` | ``literature`` and
@@ -473,7 +473,7 @@ class Config:
     def workflow_log_path(self) -> Path:
         return self.veritas_state_dir / WORKFLOW_LOG_FILE
 
-    # -- Manager research sub-agents (Phase 3) artifacts --------------------
+    # -- Manager research sub-agents artifacts -------------------------------
 
     def research_finding_path(self, kind: str, index: int = 0) -> Path:
         suffix = f"_{index}" if index else ""

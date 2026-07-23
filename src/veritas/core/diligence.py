@@ -7,14 +7,13 @@ facts** about what the replication run actually did. They do NOT judge
 diligence — that is the manager's (an LLM's) job, reading this evidence plus
 the full trajectory.
 
-Design intent (Haokun, 2026-06): deterministic code asserts only OBJECTIVE
-FACTS. Semantic questions — "is this a placeholder?", "was a step
-skipped/downsized?", "did the agent give up early?" — are judgment calls about
-intent and meaning. Keyword/regex matching is the wrong tool for those: it
-produces false positives (a clean run mentioning the word "placeholder" in a
-comment, a legitimately fast step that says "quick check"). Those calls belong
-to the manager, which reads the real evidence. This module was previously a
-``DiligenceSignals`` verdict with keyword pattern banks; that machinery is gone.
+Design intent: deterministic code asserts only OBJECTIVE FACTS. Semantic
+questions — "is this a placeholder?", "was a step skipped/downsized?", "did the
+agent give up early?" — are judgment calls about intent and meaning.
+Keyword/regex matching is the wrong tool for those: it produces false positives
+(a clean run mentioning the word "placeholder" in a comment, a legitimately fast
+step that says "quick check"). Those calls belong to the manager, which reads
+the real evidence.
 
 What counts as an objective fact here:
   * planned step count vs. executed step count, and which planned steps produced

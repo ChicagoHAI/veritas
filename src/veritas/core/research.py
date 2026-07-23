@@ -1,10 +1,9 @@
-"""Manager research sub-agents (Phase 3 of the iterative-manager design).
+"""Manager research sub-agents.
 
-Authoritative spec: ``notes/2026-06-03-iterative-manager-design.md`` §6 (research
-as invokable sub-agents the manager calls), §2 decision 2, §7 (careful points);
-anti-leakage template from ``notes/2026-06-02-agentic-reflection-research.md`` §5
-(AI-Scientist: propose query -> deterministic retrieval -> use only validated
-returned items; gpt-researcher grounding / mandatory citations).
+Research runs as narrow sub-agents the manager invokes, following the grounding
+pattern established by prior research agents: propose a query, retrieve
+deterministically, then use only the validated returned items, with citations
+mandatory.
 
 When the manager's verdict carries ``research_requests``, the runner dispatches a
 narrow research sub-agent per honored request:
@@ -296,7 +295,7 @@ def format_findings_for_guidance(findings: List[ResearchFinding]) -> str:
     return "\n".join(blocks)
 
 
-# --- Bounds + config (env-overridable, Phase 0 pattern) ---------------------
+# --- Bounds + config (env-overridable) --------------------------------------
 
 
 @dataclass
@@ -305,7 +304,8 @@ class ResearchConfig:
 
     All defaults are conservative and overridable via ``VERITAS_*`` so research
     is itself bounded (no unbounded fan-out) and no config is hardcoded. Resolved
-    at construction from the environment, mirroring the Phase 0 pattern.
+    at construction from the environment, mirroring the env-var config pattern
+    used elsewhere in veritas.
     """
 
     max_calls_per_iteration: int = 0
