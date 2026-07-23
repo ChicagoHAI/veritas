@@ -46,7 +46,8 @@ settings = {
     # Raise it if columns split apart; lower it if columns merge.
     "text_x_tolerance": 2,
     "text_y_tolerance": 2,
-    # With strategy "lines", ignore rules shorter than this many points.
+    # Strategy "text": how many aligned words are needed to infer a line.
+    # Raise to suppress spurious lines; lower to catch sparse ones.
     "min_words_vertical": 3,
     "min_words_horizontal": 1,
 }
@@ -56,7 +57,10 @@ tables = page.extract_tables(settings)
 ### Isolating one table
 
 `extract_tables` on a full page often picks up author blocks or column text
-as false-positive "tables". Locate the real table first, then crop:
+as false-positive "tables". `find_tables()` runs the same detection but hands
+back `Table` objects with a `.bbox`, so you can see every candidate and pick
+the one you want instead of trusting detection order. Inspect the boxes, then
+crop the real table:
 
 ```python
 import pdfplumber
@@ -64,12 +68,15 @@ import pdfplumber
 with pdfplumber.open("paper.pdf") as pdf:
     page = pdf.pages[4]
     found = page.find_tables()          # list of Table objects
-    for t in found:
-        print(t.bbox)                   # (x0, top, x1, bottom)
+    for i, t in enumerate(found):
+        print(i, t.bbox)                # (x0, top, x1, bottom)
 
-    # Extract just the first detected table, via its bounding box
+    # find_tables() is no more selective than extract_tables(); it just lets
+    # you choose. A results table is usually the widest, tallest candidate,
+    # not necessarily the first. Pick by area (or by the caption, see below).
     if found:
-        region = page.crop(found[0].bbox)
+        target = max(found, key=lambda t: (t.bbox[2] - t.bbox[0]) * (t.bbox[3] - t.bbox[1]))
+        region = page.crop(target.bbox)
         table = region.extract_table()
         for row in table:
             print(row)
