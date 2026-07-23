@@ -63,10 +63,12 @@ markdown-mermaid-writing (templates/skills/markdown-mermaid-writing/)
 Source:  https://github.com/SuperiorByteWorks-LLC/agent-project
 License: Apache License 2.0
 
-The markdown-mermaid-writing skill incorporates diagram and template material
-from agent-project. Per-file source and license headers are retained inside
-that skill's directory, and its SKILL.md carries a dedicated attribution
-section.
+The markdown-mermaid-writing skill's diagram and template material originates
+from agent-project under the Apache License 2.0; that license governs this
+content. It reached veritas bundled inside the scientific-agent-skills
+collection above, but its content is not K-Dense's. Per-file source and license
+headers are retained inside the skill's directory, and its SKILL.md carries a
+dedicated attribution section.
 
 --------------------------------------------------------------------------------
 citation resolver (src/veritas/core/citations.py)
