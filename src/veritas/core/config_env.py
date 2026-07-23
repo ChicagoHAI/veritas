@@ -1,8 +1,8 @@
-"""Typed ``VERITAS_*`` environment-variable helpers (Phase 0 config externalization).
+"""Typed ``VERITAS_*`` environment-variable helpers.
 
-The mandate (notes/2026-06-03-iterative-manager-design.md §5.1, §2 decision 7):
-*no hardcoded configs*. Tunables a user rarely changes (retry caps, grading
-tolerances #56, tier weights #61) must be overridable without touching code.
+Design principle: *no hardcoded configs*. Tunables a user rarely changes (retry
+caps, grading tolerances, tier weights) must be overridable without touching
+code.
 
 The design is deliberately simple — two sources over the code default, both
 already-familiar, with the highest-wins resolution:

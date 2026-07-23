@@ -1455,7 +1455,7 @@ class ReplicationRunner:
         findings,
         injected: str = "",
     ) -> Dict[str, Any]:
-        """Workflow-log record for one iteration's research dispatch (§6 logging)."""
+        """Workflow-log record for one iteration's research dispatch."""
         return {
             "iteration": iteration,
             "phase": "research",

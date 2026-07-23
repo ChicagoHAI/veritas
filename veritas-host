@@ -148,8 +148,8 @@ run_veritas_cli() {
 cmd_replicate() {
     # Tool check is provider-aware: python+uv are always needed, but the
     # agent CLI is only required for the provider the user actually picked.
-    # Hardcoding `claude` here broke `--provider codex` runs (Filbert
-    # caught this in review of the initial PR).
+    # The tool check must follow the requested provider — hardcoding
+    # `claude` here would break `--provider codex` runs.
     local provider
     provider="$(extract_provider "$@")"
     case "$provider" in
@@ -170,8 +170,7 @@ cmd_replicate() {
     # phase. Mirrors the docker wrapper's `--env-file` + `-e
     # VERITAS_ENV_FILE_KEYS=...` plumbing — without this, papers that
     # call OpenAI/Anthropic from inside their own code would lose their
-    # keys silently on a cluster while working fine in docker (Filbert
-    # caught this in review).
+    # keys silently on a cluster while working fine in docker.
     if [ -f "$VERITAS_REPO/.env" ]; then
         # `set -a` exports every var assigned by the sourced file, so the
         # subsequent python subprocess inherits them. Restrict perms first
