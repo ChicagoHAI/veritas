@@ -1,7 +1,6 @@
 """Deterministic, LLM-free grading of replicated values against paper values.
 
-The verify phase is split into two roles (see
-``notes/2026-06-01-verifier-split-design.md``):
+The verify phase is split into two roles:
 
 - the **comparator** (an LLM, in ``templates/verify/single_claim.md``) reads the
   messy replication evidence and emits the *objective* replicated value in a
@@ -31,7 +30,7 @@ DETERMINISTIC_TYPES = frozenset({"scalar", "scalar_range", "table"})
 
 @dataclass(frozen=True)
 class GradingTolerances:
-    """Tolerance thresholds for deterministic grading (issue #56).
+    """Tolerance thresholds for deterministic grading.
 
     Defaults mirror the rules previously described in prose in
     ``templates/verify/single_claim.md``. Lifted into a config object so a run
@@ -191,7 +190,7 @@ def _flatten_table_pairs(rep_table: Any, paper_table: Any) -> Optional[List[Tupl
     numeric pairs by exact key. Returns None if not both flat dicts, or if any
     expected paper key is absent / non-numeric in the replicated table.
 
-    Key fidelity is exact (PR #66): a mutated/missing key yields no pair for that
+    Key fidelity is exact: a mutated/missing key yields no pair for that
     cell, which the caller treats as a no_match cell — exactly the CB Mode-2
     failure this split is meant to catch deterministically.
     """

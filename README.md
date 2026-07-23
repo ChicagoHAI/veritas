@@ -26,6 +26,8 @@ Input (Paper PDF and/or Repository)
         |         rather than reimplementing it.
   4. REPLICATE    Run the plan on a writable copy of the code. Fix issues to keep
         |         going. Report what was produced, never tune toward paper values.
+        |         With --max-iters > 1, a manager reviews the attempt and can
+        |         send it back for another pass with new instructions.
   5. ASSESS       Rate each applied fix (minor / major / critical).
         |
   6. VERIFY       Per claim: an LLM comparator extracts the produced value; a
@@ -65,8 +67,10 @@ the comparator's judgment.
 ./veritas replicate --paper p.pdf --check-citations --check-citations-faithfulness all  # widen faithfulness scope
 ./veritas evaluate ./myrepo/replicate       # add the manager + report to an existing run
 ./veritas report ./myrepo/replicate         # re-render the report (no LLM)
+./veritas estimate --paper p.pdf --repo ./myrepo  # resource/cost estimate, runs nothing
 ./veritas shell                             # interactive container
 ./veritas setup                             # one-shot prereqs + image + login + .env
+./veritas config | login                    # manage .env keys | provider CLI auth
 ./veritas status                            # dashboard
 ./veritas build | update                    # build locally | pull latest image
 ```
@@ -79,7 +83,23 @@ the comparator's judgment.
   prior `replicate` produced, without re-running the pipeline. Replicate once,
   evaluate later.
 
+- **`estimate`** reads the paper and repo and reports what a run would need
+  (GPU, external LLM APIs, rough compute class) without running the pipeline.
+  `replicate --dry-run` does the same as part of a normal invocation.
+
 Run `./veritas replicate --help` for the full option list.
+
+### Retrying a weak replication (`--max-iters`)
+
+By default Veritas makes one replication attempt. With `--max-iters N` (N > 1),
+a manager reviews each attempt before verification and decides whether to accept
+it or send it back with new instructions, up to a hard cap of N. The manager sees
+objective execution facts (which planned steps ran, exit codes, which declared
+outputs exist, repeated commands) — never the paper's claimed values. When it
+needs something the run lacked, such as a missing dataset or an underspecified
+method, it can dispatch narrow research sub-agents whose findings are scrubbed of
+known result values before they reach the retry. Each attempt is archived, and
+the full decision trail is written to `.veritas/workflow.md`.
 
 ### Input modes
 
@@ -145,12 +165,15 @@ automatically.
 ```bash
 pip install -e .                             # one-time, into a venv
 ./veritas-host --paper paper.pdf --repo ./code --output ./run-1
-./veritas-host evaluate ./run-1              # same subcommands as the docker wrapper
+./veritas-host evaluate ./run-1              # same pipeline subcommands
 ```
 
 The host wrapper stages the same workspace the container would and runs the same
 pipeline. It resolves the Python that has the deps (an installed `veritas`, the
-repo's `.venv`, or `uv run`).
+repo's `.venv`, or `uv run`). It supports the pipeline subcommands (`full`,
+`replicate`, `estimate`, `evaluate`, `report`, `check-citations`) but not the
+image-lifecycle ones (`shell`, `setup`, `build`, `update`, `status`), which are
+docker-only concerns.
 
 ## Replication API keys (`.env`)
 
@@ -187,15 +210,20 @@ Five shape-typed claim categories; each claim carries a tier that sets its weigh
 
 ```
 replicate/
-├── analyze/        paper_claims.json, replication_plan.json (+ transcripts)
+├── analyze/        paper_claims.json, replication_plan.json, resource_estimate.json (+ transcripts)
 ├── replication/    codebase/ (patched copy), codebase.diff, replication_log.json, evidence_summary.json
 ├── assess/         fix_severity.json
 ├── verify/         <claim_id>.json (per claim, with the grading rule), verdicts.json, replication_score.json
 ├── evaluation/     contextual_evaluation.json  (the manager's notes; product runs only)
 ├── report/         replication_report.{html,pdf,md}
 ├── prompts/        rendered prompts (debug)
+├── resource_usage.json   wall time, tokens, disk, approximate cost
 └── .veritas/       pipeline_state.json (resume checkpoint)
 ```
+
+With `--max-iters > 1`, each superseded attempt is archived alongside as
+`replication.attempt-N/`, and the manager's decision trail is written to
+`.veritas/workflow.md` (plus `workflow.jsonl`).
 
 ## Resuming runs
 
@@ -203,6 +231,25 @@ After each phase, Veritas writes its state to `<output>/.veritas/`. Re-invoking
 against the same `--output` directory skips completed phases. Verify resumes per
 claim. Pass `--restart` to start fresh.
 
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The suite covers the deterministic layers — the score computation, the grader,
+the bibliographic resolver, the manager loop, and the execution-facts pass.
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE). Veritas bundles third-party components
+(the `templates/skills/` catalog and others); their licenses and attributions
+are recorded in [NOTICE](NOTICE).
+
 ## Acknowledgments
 
 - Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo).
+- The bundled scientific-computing skills under `templates/skills/` are adapted
+  from [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills)
+  (MIT, © K-Dense Inc.). See [NOTICE](NOTICE) for details.

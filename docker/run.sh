@@ -1199,9 +1199,9 @@ cmd_replicate() {
     ensure_credential_perms
 
     # Surface actual GPU model/VRAM per device as a fact prompt_generator.py
-    # can thread into codegen/plan/replicate prompts (issue #92: codegen
-    # previously defaulted to CPU-only code blind to whether a GPU would even
-    # be present at replicate time). Empty when get_gpu_flags found none.
+    # can thread into codegen/plan/replicate prompts, so codegen does not
+    # default to CPU-only code while blind to whether a GPU will be present at
+    # replicate time. Empty when get_gpu_flags found none.
     local gpu_info_flag=""
     local gpu_info
     gpu_info=$(get_gpu_info "$gpu_flags")

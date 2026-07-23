@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A replication agent for evaluating the reproducibility of scientific findings"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = [
     { name = "Veritas Team" }
 ]
@@ -22,6 +22,11 @@ dev = [
     "ruff>=0.1.0",
     "pytest>=7.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ChicagoHAI/veritas"
+Repository = "https://github.com/ChicagoHAI/veritas"
+Issues = "https://github.com/ChicagoHAI/veritas/issues"
 
 [project.scripts]
 veritas = "veritas.cli.main:app"

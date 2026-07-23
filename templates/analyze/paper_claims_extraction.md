@@ -79,8 +79,8 @@ Each claim object has these fields:
 ## Type Definitions and `paper_value` Shapes
 
 - **`scalar`** — a single numerical result with units. `paper_value` is a number or a list of numbers (e.g., per-condition values).
-  Examples: "accuracy = 92.3%", "TAMS H mass fractions = [0.27, 0.23, 0.21]".
-  When the paper states an uncertainty (e.g. "0.719 ± 0.085"), keep the ± in `description` — the verifier's tolerance scales to the paper's stated σ when the claim conveys one. When per-condition values carry natural labels, prefer a dict keyed by those labels (e.g. `{"N50": 0.69, "N200": 0.65}`) over a bare list — downstream matching is by key.
+  Examples: "accuracy = 92.3%", "per-condition yields = [0.27, 0.23, 0.21]".
+  When the paper states an uncertainty (e.g. "0.41 ± 0.06"), keep the ± in `description` — the verifier's tolerance scales to the paper's stated σ when the claim conveys one. When per-condition values carry natural labels, prefer a dict keyed by those labels (e.g. `{"N50": 0.69, "N200": 0.65}`) over a bare list — downstream matching is by key.
 
 - **`scalar_range`** — a numerical range or set of related ranges. `paper_value` is `[min, max]` or a dict keyed by sub-condition.
   Examples: "reduction is ~42-96%", "ratio minima between 0.56-0.07 / 0.58-0.08 / 0.51-0.04".
@@ -88,7 +88,7 @@ Each claim object has these fields:
 - **`table`** — a tabular result with row × column structure. `paper_value` is `{"columns": [...], "rows": [{"label": "...", "values": [...]}]}`. Use this when the paper presents results in a table and individual cells matter.
 
 - **`qualitative`** — a non-numeric observation about the system's behavior. `paper_value` is omitted or a string. The `verification` field tells the verifier what semantic match looks like.
-  Examples: "blue loops occur in low-mass binaries", "rotation has smaller effect than accretion history".
+  Examples: "the effect appears only in the low-resource condition", "parameter A has a smaller effect on the outcome than parameter B".
 
 - **`figure`** — a paper figure that the code is expected to reproduce. `expected_output_file` points at the produced figure path. `paper_value` is usually omitted; the `verification` field describes the expected structure (panel layout, color coding, axes, key features).
 
@@ -106,8 +106,8 @@ The `verification` field tells the verifier what to read and where. For numeric 
 Good `verification` instructions for the verifier:
 
 - For a `scalar` claim: "Read the final accuracy from the `accuracy` field of the `metrics.json` file produced by `evaluate.py`."
-- For a `figure` claim: "Inspect the produced PDF at `expected_output_file`. The figure should show three color-coded trajectories on an HR diagram with iso-radius reference lines."
-- For a `qualitative` claim: "From the HR diagram trajectories: check whether accretors of low-mass binaries make a hot-side excursion (T_eff increases then decreases) post-MS."
+- For a `figure` claim: "Inspect the produced PDF at `expected_output_file`. The figure should show three color-coded trajectories on a 2D parameter plot with reference iso-lines."
+- For a `qualitative` claim: "From the plotted trajectories: check whether the treatment condition makes a non-monotonic excursion (the tracked quantity rises, then falls) in the later stage of the run."
 
 ## Output
 

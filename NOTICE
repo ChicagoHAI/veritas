@@ -1,0 +1,81 @@
+Veritas
+Copyright 2026 ChicagoHAI
+
+This product includes software developed at ChicagoHAI
+(https://github.com/ChicagoHAI). Licensed under the Apache License, Version
+2.0; see the LICENSE file.
+
+================================================================================
+Third-party components
+================================================================================
+
+--------------------------------------------------------------------------------
+scientific-agent-skills (templates/skills/)
+--------------------------------------------------------------------------------
+
+Source:  https://github.com/K-Dense-AI/scientific-agent-skills
+License: MIT License
+Copyright (c) 2025 K-Dense Inc.
+
+The scientific-computing skill packages bundled under templates/skills/ are
+adapted from scientific-agent-skills, an MIT-licensed collection of agent
+skills by K-Dense Inc. Several are close derivatives of the upstream files.
+The MIT license terms are reproduced below and apply to that material.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+Skills adapted from scientific-agent-skills:
+  - astropy/
+  - dask/
+  - exploratory-data-analysis/
+  - get-available-resources/
+  - markitdown/
+  - matplotlib/
+  - networkx/
+  - polars/
+  - scientific-visualization/
+  - scikit-learn/
+  - seaborn/
+  - statistical-analysis/
+  - statsmodels/
+  - sympy/
+
+--------------------------------------------------------------------------------
+markdown-mermaid-writing (templates/skills/markdown-mermaid-writing/)
+--------------------------------------------------------------------------------
+
+Source:  https://github.com/SuperiorByteWorks-LLC/agent-project
+License: Apache License 2.0
+
+The markdown-mermaid-writing skill's diagram and template material originates
+from agent-project under the Apache License 2.0; that license governs this
+content. It reached veritas bundled inside the scientific-agent-skills
+collection above, but its content is not K-Dense's. Per-file source and license
+headers are retained inside the skill's directory, and its SKILL.md carries a
+dedicated attribution section.
+
+--------------------------------------------------------------------------------
+citation resolver (src/veritas/core/citations.py)
+--------------------------------------------------------------------------------
+
+Source:  https://github.com/markrussinovich/refchecker
+License: MIT License
+
+The deterministic bibliographic resolver adapts the reference-verification
+approach and pre-filter thresholds from refchecker.

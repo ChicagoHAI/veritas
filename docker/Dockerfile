@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.5
 # veritas: Docker image for running the full replication pipeline
-# Adapted from idea-explorer's (NeuriCo) proven multi-stage build
+# Multi-stage build adapted from NeuriCo (https://github.com/ChicagoHAI/NeuriCo)
 
 ARG CUDA_VERSION=12.5.1
 ARG UBUNTU_VERSION=22.04
