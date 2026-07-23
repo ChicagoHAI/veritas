@@ -637,10 +637,10 @@ sns.set_context('paper', font_scale=1.2)  # Increase if needed
 #### Additional Resources
 
 For more detailed seaborn information, see:
-- `scientific-skills/seaborn/SKILL.md` - Comprehensive seaborn documentation
-- `scientific-skills/seaborn/references/examples.md` - Practical use cases
-- `scientific-skills/seaborn/references/function_reference.md` - Complete API reference
-- `scientific-skills/seaborn/references/objects_interface.md` - Modern declarative API
+- `../seaborn/SKILL.md` - Comprehensive seaborn documentation
+- `../seaborn/references/examples.md` - Practical use cases
+- `../seaborn/references/function_reference.md` - Complete API reference
+- `../seaborn/references/objects_interface.md` - Modern declarative API
 
 ### Plotly
 - Interactive figures for exploration
