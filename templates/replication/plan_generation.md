@@ -99,7 +99,7 @@ For each step, provide:
 
 GOOD (shape-prescriptive):
 - "Produces `output/metrics.json` with field `accuracy` (float in [0,1])."
-- "Writes `figures/HRD.pdf` showing the HR diagram for all three binaries."
+- "Writes `figures/loss_curve.pdf` showing training and validation loss over epochs."
 - "Logs to stdout in the format `[step] X done, time=Y s`."
 
 BAD (value-prescriptive — DO NOT do this):

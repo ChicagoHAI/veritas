@@ -1,4 +1,4 @@
-"""Unit tests for VERITAS_* config externalization (Phase 0).
+"""Unit tests for VERITAS_* config externalization.
 
 Covers the typed env helpers' resolution (default when unset, env override when
 set, bad value -> default + no crash) and that the migrated tunables

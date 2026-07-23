@@ -65,8 +65,8 @@ VALID_GENUINENESS = {
 class ManagerVerdict:
     """Structured verdict from the manager review pass.
 
-    Mirrors Magentic-One's Progress Ledger (strict, machine-readable) plus the
-    diligence-calibration fields the design adds. ``source`` records whether the
+    Mirrors Magentic-One's Progress Ledger (strict, machine-readable) plus
+    diligence-calibration fields. ``source`` records whether the
     verdict came from the deterministic short-circuit or the LLM, so the
     workflow log is honest about which path decided.
     """
@@ -105,8 +105,8 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     """Parse + normalize a manager verdict dict into a :class:`ManagerVerdict`.
 
     Defensive: unknown enum values are coerced to safe defaults that **bias to
-    ACCEPT** (the design's "bias to ACCEPT past iteration 1" / never block on a
-    malformed verdict). A ``revise`` decision missing a usable directive is
+    ACCEPT** past the first iteration, so a malformed verdict never blocks the
+    run. A ``revise`` decision missing a usable directive is
     downgraded to ``accept`` so we never re-run with empty guidance (a blank
     re-run is just a repeat, which the loop forbids).
     """
@@ -118,7 +118,7 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     v.diligence_sufficient = bool(raw.get("diligence_sufficient", True))
 
     genuine = str(raw.get("deficiency_is_genuine", GENUINENESS_DIVERGENT)).strip().lower()
-    # Tolerate the design doc's longer phrasings by substring match.
+    # Tolerate longer LLM phrasings by substring match.
     if genuine not in VALID_GENUINENESS:
         if "deficien" in genuine:
             genuine = GENUINENESS_DEFICIENT
@@ -159,7 +159,7 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
             v.decision = DECISION_ACCEPT
             v.reason = (v.reason + " [downgraded: revise emitted without a directive]").strip()
         elif v.target_phase is None:
-            # Default the target to replicate (the design's primary re-run target).
+            # Default the target to replicate (the primary re-run target).
             v.target_phase = "replicate"
 
     return v
