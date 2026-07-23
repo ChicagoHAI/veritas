@@ -241,6 +241,15 @@ pytest
 The suite covers the deterministic layers — the score computation, the grader,
 the bibliographic resolver, the manager loop, and the execution-facts pass.
 
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE). Veritas bundles third-party components
+(the `templates/skills/` catalog and others); their licenses and attributions
+are recorded in [NOTICE](NOTICE).
+
 ## Acknowledgments
 
 - Built upon research from [NeuriCo](https://github.com/ChicagoHAI/NeuriCo).
+- The bundled scientific-computing skills under `templates/skills/` are adapted
+  from [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills)
+  (MIT, © K-Dense Inc.). See [NOTICE](NOTICE) for details.
