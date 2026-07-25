@@ -193,7 +193,7 @@ replicate/
 ├── analyze/        paper_claims.json, replication_plan.json (+ transcripts)
 ├── replication/    codebase/ (patched copy), codebase.diff, replication_log.json, evidence_summary.json
 ├── assess/         fix_severity.json
-├── verify/         <claim_id>.json (per claim, with the grading rule), verdicts.json, replication_score.json
+├── verify/         <claim_id>.json (per claim, with the grader's cited rationale), verdicts.json, replication_score.json
 ├── evaluation/     contextual_evaluation.json  (the manager's notes; product runs only)
 ├── report/         replication_report.{html,pdf,md}
 ├── prompts/        rendered prompts (debug)

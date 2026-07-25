@@ -65,17 +65,23 @@ def compute_replication_score(
         score = sum(tier_weight[c.tier] * verdict_value[v.status]) /
                 sum(tier_weight[c.tier])
 
-    where the sums range over claims whose verdict status is NOT
-    ``not_applicable``. Claims with no verdict file (missing) are recorded
-    in ``missing_verdicts`` and excluded from the score; the report flags
-    them so they're not silently dropped.
+    where the sums exclude ``not_applicable`` claims and ``not_attempted``
+    claims whose ``not_attempted_reason`` is in ``SCORE_EXCLUDED_REASONS``
+    (``blocked_infra`` / ``no_evidence`` — run/tooling limitations, not charged
+    against the paper). A ``not_attempted`` with reason ``authors_missing`` —
+    or with no reason at all (legacy verdicts) — stays in the sums as a 0.
+    Claims with no verdict file (missing) are recorded in ``missing_verdicts``
+    and excluded from the score; the report flags them so they're not silently
+    dropped.
 
     Edge cases:
-    - All ``not_applicable`` (or no non-NA verdicts exist): ``score = None``,
-      a flag is added.
+    - Every verdict excluded (all ``not_applicable`` / excluded
+      ``not_attempted``), or no verdicts at all: ``score = None``, a flag is
+      added.
     - Zero headline claims extracted: score still computes from supporting;
       a flag is added.
-    - All ``not_attempted``: score = 0.0; a flag is added.
+    - Fewer than ``MIN_JUDGEABLE_CLAIMS`` claims counted: the score still
+      computes but carries a low-confidence flag.
     """
     verdict_by_id = {v.claim_id: v for v in verdicts}
 
