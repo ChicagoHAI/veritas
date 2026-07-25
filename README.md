@@ -241,8 +241,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The suite covers the deterministic layers — the score computation, the grader,
-the bibliographic resolver, the manager loop, and the execution-facts pass.
+The suite covers the deterministic layers — the score computation, the
+bibliographic resolver, the manager loop, and the execution-facts pass.
 
 ## License
 
