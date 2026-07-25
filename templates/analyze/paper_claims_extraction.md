@@ -101,7 +101,7 @@ When choosing tier, favor `supporting` unless the claim is clearly the paper's c
 
 ## Verification Field — Concrete Examples
 
-The `verification` field tells the verifier what to read and where. For numeric claims (`scalar`, `scalar_range`, `table`) it should locate the replicated value — the file, the field, the units, which run produces it. Do NOT write numeric decision rules into it: pass/fail is decided downstream by a deterministic grader with its own tolerance policy, and an invented tolerance (especially a zero/exact-match one) cannot be honored. For `qualitative` and `figure` claims the verifier judges directly, so there `verification` should describe what a match looks like.
+The `verification` field tells the verifier what to read and where. For numeric claims (`scalar`, `scalar_range`, `table`) it should locate the replicated value — the file, the field, the units, which run produces it. Do NOT write numeric decision rules into it: pass/fail is decided by the verify grader against its own tolerance rubric, and an invented tolerance (especially a zero/exact-match one) cannot be honored. For `qualitative` and `figure` claims the verifier judges directly, so there `verification` should describe what a match looks like.
 
 Good `verification` instructions for the verifier:
 

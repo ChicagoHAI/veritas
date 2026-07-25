@@ -2,8 +2,8 @@
 
 Covers the typed env helpers' resolution (default when unset, env override when
 set, bad value -> default + no crash) and that the migrated tunables
-(GradingTolerances, TIER_WEIGHTS, Config.max_iters / timeouts) keep their code
-defaults when no VERITAS_* var is set.
+(TIER_WEIGHTS, Config.max_iters / timeouts) keep their code defaults when no
+VERITAS_* var is set.
 """
 
 import importlib
@@ -95,29 +95,6 @@ def test_env_opt_int_bad_value_falls_back(monkeypatch):
 
 
 # -- migrated tunables: defaults unchanged when unset ---------------------
-
-def test_grading_tolerances_defaults_unchanged():
-    from veritas.core.grading import GradingTolerances
-    t = GradingTolerances()
-    assert t.match_rel == 0.05
-    assert t.partial_rel == 0.30
-    assert t.sigma_match == 1.0
-    assert t.sigma_partial == 2.0
-    assert t.near_zero_abs == 1e-9
-    assert t.match_abs == 1e-6
-    assert t.range_overlap_match == 0.80
-
-
-def test_grading_tolerances_env_override(monkeypatch):
-    monkeypatch.setenv("VERITAS_GRADE_MATCH_REL", "0.12")
-    monkeypatch.setenv("VERITAS_GRADE_SIGMA_PARTIAL", "3.0")
-    from veritas.core.grading import GradingTolerances
-    t = GradingTolerances()
-    assert t.match_rel == 0.12
-    assert t.sigma_partial == 3.0
-    # untouched fields keep their defaults
-    assert t.partial_rel == 0.30
-
 
 def test_tier_weights_defaults_unchanged():
     # TIER_WEIGHTS is a module constant evaluated at import; re-import under a

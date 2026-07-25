@@ -20,3 +20,63 @@ def test_score_dict_has_no_setup_key():
     score = compute_replication_score(claims, verdicts)
     assert score.score == 1.0
     assert "setup" not in score.to_dict()
+
+
+# -- not_attempted reason gate: denominator exclusion (issue #102) ---------
+
+def _two_claim_score(v1_status, v2_status, v2_reason=None):
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+        PaperClaim(id="C2", description="d", type="scalar", tier="headline"),
+    ])
+    verdicts = [
+        ClaimVerdict(claim_id="C1", status=v1_status),
+        ClaimVerdict(claim_id="C2", status=v2_status, not_attempted_reason=v2_reason),
+    ]
+    return compute_replication_score(claims, verdicts)
+
+
+def test_blocked_infra_excluded_from_denominator():
+    # C1 match, C2 not_attempted(blocked_infra) -> C2 dropped, score = 1.0 (not 0.5).
+    score = _two_claim_score("match", "not_attempted", "blocked_infra")
+    assert score.score == 1.0
+    assert score.counted_claims == 1
+    assert any("excluded from the denominator" in f for f in score.flags)
+
+
+def test_no_evidence_excluded_from_denominator():
+    score = _two_claim_score("match", "not_attempted", "no_evidence")
+    assert score.score == 1.0
+    assert score.counted_claims == 1
+
+
+def test_authors_missing_counts_as_failure():
+    # authors_missing stays in the denominator as a 0 -> score = 0.5.
+    score = _two_claim_score("match", "not_attempted", "authors_missing")
+    assert score.score == 0.5
+    assert score.counted_claims == 2
+
+
+def test_reasonless_not_attempted_still_counts_zero():
+    # Legacy verdicts without a reason keep the old behavior (0 in denominator).
+    score = _two_claim_score("match", "not_attempted", None)
+    assert score.score == 0.5
+    assert score.counted_claims == 2
+
+
+def test_low_confidence_flag_when_few_judgeable():
+    # 1 match + 1 excluded(blocked_infra) -> score 1.0 but only 1 judgeable claim.
+    score = _two_claim_score("match", "not_attempted", "blocked_infra")
+    assert score.score == 1.0 and score.counted_claims == 1
+    assert any("Low-confidence score" in f for f in score.flags)
+
+
+def test_no_low_confidence_flag_when_enough_judgeable():
+    claims = PaperClaims(claims=[
+        PaperClaim(id=f"C{i}", description="d", type="scalar", tier="headline")
+        for i in range(3)
+    ])
+    verdicts = [ClaimVerdict(claim_id=f"C{i}", status="match") for i in range(3)]
+    score = compute_replication_score(claims, verdicts)
+    assert score.counted_claims == 3
+    assert not any("Low-confidence" in f for f in score.flags)
