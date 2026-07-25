@@ -28,8 +28,9 @@ Input (Paper PDF and/or Repository)
         |         going. Report what was produced, never tune toward paper values.
   5. ASSESS       Rate each applied fix (minor / major / critical).
         |
-  6. VERIFY       Per claim: an LLM comparator extracts the produced value; a
-        |         deterministic, LLM-free grader decides match / partial / no_match.
+  6. VERIFY       Per claim: an evidence-reading grader agent reads whatever the
+        |         run produced (numbers, tables, figures, logs) and decides
+        |         match / partial / no_match — or not_attempted with a reason.
         |         Aggregate into a tier-weighted Replication Score.
         |
   7. EVALUATE     (product runs) A manager reviews the whole run: which claims
@@ -38,7 +39,7 @@ Input (Paper PDF and/or Repository)
         |
   REPORT          A styled HTML report (+ matching PDF, + markdown) with a
                   gist-first verdict card, the manager's narrative, and the
-                  deterministic tables underneath.
+                  per-claim tables underneath.
 ```
 
 Veritas extracts each paper's own claims and checks them one at a time against
@@ -47,12 +48,14 @@ average of verdict values (`match=1.0`, `partial=0.5`, `no_match=0.0`,
 `not_attempted=0.0`) with tier weights `headline=3, supporting=2`.
 `not_applicable` claims are excluded.
 
-The score is computed by code, not by a model. For numeric and table claims the
-verify phase splits in two: the LLM **comparator** extracts the value the run
-produced, and a deterministic **grader** decides the verdict from that value
-against the paper value and a declared tolerance. Each verdict records how it was
-graded. Qualitative and figure claims, which have no number to compute on, keep
-the comparator's judgment.
+Grading is done by an **evidence-reading agent**, one claim at a time: it reads
+the artifact the run actually produced — in whatever form it took — applies the
+claim's tolerance rubric, and grades it, citing the exact evidence it relied on.
+When it genuinely cannot grade, it returns `not_attempted` **with a reason**:
+`authors_missing` (the code/data was never shipped — a real failure, scored 0),
+or `blocked_infra` / `no_evidence` (a run/tooling limitation, not the paper's
+fault — excluded from the denominator rather than charged as a 0). This keeps a
+tooling gap from being mistaken for a refutation.
 
 ## Commands
 

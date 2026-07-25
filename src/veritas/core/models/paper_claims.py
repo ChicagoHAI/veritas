@@ -32,6 +32,27 @@ VERDICT_VALUES: Dict[str, float] = {
     "not_applicable": 0.0,
 }
 
+# When the grader returns ``not_attempted`` it must say *why* it could not grade,
+# so scoring can tell a real failure apart from a run/tooling limitation. The
+# reason is set by the evidence-reading grader agent (see
+# ``templates/verify/single_claim.md``) and must be backed by cited evidence.
+#
+#   authors_missing — the released artifact needed to check this claim was never
+#                     shipped by the authors (no code/data/checkpoint in the
+#                     codebase). A genuine reproducibility failure → SCORED 0,
+#                     kept in the denominator.
+#   blocked_infra   — the code exists but this run could not produce the evidence
+#                     for environment reasons (OOM, timeout, missing GPU/hardware,
+#                     the step was not executed). Not the paper's fault →
+#                     EXCLUDED from the denominator, like ``not_applicable``.
+#   no_evidence     — evidence is genuinely indeterminate despite the code being
+#                     present and run (rare residual). Conservative: EXCLUDED from
+#                     the denominator so a tooling gap never penalizes the paper.
+NOT_ATTEMPTED_REASONS = frozenset({"authors_missing", "blocked_infra", "no_evidence"})
+# Reasons that remove a ``not_attempted`` claim from the score denominator
+# (our-side / indeterminate). ``authors_missing`` is NOT here — it counts as 0.
+SCORE_EXCLUDED_REASONS = frozenset({"blocked_infra", "no_evidence"})
+
 
 @dataclass
 class Provenance:
@@ -150,9 +171,14 @@ class ClaimVerdict:
     rationale: str = ""
     evidence_refs: List[str] = field(default_factory=list)
     n_a_reason: Optional[str] = None  # populated only when status == "not_applicable"
-    # How the status was decided: "deterministic" (graded by core.grading from
-    # the comparator's extracted value) or "llm" (the comparator's own judgment,
-    # used for qualitative/figure claims and non-gradable table shapes).
+    # Why the grader could not grade — populated only when status ==
+    # "not_attempted"; one of ``NOT_ATTEMPTED_REASONS``. Drives whether the claim
+    # counts against the paper or is excluded from the denominator (see
+    # ``SCORE_EXCLUDED_REASONS`` and ``verify.compute_replication_score``).
+    not_attempted_reason: Optional[str] = None
+    # How the status was decided. "agent": the evidence-reading grader agent's own
+    # adjudication (the current path for every claim type). "llm"/"deterministic"
+    # appear only on verdicts produced by older runs.
     graded_by: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -165,6 +191,8 @@ class ClaimVerdict:
         }
         if self.n_a_reason is not None:
             d["n_a_reason"] = self.n_a_reason
+        if self.not_attempted_reason is not None:
+            d["not_attempted_reason"] = self.not_attempted_reason
         if self.graded_by is not None:
             d["graded_by"] = self.graded_by
         return d
@@ -178,6 +206,7 @@ class ClaimVerdict:
             rationale=data.get("rationale", ""),
             evidence_refs=data.get("evidence_refs", []),
             n_a_reason=data.get("n_a_reason"),
+            not_attempted_reason=data.get("not_attempted_reason"),
             graded_by=data.get("graded_by"),
         )
 

@@ -16,7 +16,7 @@ from veritas.core.models.resource_estimate import ResourceEstimate
 from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
-from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore
+from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore, NOT_ATTEMPTED_REASONS
 from veritas.core.paper_claims import parse_paper_claims_response
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
@@ -1869,49 +1869,40 @@ class ReplicationRunner:
             print(f"  Warning: could not parse verdict for {claim.id}: {e}")
             return None
 
-        # Verifier split: the LLM above is the *comparator* (it extracts the
-        # replicated value). For deterministically-gradable claim types, re-derive
-        # the status from that value with the LLM-free grader, so the entity that
-        # produced the value does not also grade it (independence + auditability).
-        verdict = self._apply_deterministic_grade(claim, verdict)
+        # The grader agent above is the sole authority on the verdict for every
+        # claim type — it reads the produced evidence (numbers, tables, figures,
+        # logs) and grades it directly, citing what it read. There is no
+        # deterministic re-grade: a regex that could not parse a value used to
+        # override a correct evidence-based verdict with ``not_attempted`` (0),
+        # which deflated scores (issue #102). We only normalize the reason gate.
+        verdict = self._finalize_verdict(claim, verdict)
 
         output_json_path.write_text(
             json.dumps(verdict.to_dict(), indent=2), encoding='utf-8'
         )
         return verdict
 
-    def _apply_deterministic_grade(
+    def _finalize_verdict(
         self, claim: PaperClaim, verdict: ClaimVerdict
     ) -> ClaimVerdict:
-        """Re-grade a numeric/table claim deterministically from the comparator's
-        extracted value; passthrough for qualitative/figure and non-gradable
-        shapes. Records grading provenance in ``structured['grading']`` and sets
-        ``graded_by``."""
-        from veritas.core.grading import grade_claim, GradingTolerances, DETERMINISTIC_TYPES
-
-        # not_applicable is a structural call the comparator owns; never override.
-        if claim.type not in DETERMINISTIC_TYPES or verdict.status == "not_applicable":
-            verdict.graded_by = verdict.graded_by or "llm"
-            return verdict
-
-        tol = GradingTolerances()
-        status, why, graded_by = grade_claim(claim.type, verdict.structured, verdict.status, tol)
-
-        verdict.structured = dict(verdict.structured or {})
-        verdict.structured["grading"] = {
-            "deterministic_status": status if graded_by == "deterministic" else None,
-            "comparator_proposed_status": verdict.status,
-            "rule": why,
-            "graded_by": graded_by,
-            "tolerances": tol.to_dict(),
-        }
-        if graded_by == "deterministic" and status != verdict.status:
-            print(f"    {claim.id}: comparator said {verdict.status}, grader says {status} ({why})")
-        comparator_rationale = verdict.rationale
-        verdict.status = status
-        verdict.graded_by = graded_by
-        if graded_by == "deterministic":
-            verdict.rationale = f"[deterministic grade] {why}. Comparator notes: {comparator_rationale}"
+        """Stamp provenance and normalize the abstention reason on an agent
+        verdict. Does NOT touch ``status`` — the grader agent owns that. Ensures a
+        ``not_attempted`` verdict carries a valid ``not_attempted_reason`` so
+        scoring can tell an our-side/tooling limit apart from a real failure."""
+        verdict.graded_by = "agent"
+        if verdict.status == "not_attempted":
+            reason = verdict.not_attempted_reason
+            if reason not in NOT_ATTEMPTED_REASONS:
+                # Grader omitted or malformed the reason. Default to the
+                # conservative-for-the-paper bucket (excluded, not scored 0) and
+                # surface it so the gap is visible rather than silently penalizing.
+                if reason is not None:
+                    print(f"    {claim.id}: unknown not_attempted_reason "
+                          f"{reason!r}; defaulting to 'no_evidence'")
+                verdict.not_attempted_reason = "no_evidence"
+        else:
+            # Reason only meaningful for not_attempted; drop any stray value.
+            verdict.not_attempted_reason = None
         return verdict
 
     def _load_verdict(self, claim_id: str) -> Optional[ClaimVerdict]:

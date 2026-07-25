@@ -66,14 +66,48 @@ underlying computation is correct — avoid both:
 
 ## How your verdict is used (read first)
 
-For **scalar / scalar_range / table** claims you are the **comparator**: your job is to extract the replicated value *accurately and objectively* into `structured`. A separate deterministic grader (not an LLM) then decides `match | partial | no_match` from your extracted value against `paper_value` and the run's tolerance policy (defaults shown per type below) — so your numeric `status` is only a proposal and **will be re-derived from your `structured` values**. Get the *values, keys, and uncertainty* right; the pass/fail is computed, not argued. The rules below tell you what that grader will compute, so you can sanity-check your extraction.
+**You are the sole grader. Your `status` is the final verdict for every claim
+type** — there is no second pass that re-derives or overrides it. So do the work:
+read the evidence this run actually produced (numbers, tables, CSVs, figures,
+logs — whatever form it took), compare it against the claim, and decide
+`match | partial | no_match` by applying the rules below yourself.
 
-For **qualitative / figure** claims there is no number to compute on, so **your
-`status` is authoritative** — judge carefully.
+Two decisions, kept separate:
 
-In all cases set `value_found` honestly: `true` only if this run actually
-produced a value/figure to compare; `false` (→ not_attempted) if it did not.
-Never guess a value to fill the slot.
+1. **Can this claim be graded at all?** Grade it whenever the run produced
+   evidence that bears on the claim — in *any* format. A result that lands in a
+   figure, a log line, a CSV cell, or an oddly-shaped dict is still gradeable;
+   read it and grade it. Only when there is genuinely nothing to grade do you
+   return `not_attempted` — and then you must say **why** (see the reason gate).
+   Never return `not_attempted` just because the value was awkward to extract or
+   wasn't a clean scalar.
+2. **Did it match?** Apply the type-specific rubric below.
+
+Still populate `structured` with the values/keys you read — it is the audit
+trail, and your rationale must cite the exact evidence (file + value/quote) that
+supports your verdict. A verdict whose values point at no cited evidence cannot
+be trusted, so cite first, conclude second.
+
+### The reason gate (only when status == `not_attempted`)
+
+Set `not_attempted_reason` to exactly one of — and **back it with cited
+evidence**, because "excluded" must cost evidence, never be a free escape hatch:
+
+- `authors_missing` — the code/data/checkpoint needed to check this claim was
+  never shipped in the codebase (cite the *absence*: the file/module isn't
+  there). This is a real reproducibility failure and **scores as a 0**.
+- `blocked_infra` — the code exists but this run could not produce the evidence
+  for environment reasons: an out-of-memory, a timeout, a missing GPU/hardware,
+  a crash, or a step that was never executed (cite the traceback / error / the
+  log showing the step did not run). This is **not the paper's fault** and is
+  **excluded from scoring**.
+- `no_evidence` — a genuine last resort: the code is present and ran, yet the
+  evidence is indeterminate and you cannot attribute it to either side above.
+  Also excluded from scoring. Prefer one of the first two whenever the evidence
+  lets you attribute the gap; do not default here to avoid a judgment.
+
+If in doubt between grading and abstaining, **grade** — an ungradeable-looking
+result with produced evidence is usually a `no_match`, not a `not_attempted`.
 
 ## Type-Specific Adjudication Rules
 
@@ -83,10 +117,10 @@ Never guess a value to fill the slot.
 - `match` — if the claim conveys an uncertainty in any form (a `±` marker in the description, a high/low range in `paper_value`, an `*_unc` / `*_sigma` / `*_err` field, or an analogous convention), the replicated value is within ±1σ of `paper_value`. Otherwise within 5% relative error (for a paper value that is essentially zero, a small absolute band replaces the relative test).
 - `partial` — within ±2σ if an uncertainty is given, otherwise within 30% relative error.
 - `no_match` — outside those bands.
-- `not_attempted` — relevant evidence files were never produced.
+- `not_attempted` — no value bearing on this claim was produced (set `not_attempted_reason`; see the reason gate).
 - `not_applicable` — the claim isn't checkable from this run's evidence in principle (set `n_a_reason`).
 
-Populate `structured`: (the grader reads these exact fields)
+Populate `structured` (record the values you compared — your audit trail):
 
     {
       "replicated_value": <number, list, or flat dict {key: number} — what THIS run produced; null if none>,
@@ -105,7 +139,7 @@ Populate `structured`: (the grader reads these exact fields)
 - `no_match` — every value falls outside even the widened range.
 - `not_attempted` / `not_applicable` — as for scalar.
 
-Populate `structured`: (the grader reads these exact fields)
+Populate `structured` (record the values you compared — your audit trail):
 
     {
       "replicated_value": <number or list of numbers this run produced; null if none>,
@@ -128,7 +162,7 @@ not by row order or position. For an **asymmetric** matrix (where cell [A][B] �
 designates, not its transpose. Report the value under the exact key the claim
 uses for that question.
 
-Populate `structured`: (the grader compares per key — prefer flat dicts)
+Populate `structured` (record per-key values you compared — prefer flat dicts):
 
     {
       "replicated_table": {"<exact key1>": <number>, "<exact key2>": <number>, ...},
@@ -137,17 +171,14 @@ Populate `structured`: (the grader compares per key — prefer flat dicts)
     }
 
 Build BOTH dicts keyed by the claim's **exact** question keys (copied verbatim —
-see Answer Fidelity); the grader matches `replicated_table[key]` against
-`paper_table[key]` per key, so a mutated or missing key fails that cell.
+see Answer Fidelity), and compare `replicated_table[key]` against
+`paper_table[key]` per key; a mutated or missing key fails that cell.
 
 **Use the flat `{key: number}` shape whenever the table can be expressed that
 way — it almost always can** (per-question answers, per-label rows, a single
 cell). Only when the values are genuinely non-scalar or the table truly cannot be
-flattened, fall back to `{"columns": [...], "rows": [...]}` and set `status`
-yourself (the grader then keeps your judgment). Prefer the flat shape: it routes
-the verdict through the deterministic grader, which is the reliable, auditable
-path — emitting `{columns, rows}` for a flattenable table needlessly drops back
-to a subjective judgment.
+flattened, fall back to `{"columns": [...], "rows": [...]}`. The flat shape keeps
+each cell independently auditable against the exact key it answers.
 
 {% elif claim.type == "qualitative" %}
 **Qualitative claim** — paraphrase-match between the claim's described behavior and what the evidence shows.
@@ -201,17 +232,23 @@ Populate `structured`:
     }
 
 Set status to `not_attempted` **only when `evidence_found` is false** — i.e. no
-figure and no panels were produced. If panels exist but the combined figure does
-not, prefer `partial` (the content reproduced; only the assembly is missing),
-not `not_attempted`.
+figure and no panels were produced — and then set `not_attempted_reason` (the
+plotting code missing from the codebase → `authors_missing`; the run erroring /
+timing out / not reaching the plot step → `blocked_infra`; see the reason gate).
+If panels exist but the combined figure does not, prefer `partial` (the content
+reproduced; only the assembly is missing), not `not_attempted`.
 {% endif %}
 
 ## Scoring Rules
 
+- **Grade the produced result, not the source code.** For a claim about a number
+  or table, judge the value the run actually *produced* (in outputs, logs, CSVs,
+  figures) — not code that merely looks like it would produce it. Source code
+  that appears correct but emitted no matching result is not a `match`.
 - **Use evidence first, claim text second.** The claim describes what the paper reported; your job is to check what *this* run produced.
-- **Fixes give context.** If `fix_severity.json` shows a critical fix in the relevant code path, cite it in your rationale. For qualitative / figure claims it may legitimately change your judgment; for numeric claims it cannot change the computed status — the grader sees only your extracted values.
+- **Fixes give context.** If `fix_severity.json` shows a critical fix in the relevant code path, weigh it and cite it in your rationale — for any claim type — when it bears on whether the produced result faithfully reflects the paper's method.
 - **`not_applicable` is rare.** Use it only when the claim genuinely can't be checked from a replication (e.g., a claim about paper metadata like a DOI, or a claim about a hardware-only behavior not exercisable here). Always set `n_a_reason`.
-- **Don't dodge with `not_applicable` if you just couldn't reach the evidence.** That's `not_attempted`.
+- **Don't dodge with `not_applicable` if you just couldn't reach the evidence.** That's `not_attempted` (with a `not_attempted_reason`).
 
 ## Output
 
@@ -222,8 +259,9 @@ Save your verdict to `{{ output_dir }}/verify/{{ claim.id }}.json` with this sha
     "claim_id": "{{ claim.id }}",
     "status": "match | partial | no_match | not_attempted | not_applicable",
     "structured": { /* type-specific, see above */ },
-    "rationale": "<one paragraph explaining your verdict, citing evidence files>",
+    "rationale": "<one paragraph explaining your verdict, citing the exact evidence (file + value/quote) you relied on>",
     "evidence_refs": ["<relative path 1>", "<relative path 2>", ...],
+    "not_attempted_reason": "<ONLY when status == not_attempted; one of authors_missing | blocked_infra | no_evidence; omit otherwise>",
     "n_a_reason": "<ONLY when status == not_applicable; omit this key otherwise>"
 }
 ```
