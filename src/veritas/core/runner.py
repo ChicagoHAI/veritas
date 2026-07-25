@@ -1895,10 +1895,11 @@ class ReplicationRunner:
             if reason not in NOT_ATTEMPTED_REASONS:
                 # Grader omitted or malformed the reason. Default to the
                 # conservative-for-the-paper bucket (excluded, not scored 0) and
-                # surface it so the gap is visible rather than silently penalizing.
-                if reason is not None:
-                    print(f"    {claim.id}: unknown not_attempted_reason "
-                          f"{reason!r}; defaulting to 'no_evidence'")
+                # surface the default either way — the exclusion affects the
+                # score denominator, so it must never happen silently.
+                what = "missing" if reason is None else f"unknown ({reason!r})"
+                print(f"    {claim.id}: {what} not_attempted_reason; "
+                      f"defaulting to 'no_evidence'")
                 verdict.not_attempted_reason = "no_evidence"
         else:
             # Reason only meaningful for not_attempted; drop any stray value.
