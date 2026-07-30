@@ -1,313 +1,324 @@
 ---
 name: pdf
-description: Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.
+description: Programmatic, structured extraction from scientific-paper PDFs. Extract result tables as row/column data, pull embedded figures out to image files, render pages or regions to PNG, read document metadata and DOIs, locate and extract the references section, handle two-column layouts, find which page a term appears on, and OCR scanned papers. Use this skill when you need machine-readable structures, images, or precise page locations from a PDF. For simply reading a paper's prose, open the PDF directly (the agent reads PDF text natively). To convert an entire document to Markdown in one shot, use the markitdown skill instead.
+allowed-tools: Read Write Edit Bash
 ---
 
-# PDF Processing Guide
+# PDF - Structured Extraction from Scientific Papers
 
 ## Overview
 
-This guide covers essential PDF processing operations using Python libraries and command-line tools. For advanced features, JavaScript libraries, and detailed examples, see reference.md. If you need to fill out a PDF form, read forms.md and follow its instructions.
+Scientific papers arrive as PDFs, and reproducing a paper means getting specific
+things out of that PDF in machine-checkable form: the numbers in a results
+table, the image of a figure to compare against a regenerated plot, the DOI and
+reference list for citation checking, or the text of a scanned appendix.
 
-## Quick Start
+This skill covers targeted, programmatic extraction with Python libraries. It
+is deliberately scoped to reading papers. It does not cover creating PDFs,
+filling forms, merging or splitting documents, watermarks, or encryption; none
+of those operations occur in a replication workflow.
 
-```python
-from pypdf import PdfReader, PdfWriter
+## When to Use This Skill
 
-# Read a PDF
-reader = PdfReader("document.pdf")
-print(f"Pages: {len(reader.pages)}")
+Choose the lightest tool that answers the question:
 
-# Extract text
-text = ""
-for page in reader.pages:
-    text += page.extract_text()
+| Goal | Approach |
+|------|----------|
+| Read or quote the paper's prose | Open the PDF directly; no code needed. The agent reads PDF text natively. |
+| Convert the whole document to Markdown | Use the `markitdown` skill. |
+| Get a table's cells as rows and columns | This skill (pdfplumber). |
+| Save a figure as an image file, or render a page/region to PNG | This skill (PyMuPDF). |
+| Title, authors, DOI, arXiv ID, references list | This skill (pypdf or PyMuPDF). |
+| Find which page mentions "Table 3" or "learning rate" | This skill (PyMuPDF search). |
+| Two-column text in correct reading order | This skill (see references/extraction.md). |
+| A scan with no text layer | This skill (OCR section). |
+
+## Installation
+
+No PDF library is preinstalled in this environment. Install before importing:
+
+```bash
+# Core stack: metadata/pages, tables, images/rendering/search
+pip install pypdf pdfplumber pymupdf
+
+# OCR stack, only needed for scanned PDFs
+pip install pdf2image pytesseract
+apt-get install -y poppler-utils tesseract-ocr   # prefix with sudo if not root
 ```
 
-## Python Libraries
+Notes:
 
-### pypdf - Basic Operations
+- PyMuPDF is imported as `fitz` (the PyPI package name is `pymupdf`).
+- `pdf2image` needs the system package `poppler-utils`; `pytesseract` needs
+  `tesseract-ocr`. If installing system packages is not possible, PyMuPDF can
+  render the page images for OCR instead of pdf2image (see
+  references/extraction.md), but Tesseract itself is always required for OCR.
 
-#### Merge PDFs
+## Library Roles
+
+| Library | Import | Use for |
+|---------|--------|---------|
+| pypdf | `pypdf` | Metadata, page counts, quick per-page text |
+| pdfplumber | `pdfplumber` | Tables as cell grids, layout-aware text, cropping |
+| PyMuPDF | `fitz` | Fast text/blocks, text search, image extraction, page rendering |
+| pdf2image + pytesseract | `pdf2image`, `pytesseract` | OCR of scanned pages |
+
+## Quick Recipes
+
+### Metadata and identifiers
+
 ```python
-from pypdf import PdfWriter, PdfReader
+from pypdf import PdfReader
 
-writer = PdfWriter()
-for pdf_file in ["doc1.pdf", "doc2.pdf", "doc3.pdf"]:
-    reader = PdfReader(pdf_file)
-    for page in reader.pages:
-        writer.add_page(page)
-
-with open("merged.pdf", "wb") as output:
-    writer.write(output)
-```
-
-#### Split PDF
-```python
-reader = PdfReader("input.pdf")
-for i, page in enumerate(reader.pages):
-    writer = PdfWriter()
-    writer.add_page(page)
-    with open(f"page_{i+1}.pdf", "wb") as output:
-        writer.write(output)
-```
-
-#### Extract Metadata
-```python
-reader = PdfReader("document.pdf")
+reader = PdfReader("paper.pdf")
+print(len(reader.pages), "pages")
 meta = reader.metadata
-print(f"Title: {meta.title}")
-print(f"Author: {meta.author}")
-print(f"Subject: {meta.subject}")
-print(f"Creator: {meta.creator}")
+if meta:
+    print("Title:", meta.title)
+    print("Author:", meta.author)
 ```
 
-#### Rotate Pages
+PDF metadata is often empty or stale for papers. Pull identifiers from the
+first page text instead:
+
 ```python
-reader = PdfReader("input.pdf")
-writer = PdfWriter()
+import re
+import fitz  # PyMuPDF
 
-page = reader.pages[0]
-page.rotate(90)  # Rotate 90 degrees clockwise
-writer.add_page(page)
+doc = fitz.open("paper.pdf")
+first_page = doc[0].get_text()
 
-with open("rotated.pdf", "wb") as output:
-    writer.write(output)
+doi = re.search(r"10\.\d{4,9}/[^\s\"<>]+", first_page)
+arxiv = re.search(r"arXiv:\d{4}\.\d{4,5}(v\d+)?", first_page)
+print("DOI:", doi.group(0) if doi else None)
+print("arXiv:", arxiv.group(0) if arxiv else None)
 ```
 
-### pdfplumber - Text and Table Extraction
+### Per-page and page-range text
 
-#### Extract Text with Layout
+For a long paper, extract only the pages you need:
+
+```python
+import fitz
+
+doc = fitz.open("paper.pdf")
+# Pages 5-8 (1-based) -> indices 4..7
+text = "\n".join(doc[i].get_text() for i in range(4, 8))
+print(text[:2000])
+```
+
+Caution: on two-column papers, plain text extraction can interleave the
+columns. See "Multi-column text" below before trusting paragraph order.
+
+### Find where something appears
+
+```python
+import fitz
+
+doc = fitz.open("paper.pdf")
+term = "Table 3"
+for i in range(doc.page_count):
+    hits = doc[i].search_for(term)
+    if hits:
+        print(f"'{term}' appears {len(hits)}x on page {i + 1}")
+```
+
+`search_for` returns the bounding rectangles of each hit, which is also how
+you locate a region to render (see below).
+
+### Extract a table as structured data
+
 ```python
 import pdfplumber
 
-with pdfplumber.open("document.pdf") as pdf:
-    for page in pdf.pages:
-        text = page.extract_text()
-        print(text)
+with pdfplumber.open("paper.pdf") as pdf:
+    page = pdf.pages[4]          # 0-based: page 5
+    tables = page.extract_tables()
+    for t_index, table in enumerate(tables):
+        print(f"-- table {t_index}: {len(table)} rows --")
+        for row in table:
+            print(row)           # list of cell strings (None for empty cells)
 ```
 
-#### Extract Tables
+Save one table to CSV:
+
 ```python
-with pdfplumber.open("document.pdf") as pdf:
-    for i, page in enumerate(pdf.pages):
-        tables = page.extract_tables()
-        for j, table in enumerate(tables):
-            print(f"Table {j+1} on page {i+1}:")
-            for row in table:
-                print(row)
+import csv
+import pdfplumber
+
+with pdfplumber.open("paper.pdf") as pdf:
+    table = pdf.pages[4].extract_tables()[0]
+
+with open("table1.csv", "w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    for row in table:
+        writer.writerow([(cell or "").replace("\n", " ") for cell in row])
 ```
 
-#### Advanced Table Extraction
+Tables without ruled cell borders (common in ML papers) need the `"text"`
+detection strategy:
+
 ```python
-import pandas as pd
-
-with pdfplumber.open("document.pdf") as pdf:
-    all_tables = []
-    for page in pdf.pages:
-        tables = page.extract_tables()
-        for table in tables:
-            if table:  # Check if table is not empty
-                df = pd.DataFrame(table[1:], columns=table[0])
-                all_tables.append(df)
-
-# Combine all tables
-if all_tables:
-    combined_df = pd.concat(all_tables, ignore_index=True)
-    combined_df.to_excel("extracted_tables.xlsx", index=False)
+tables = page.extract_tables({
+    "vertical_strategy": "text",
+    "horizontal_strategy": "text",
+})
 ```
 
-### reportlab - Create PDFs
+For cropping to a single table, tuning detection, and cleaning cells, see
+references/extraction.md.
 
-#### Basic PDF Creation
+### Multi-column text
+
+Most papers are two-column. The quickest correct approach is to crop each
+column and extract separately:
+
 ```python
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+import pdfplumber
 
-c = canvas.Canvas("hello.pdf", pagesize=letter)
-width, height = letter
-
-# Add text
-c.drawString(100, height - 100, "Hello World!")
-c.drawString(100, height - 120, "This is a PDF created with reportlab")
-
-# Add a line
-c.line(100, height - 140, 400, height - 140)
-
-# Save
-c.save()
+with pdfplumber.open("paper.pdf") as pdf:
+    page = pdf.pages[2]
+    mid = page.width / 2
+    left = page.crop((0, 0, mid, page.height)).extract_text() or ""
+    right = page.crop((mid, 0, page.width, page.height)).extract_text() or ""
+    print(left + "\n" + right)
 ```
 
-#### Create PDF with Multiple Pages
+This misorders full-width elements (title block, wide tables). A block-based
+approach that handles those is in references/extraction.md.
+
+### Extract embedded figures
+
 ```python
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet
+import fitz
 
-doc = SimpleDocTemplate("report.pdf", pagesize=letter)
-styles = getSampleStyleSheet()
-story = []
-
-# Add content
-title = Paragraph("Report Title", styles['Title'])
-story.append(title)
-story.append(Spacer(1, 12))
-
-body = Paragraph("This is the body of the report. " * 20, styles['Normal'])
-story.append(body)
-story.append(PageBreak())
-
-# Page 2
-story.append(Paragraph("Page 2", styles['Heading1']))
-story.append(Paragraph("Content for page 2", styles['Normal']))
-
-# Build PDF
-doc.build(story)
+doc = fitz.open("paper.pdf")
+for page_index in range(doc.page_count):
+    for img_index, img in enumerate(doc[page_index].get_images(full=True)):
+        xref = img[0]
+        info = doc.extract_image(xref)
+        name = f"page{page_index + 1}_img{img_index}.{info['ext']}"
+        with open(name, "wb") as f:
+            f.write(info["image"])
+        print("wrote", name)
 ```
 
-#### Subscripts and Superscripts
+Important: this only finds raster images. Plots exported from matplotlib or
+similar tools are usually vector drawings with no embedded image to extract.
+For those, render the figure's region of the page instead (next recipe).
 
-**IMPORTANT**: Never use Unicode subscript/superscript characters (₀₁₂₃₄₅₆₇₈₉, ⁰¹²³⁴⁵⁶⁷⁸⁹) in ReportLab PDFs. The built-in fonts do not include these glyphs, causing them to render as solid black boxes.
+### Render a page or region to an image
 
-Instead, use ReportLab's XML markup tags in Paragraph objects:
 ```python
-from reportlab.platypus import Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+import fitz
 
-styles = getSampleStyleSheet()
+doc = fitz.open("paper.pdf")
 
-# Subscripts: use <sub> tag
-chemical = Paragraph("H<sub>2</sub>O", styles['Normal'])
+# Whole page at 200 DPI
+pix = doc[2].get_pixmap(dpi=200)
+pix.save("page3.png")
 
-# Superscripts: use <super> tag
-squared = Paragraph("x<super>2</super> + y<super>2</super>", styles['Normal'])
+# Just the area around a figure caption
+page = doc[2]
+caption_hits = page.search_for("Figure 2")
+if caption_hits:
+    cap = caption_hits[0]
+    # Figures usually sit above their caption; take the area above it.
+    top = max(cap.y0 - 320, 0)
+    bottom = min(cap.y1 + 8, page.rect.height)
+    clip = fitz.Rect(0, top, page.rect.width, bottom)
+    page.get_pixmap(clip=clip, dpi=300).save("figure2.png")
 ```
 
-For canvas-drawn text (not Paragraph objects), manually adjust font the size and position rather than using Unicode subscripts/superscripts.
+Rendered PNGs can then be inspected visually (the agent reads image files) or
+compared against replication outputs. The helper
+`scripts/render_pages.py` renders every page (or a range) in one command.
 
-## Command-Line Tools
+### Detect a scanned PDF and OCR it
 
-### pdftotext (poppler-utils)
-```bash
-# Extract text
-pdftotext input.pdf output.txt
+A scanned paper has (almost) no extractable text:
 
-# Extract text preserving layout
-pdftotext -layout input.pdf output.txt
-
-# Extract specific pages
-pdftotext -f 1 -l 5 input.pdf output.txt  # Pages 1-5
-```
-
-### qpdf
-```bash
-# Merge PDFs
-qpdf --empty --pages file1.pdf file2.pdf -- merged.pdf
-
-# Split pages
-qpdf input.pdf --pages . 1-5 -- pages1-5.pdf
-qpdf input.pdf --pages . 6-10 -- pages6-10.pdf
-
-# Rotate pages
-qpdf input.pdf output.pdf --rotate=+90:1  # Rotate page 1 by 90 degrees
-
-# Remove password
-qpdf --password=mypassword --decrypt encrypted.pdf decrypted.pdf
-```
-
-### pdftk (if available)
-```bash
-# Merge
-pdftk file1.pdf file2.pdf cat output merged.pdf
-
-# Split
-pdftk input.pdf burst
-
-# Rotate
-pdftk input.pdf rotate 1east output rotated.pdf
-```
-
-## Common Tasks
-
-### Extract Text from Scanned PDFs
 ```python
-# Requires: pip install pytesseract pdf2image
-import pytesseract
+import fitz
+
+doc = fitz.open("paper.pdf")
+chars_per_page = sum(len(p.get_text()) for p in doc) / max(doc.page_count, 1)
+print("likely scanned" if chars_per_page < 50 else "has a text layer")
+```
+
+OCR the whole document (needs the OCR stack from Installation):
+
+```python
 from pdf2image import convert_from_path
+import pytesseract
 
-# Convert PDF to images
-images = convert_from_path('scanned.pdf')
-
-# OCR each page
-text = ""
-for i, image in enumerate(images):
-    text += f"Page {i+1}:\n"
-    text += pytesseract.image_to_string(image)
-    text += "\n\n"
-
-print(text)
+images = convert_from_path("scanned.pdf", dpi=300)
+full_text = []
+for i, image in enumerate(images, start=1):
+    text = pytesseract.image_to_string(image)
+    full_text.append(f"--- page {i} ---\n{text}")
+with open("ocr_output.txt", "w", encoding="utf-8") as f:
+    f.write("\n".join(full_text))
 ```
 
-### Add Watermark
+Papers are sometimes mixed (a born-digital body plus scanned appendix pages);
+OCR only the pages that fall below the character threshold. A full
+walkthrough, including a poppler-free variant, is in
+references/extraction.md.
+
+### Extract the references section
+
 ```python
-from pypdf import PdfReader, PdfWriter
+import re
+import fitz
 
-# Create watermark (or load existing)
-watermark = PdfReader("watermark.pdf").pages[0]
+doc = fitz.open("paper.pdf")
 
-# Apply to all pages
-reader = PdfReader("document.pdf")
-writer = PdfWriter()
+# Prefer the document outline if the paper has one
+start_page = None
+for level, title, page_no in doc.get_toc():
+    if re.fullmatch(r"references|bibliography", title.strip(), re.I):
+        start_page = page_no - 1
+        break
 
-for page in reader.pages:
-    page.merge_page(watermark)
-    writer.add_page(page)
+# Otherwise scan backwards for a standalone heading line
+if start_page is None:
+    heading = re.compile(r"^\s*(references|bibliography)\s*$", re.I | re.M)
+    for i in range(doc.page_count - 1, -1, -1):
+        if heading.search(doc[i].get_text()):
+            start_page = i
+            break
 
-with open("watermarked.pdf", "wb") as output:
-    writer.write(output)
+if start_page is not None:
+    ref_text = "\n".join(
+        doc[i].get_text() for i in range(start_page, doc.page_count)
+    )
+    # For [1] [2] ... style bibliographies, split into entries.
+    # The first chunk holds the heading and any preamble; drop non-entries.
+    chunks = re.split(r"\n(?=\[\d+\]\s)", ref_text)
+    entries = [c for c in chunks if re.match(r"\[\d+\]", c.lstrip())]
+    print(f"references start on page {start_page + 1}; {len(entries)} entries")
 ```
 
-### Extract Images
-```bash
-# Using pdfimages (poppler-utils)
-pdfimages -j input.pdf output_prefix
+Entry splitting is heuristic; author-year styles need different patterns. See
+references/extraction.md for details.
 
-# This extracts all images as output_prefix-000.jpg, output_prefix-001.jpg, etc.
-```
+## Limits: Math and Equations
 
-### Password Protection
-```python
-from pypdf import PdfReader, PdfWriter
+Text extraction of display equations is unreliable and there is no
+library-level fix. Math fonts often map glyphs to wrong or private-use
+characters, superscripts and subscripts lose their positions, and built-up
+fractions or matrices collapse into one line. Do not trust extracted equation
+text for verification. When an equation matters, render its region to a PNG
+(see the rendering recipe) and read it visually, or transcribe it from the
+paper source if one is available.
 
-reader = PdfReader("input.pdf")
-writer = PdfWriter()
+## Resources
 
-for page in reader.pages:
-    writer.add_page(page)
-
-# Add password
-writer.encrypt("userpassword", "ownerpassword")
-
-with open("encrypted.pdf", "wb") as output:
-    writer.write(output)
-```
-
-## Quick Reference
-
-| Task | Best Tool | Command/Code |
-|------|-----------|--------------|
-| Merge PDFs | pypdf | `writer.add_page(page)` |
-| Split PDFs | pypdf | One page per file |
-| Extract text | pdfplumber | `page.extract_text()` |
-| Extract tables | pdfplumber | `page.extract_tables()` |
-| Create PDFs | reportlab | Canvas or Platypus |
-| Command line merge | qpdf | `qpdf --empty --pages ...` |
-| OCR scanned PDFs | pytesseract | Convert to image first |
-| Fill PDF forms | pdf-lib or pypdf (see forms.md) | See forms.md |
-
-## Next Steps
-
-- For advanced pypdfium2 usage, see reference.md
-- For JavaScript libraries (pdf-lib), see reference.md
-- If you need to fill out a PDF form, follow the instructions in forms.md
-- For troubleshooting guides, see reference.md
+- `references/extraction.md` - table extraction tuning, multi-column
+  handling, figure/region rendering, the full OCR walkthrough, and
+  troubleshooting for garbled text.
+- `scripts/render_pages.py` - render each page (or a page range) of a PDF to
+  PNG files: `python scripts/render_pages.py paper.pdf pages/ --dpi 200`.
+- The `markitdown` skill - whole-document conversion to Markdown when you
+  want the full paper as one text file rather than targeted structures.

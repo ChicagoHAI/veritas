@@ -1,4 +1,4 @@
-"""Unit + structure tests for the manager research sub-agents (Phase 3).
+"""Unit + structure tests for the manager research sub-agents.
 
 Deterministic pieces (intent gate, exact known-value scrub, provenance
 formatting, request parsing, bounds) are pure-function unit-tested here. The

@@ -1,7 +1,7 @@
-"""Manager-controlled retry loop (Phase 2 of the iterative-manager design).
+"""Manager-controlled retry loop.
 
-Authoritative spec: ``notes/2026-06-03-iterative-manager-design.md`` §4 (loop +
-verdict), §5.3 (workflow log), §5.4 (termination + hand-off), §5.5 (archival).
+This module implements the review/verdict cycle, the workflow log, termination
+and hand-off, and archival of superseded attempts.
 
 This module is the *control* layer that sits AFTER ``replicate`` and BEFORE
 ``verify``. It is built to mirror the convergent pattern of the four agentic
@@ -48,7 +48,7 @@ VALID_DECISIONS = {DECISION_ACCEPT, DECISION_REVISE}
 # in-scope structurally but paper-only mode is rarer; we accept it if emitted.)
 VALID_TARGET_PHASES = {"replicate", "plan", "codegen"}
 
-# Genuineness buckets (§4.3). The manager must classify *why* the work fell
+# Genuineness buckets. The manager must classify *why* the work fell
 # short so the calibration (accept divergence, only revise deficiency) is
 # auditable.
 GENUINENESS_DEFICIENT = "deficient"
@@ -63,10 +63,10 @@ VALID_GENUINENESS = {
 
 @dataclass
 class ManagerVerdict:
-    """Structured verdict from the manager review pass (§4.3).
+    """Structured verdict from the manager review pass.
 
-    Mirrors Magentic-One's Progress Ledger (strict, machine-readable) plus the
-    diligence-calibration fields the design adds. ``source`` records whether the
+    Mirrors Magentic-One's Progress Ledger (strict, machine-readable) plus
+    diligence-calibration fields. ``source`` records whether the
     verdict came from the deterministic short-circuit or the LLM, so the
     workflow log is honest about which path decided.
     """
@@ -105,10 +105,10 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     """Parse + normalize a manager verdict dict into a :class:`ManagerVerdict`.
 
     Defensive: unknown enum values are coerced to safe defaults that **bias to
-    ACCEPT** (the design's "bias to ACCEPT past iteration 1" / never block on a
-    malformed verdict). A ``revise`` decision missing a usable directive is
+    ACCEPT** past the first iteration, so a malformed verdict never blocks the
+    run. A ``revise`` decision missing a usable directive is
     downgraded to ``accept`` so we never re-run with empty guidance (a blank
-    re-run is just a repeat — explicitly forbidden by §4.4).
+    re-run is just a repeat, which the loop forbids).
     """
     v = ManagerVerdict(source=source)
 
@@ -118,7 +118,7 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     v.diligence_sufficient = bool(raw.get("diligence_sufficient", True))
 
     genuine = str(raw.get("deficiency_is_genuine", GENUINENESS_DIVERGENT)).strip().lower()
-    # Tolerate the design doc's longer phrasings by substring match.
+    # Tolerate longer LLM phrasings by substring match.
     if genuine not in VALID_GENUINENESS:
         if "deficien" in genuine:
             genuine = GENUINENESS_DEFICIENT
@@ -144,7 +144,7 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
     except (TypeError, ValueError):
         v.confidence = 0.0
 
-    # Research requests (Phase 3): kept as raw dicts here; the honoring decision
+    # Research requests: kept as raw dicts here; the honoring decision
     # (the intent allow-list) lives in ``research.honor_request`` so there is one
     # auditable gate. We only retain dict-shaped entries; everything semantic
     # (which kinds are allowed, redaction) is enforced downstream.
@@ -159,7 +159,7 @@ def parse_manager_verdict(raw: Dict[str, Any], *, source: str = "llm") -> Manage
             v.decision = DECISION_ACCEPT
             v.reason = (v.reason + " [downgraded: revise emitted without a directive]").strip()
         elif v.target_phase is None:
-            # Default the target to replicate (the design's primary re-run target).
+            # Default the target to replicate (the primary re-run target).
             v.target_phase = "replicate"
 
     return v
@@ -293,18 +293,18 @@ def archive_attempt(replication_dir: Path, attempt: int) -> Optional[Path]:
     return archive
 
 
-# --- Workflow / decision log (first-class artifact, §5.3) -------------------
+# --- Workflow / decision log (first-class artifact) -------------------------
 
 
 class WorkflowLog:
     """Append-only JSONL workflow log plus a human-readable markdown summary.
 
-    One JSONL record per iteration / phase run (§5.3):
+    One JSONL record per iteration / phase run:
     ``{iteration, phase, status, transcript_path, signals, manager_verdict,
     directive, archived_attempt_path, ...}``. The markdown summary is
     regenerated from the full record set on every append so it always reflects
-    the complete trajectory. This is the artifact Haokun wants for evaluating
-    the run, so we keep it readable and consistent.
+    the complete trajectory. This is the artifact used to evaluate the run, so
+    it is kept readable and consistent.
     """
 
     def __init__(self, veritas_dir: Path):
@@ -335,7 +335,7 @@ class WorkflowLog:
         self._rewrite_summary()
 
     def write_handoff(self, handoff: Dict[str, Any]) -> None:
-        """Record the structured graceful-terminal hand-off (§5.4).
+        """Record the structured graceful-terminal hand-off.
 
         Written as its own record (``phase="handoff"``) and also surfaced in the
         markdown summary so a human can pick the run up later.
@@ -484,7 +484,7 @@ def build_handoff(
 
 @dataclass
 class ManagerGuidance:
-    """The guidance injected into a re-run's prompt (§4.4 / §5.2).
+    """The guidance injected into a re-run's prompt.
 
     Rendered by ``{% if manager_guidance %}`` blocks in the re-runnable phase
     templates. Carries the deficiency, the specific NEW instructions, and what
@@ -497,7 +497,7 @@ class ManagerGuidance:
     deficiency: str
     directive: str
     already_tried: str = ""
-    # Phase 3: provenance-tagged, post-redaction methodology/resource findings
+    # Provenance-tagged, post-redaction methodology/resource findings
     # from the manager's research sub-agents. Rendered as its own block in the
     # re-run templates. Always answer-free (it has been through the two-layer
     # redactor); empty when no research ran for this iteration.

@@ -150,11 +150,11 @@ Examples:
 | Paper says | Type | Hardcode? |
 |---|---|---|
 | "learning rate 2e-5, batch size 32, 3 epochs" | Input | Yes |
-| "trained on 161 systems from Albrecht+22" | Input | Yes (dataset spec) |
+| "trained on the full sample from the cited catalog" | Input | Yes (dataset spec) |
 | "model achieved 92.3% accuracy" | Output | No — compute it |
-| "posterior mean w_1 = 0.719 ± 0.085" | Output | No — compute it |
-| "max_treedepth=13" | Input | Yes |
-| "rhat values were all <1.01 after sampling" | Output | No — compute it |
+| "posterior mean of the mixture weight = 0.41 ± 0.06" | Output | No — compute it |
+| "sampler max tree depth = 12" | Input | Yes |
+| "all convergence diagnostics passed after sampling" | Output | No — compute it |
 
 Scan every numerical constant in your code and apply the test. If a
 constant matches a paper-reported result, replace it with code that

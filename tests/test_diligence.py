@@ -12,6 +12,7 @@ The module must also never raise on malformed or missing evidence.
 
 import itertools
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -248,9 +249,12 @@ def test_summary_line_no_evidence():
 
 # --- real on-disk example ---------------------------------------------------
 
+# Opt-in: point VERITAS_REAL_LOG_FIXTURE at a `replication_log.json` from a
+# completed run to exercise the parser against real evidence. The tests below
+# skip when it is unset or the file is absent, so the default suite stays
+# self-contained.
 REAL_LOG = Path(
-    "/data/haokunliu/veritas-workspace/results/smoke-html/cb-3849634/"
-    "replication/replication_log.json"
+    os.environ.get("VERITAS_REAL_LOG_FIXTURE", "/nonexistent/replication_log.json")
 )
 
 
@@ -260,29 +264,26 @@ def test_real_replication_log_facts():
     ev = ExecutionEvidence.from_dict(data)
     facts = compute_execution_facts(ev, plan=None)
     assert isinstance(facts, ExecutionFacts)
-    # This run (cb-3849634) ran all 4 steps and produced artifacts.
+    # Real evidence parses into facts that agree with the evidence it came from.
     assert facts.no_evidence is False
-    assert facts.executed_steps == ev.steps_attempted == 4
-    # All steps succeeded => no failures, last step did not fail.
-    assert facts.failed_steps == 0
-    assert facts.failed_step_ids == []
-    assert facts.last_step_failed is False
-    # At least one step declared output files (18 PNGs etc.).
-    assert facts.total_output_files >= 1
-    assert facts.steps_with_output_files
-    # No identical command repeated 3+ times in this clean run.
-    assert facts.max_command_repeat < 3
+    assert facts.executed_steps == ev.steps_attempted
+    # Failure accounting is internally consistent.
+    assert facts.failed_steps == len(facts.failed_step_ids)
+    assert facts.succeeded_steps + facts.failed_steps == facts.executed_steps
+    # Declared-output accounting is internally consistent.
+    assert (facts.total_output_files > 0) == bool(facts.steps_with_output_files)
     # Output is JSON-serializable.
     json.dumps(facts.to_dict())
 
 
 @pytest.mark.skipif(not REAL_LOG.exists(), reason="real replication_log.json not present")
-def test_real_replication_log_exit_codes_all_zero():
+def test_real_replication_log_exit_codes_agree_with_failure_counts():
     data = json.loads(REAL_LOG.read_text(encoding="utf-8"))
     ev = ExecutionEvidence.from_dict(data)
     facts = compute_execution_facts(ev, plan=None)
-    assert all(code == 0 for code in facts.exit_codes.values())
-    assert facts.succeeded_steps == facts.executed_steps
+    # Every nonzero exit code must be reflected in the failed-step accounting.
+    nonzero = [sid for sid, code in facts.exit_codes.items() if code != 0]
+    assert sorted(nonzero) == sorted(facts.failed_step_ids)
 
 
 # --- granular tool-call repeats (replication transcript) --------------------

@@ -1,7 +1,7 @@
-"""Unit tests for the manager-controlled retry loop (Phase 2).
+"""Unit tests for the manager-controlled retry loop.
 
-Covers the deterministic, LLM-free pieces the design requires to be
-trustworthy: verdict parsing/normalization, the termination predicate (accept /
+Covers the deterministic, LLM-free pieces that must be trustworthy for the
+loop to behave: verdict parsing/normalization, the termination predicate (accept /
 cap / no-progress), the no-progress comparison over OBJECTIVE EXECUTION FACTS,
 archival, the workflow-log writer, and the graceful hand-off.
 
@@ -111,7 +111,7 @@ def test_parse_long_genuineness_phrasings():
 
 
 def test_parse_retains_research_requests_phase3():
-    # Phase 3: research_requests are retained (dict-shaped only) so the intent
+    # research_requests are retained (dict-shaped only) so the intent
     # allow-list (research.honor_request) can gate them downstream. The parse
     # step no longer strips them — honoring is a single auditable gate.
     v = parse_manager_verdict({
