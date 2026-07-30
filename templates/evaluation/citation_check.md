@@ -194,7 +194,7 @@ Rules:
 - Set `checked_support` to `false` only if you could not perform Step 4 at all;
   otherwise keep it `true`. A `supported`/`partially_supported`/
   `contradicted` entry without a `quote` is invalid. Fix it or downgrade to
-  `not_mentioned`/`inaccessible`. Print the JSON to stdout as well.
+  `not_mentioned`/`inaccessible`.
 - Copy `matched_record` verbatim from the resolver output for that reference's
   key. Set it to `null` only for Step 3 escalations of `unresolved` references;
   an entry from the Step 2 empty-venue check keeps its resolver record.

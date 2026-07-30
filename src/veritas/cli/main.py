@@ -1,21 +1,35 @@
 """Main CLI entry point for Veritas."""
 
-import json
 import typer
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
 
 from veritas.core.runner import ReplicationRunner
-from veritas.core.config import (
-    Config,
-    EVALUATION_SUBDIR,
-    CITATION_CHECK_FILE,
-    CITATION_CHECK_META_FILE,
-    CITATION_CHECK_TRANSCRIPT_FILE,
-    CITATION_AUDIT_FILE,
-    CITATION_AUDIT_TRANSCRIPT_FILE,
-)
+from veritas.core.config import BUCKETS, Config, citation_artifact_paths
+from veritas.core.pipeline_state import read_state_dict, state_file_path
+
+def _recovered_engine_kwargs(replicate_dir, provider, explicit):
+    """Engine kwargs for a standalone pass over an existing run.
+
+    Recovers the run's recorded provider and per-bucket engines from its
+    pipeline state, so post-hoc passes and usage pricing run on the engines
+    that produced the directory instead of silent defaults. Flags the user
+    passed explicitly win; recorded engines without a model pin (bare
+    provider strings) are covered by the recovered provider.
+    """
+    recorded = read_state_dict(replicate_dir).get("config") or {}
+    kwargs = {"provider": provider or recorded.get("provider") or "claude"}
+    for bucket in BUCKETS:
+        field = f"{bucket}_model"
+        if explicit.get(field) is not None:
+            kwargs[field] = explicit[field]
+            continue
+        engine = recorded.get(f"engine_{bucket}")
+        if isinstance(engine, str) and ":" in engine:
+            kwargs[field] = engine
+    return kwargs
+
 
 app = typer.Typer(
     name="veritas",
@@ -49,7 +63,48 @@ def replicate(
     provider: str = typer.Option(
         "claude",
         "--provider",
-        help="AI provider to use (claude, codex, gemini)",
+        help="AI provider to use (claude, codex, gemini, openrouter)",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Global default model (bare name; the provider comes from "
+            "--provider). Default: the provider CLI's own default."
+        ),
+    ),
+    analyze_model: Optional[str] = typer.Option(
+        None,
+        "--analyze-model",
+        help="Engine for the analyze bucket (claims + plan), as [provider:]model.",
+    ),
+    codegen_model: Optional[str] = typer.Option(
+        None,
+        "--codegen-model",
+        help="Engine for the codegen bucket (paper-only mode), as [provider:]model.",
+    ),
+    replicate_model: Optional[str] = typer.Option(
+        None,
+        "--replicate-model",
+        help="Engine for the replication session, as [provider:]model.",
+    ),
+    assess_model: Optional[str] = typer.Option(
+        None,
+        "--assess-model",
+        help="Engine for the fix-severity assessment, as [provider:]model.",
+    ),
+    verify_model: Optional[str] = typer.Option(
+        None,
+        "--verify-model",
+        help="Engine for per-claim verification, as [provider:]model.",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None,
+        "--evaluate-model",
+        help=(
+            "Engine for the evaluate bucket (manager review, research, "
+            "contextual evaluation, citation check), as [provider:]model."
+        ),
     ),
     mode: str = typer.Option(
         "auto",
@@ -188,7 +243,7 @@ def replicate(
         raise typer.Exit(1)
 
     if restart:
-        state_file = output_dir / ".veritas" / "pipeline_state.json"
+        state_file = state_file_path(output_dir)
         if state_file.exists():
             state_file.unlink()
             console.print("[yellow]Discarded previous pipeline state.[/yellow]")
@@ -196,13 +251,7 @@ def replicate(
         # state; discard those too so --restart truly starts fresh. Transcripts
         # included: resource-usage accounting sums them, so a stale one would
         # bill the previous run's citation tokens to this run.
-        for stale in (
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_META_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_CHECK_TRANSCRIPT_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_FILE,
-            output_dir / EVALUATION_SUBDIR / CITATION_AUDIT_TRANSCRIPT_FILE,
-        ):
+        for stale in citation_artifact_paths(output_dir):
             stale.unlink(missing_ok=True)
 
     # Resolve max-iters (highest wins): --max-iters flag -> VERITAS_MAX_ITERS env
@@ -223,6 +272,13 @@ def replicate(
             repo_path=repo,
             output_dir=output_dir,
             provider=provider,
+            model=model,
+            analyze_model=analyze_model,
+            codegen_model=codegen_model,
+            replicate_model=replicate_model,
+            assess_model=assess_model,
+            verify_model=verify_model,
+            evaluate_model=evaluate_model,
             generate_pdf=generate_pdf,
             analyze_timeout=analyze_timeout,
             codegen_timeout=codegen_timeout,
@@ -232,11 +288,12 @@ def replicate(
             run_evaluation=evaluate,
             run_citation_check=check_citations,
             citation_timeout=citation_timeout,
-            faithfulness_scope=check_citations_faithfulness,
             mode=mode,
             claims_path=claims,
             data_path=data,
         )
+        if check_citations_faithfulness is not None:
+            config_kwargs["faithfulness_scope"] = check_citations_faithfulness
         if resolved_max_iters is not None:
             config_kwargs["max_iters"] = resolved_max_iters
         config = Config(**config_kwargs)
@@ -254,7 +311,10 @@ def replicate(
 
     try:
         result = runner.run(dry_run=dry_run)
-        if result.success:
+        if result.success and dry_run:
+            console.print()
+            console.print("[bold green]Dry run complete.[/bold green] No replication was run.")
+        elif result.success:
             console.print()
             console.print("[bold green]Replication completed successfully![/bold green]")
             console.print(f"Report saved to: {result.report_path}")
@@ -274,7 +334,18 @@ def estimate(
     paper: Optional[Path] = typer.Option(None, "--paper", "-p", help="Path to the paper PDF file", exists=True, dir_okay=False),
     repo: Optional[Path] = typer.Option(None, "--repo", "-r", help="Path to the repository", exists=True, file_okay=False),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
-    provider: str = typer.Option("claude", "--provider", help="AI provider (claude, codex, gemini)"),
+    provider: str = typer.Option(
+        "claude", "--provider",
+        help="AI provider (claude, codex, gemini, openrouter)",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the estimate (bare name).",
+    ),
+    analyze_model: Optional[str] = typer.Option(
+        None, "--analyze-model",
+        help="Engine for the analyze bucket (claims, plan, resource estimate), as [provider:]model.",
+    ),
     mode: str = typer.Option("auto", "--mode"),
 ):
     """
@@ -296,7 +367,9 @@ def estimate(
         raise typer.Exit(1)
 
     try:
-        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode)
+        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir,
+                        provider=provider, model=model, analyze_model=analyze_model,
+                        mode=mode)
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
@@ -368,8 +441,23 @@ def evaluate(
         exists=True,
         file_okay=False,
     ),
-    provider: str = typer.Option(
-        "claude", "--provider", help="AI provider for the evaluation manager."
+    paper: Optional[Path] = typer.Option(
+        None, "--paper",
+        help="Paper PDF (overrides the path recovered from the run's saved config).",
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider",
+        help="AI provider for the evaluation manager (claude, codex, gemini, "
+             "openrouter). Default: the run's recorded provider.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the evaluation (bare name).",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None, "--evaluate-model",
+        help="Engine for the evaluate bucket, as [provider:]model. Default: "
+             "the run's recorded engine.",
     ),
     evaluate_timeout: Optional[int] = typer.Option(
         None, "--evaluate-timeout",
@@ -390,23 +478,26 @@ def evaluate(
 
     # Recover the original inputs/mode from the run's state; fall back to the
     # patched codebase so evaluation works even if the source inputs moved.
-    state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-    mode = "auto"
-    paper = repo = data = None
-    if state_path.exists():
-        try:
-            st = json.loads(state_path.read_text(encoding="utf-8"))
-            cfg = st.get("config") or {}
-            inp = st.get("inputs") or {}
-            mode = cfg.get("mode", "auto")
-            paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
-            repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
-            data = Path(inp["data_path"]) if inp.get("data_path") else None
-        except (OSError, ValueError):
-            pass
+    st = read_state_dict(replicate_dir)
+    cfg = st.get("config") or {}
+    inp = st.get("inputs") or {}
+    mode = cfg.get("mode", "auto")
+    recovered_paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
+    repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
+    data = Path(inp["data_path"]) if inp.get("data_path") else None
 
-    if paper is not None and not paper.exists():
-        paper = None
+    if paper is None:
+        paper = recovered_paper
+        if paper is not None and not paper.exists():
+            console.print(
+                f"[yellow]Note:[/yellow] the run's recorded paper path {paper} "
+                f"does not resolve here; evaluating without the paper "
+                f"(pass --paper to supply it)."
+            )
+            paper = None
+    elif not paper.exists():
+        console.print(f"[bold red]Error:[/bold red] --paper file not found: {paper}")
+        raise typer.Exit(1)
     if repo is not None and not repo.exists():
         repo = None
     if repo is None:
@@ -424,22 +515,25 @@ def evaluate(
         raise typer.Exit(1)
 
     try:
+        engine_kwargs = _recovered_engine_kwargs(
+            replicate_dir, provider, {"evaluate_model": evaluate_model})
         config = Config(
             paper_path=paper,
             repo_path=repo,
             output_dir=replicate_dir,
-            provider=provider,
+            model=model,
             mode=mode,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
             generate_pdf=generate_pdf,
             data_path=data if (data and data.exists()) else None,
+            **engine_kwargs,
         )
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
-    result = ReplicationRunner(config).run()
+    result = ReplicationRunner(config).evaluate_existing()
     if result.success:
         console.print("[bold green]Evaluation + report complete.[/bold green]")
         console.print(f"Report: {result.report_path}")
@@ -464,7 +558,19 @@ def check_citations(
         help="Faithfulness scope: 'main' or 'all'. "
              "Default: VERITAS_CITATION_FAITHFULNESS_SCOPE or 'main'.",
     ),
-    provider: str = typer.Option("claude", "--provider", help="AI provider."),
+    provider: Optional[str] = typer.Option(
+        None, "--provider",
+        help="AI provider for the citation check (claude, codex, gemini, "
+             "openrouter). Default: the run's recorded provider.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Global default model for the citation check (bare name).",
+    ),
+    evaluate_model: Optional[str] = typer.Option(
+        None, "--evaluate-model",
+        help="Engine for the evaluate bucket (the citation check rides it), as [provider:]model.",
+    ),
     citation_timeout: Optional[int] = typer.Option(
         None, "--citation-timeout", help="Timeout (seconds) for the citation check.",
     ),
@@ -480,15 +586,9 @@ def check_citations(
 
     recovered_paper = paper
     if recovered_paper is None:
-        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-        if state_path.exists():
-            try:
-                st = json.loads(state_path.read_text(encoding="utf-8"))
-                inp = st.get("inputs") or {}
-                if inp.get("paper_path"):
-                    recovered_paper = Path(inp["paper_path"])
-            except (OSError, ValueError):
-                pass
+        inp = read_state_dict(replicate_dir).get("inputs") or {}
+        if inp.get("paper_path"):
+            recovered_paper = Path(inp["paper_path"])
     if recovered_paper is None:
         console.print(
             "[bold red]Error:[/bold red] no paper path was found for this run "
@@ -504,15 +604,20 @@ def check_citations(
         raise typer.Exit(1)
 
     try:
+        citation_kwargs = {}
+        if check_citations_faithfulness is not None:
+            citation_kwargs["faithfulness_scope"] = check_citations_faithfulness
+        citation_kwargs.update(_recovered_engine_kwargs(
+            replicate_dir, provider, {"evaluate_model": evaluate_model}))
         config = Config(
             paper_path=recovered_paper,
             output_dir=replicate_dir,
-            provider=provider,
+            model=model,
             mode="auto",
             run_citation_check=True,
-            faithfulness_scope=check_citations_faithfulness,
             citation_timeout=citation_timeout,
             generate_pdf=generate_pdf,
+            **citation_kwargs,
         )
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

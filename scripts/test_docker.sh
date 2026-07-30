@@ -33,6 +33,7 @@ echo -e "${BLUE}Smoke test: ${IMAGE}${NC}"
 assert_run "claude CLI responds"  claude  --version
 assert_run "codex CLI responds"   codex   --version
 assert_run "gemini CLI responds"  gemini  --version
+assert_run "opencode CLI responds" opencode --version
 
 # Report toolchain
 assert_run "pandoc responds"      pandoc  --version

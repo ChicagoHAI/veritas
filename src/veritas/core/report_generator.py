@@ -4,6 +4,7 @@ import json
 import math
 import re
 import subprocess
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -31,6 +32,7 @@ from veritas.core.config import (
     WORKFLOW_LOG_FILE,
 )
 from veritas.core.models.fix_severity import FixSeverityAssessment
+from veritas.core.pipeline_state import read_state_dict
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
     PaperClaims,
@@ -72,6 +74,23 @@ SEVERITY_COLOR = {"minor": "#1a7f37", "major": "#9a6700", "critical": "#cf222e"}
 _EMDASH_RE = re.compile(r"\s*—\s*")
 
 
+def read_engines_from_state(output_dir) -> dict:
+    """Resolved per-bucket engines recorded in the run's pipeline state.
+
+    Returns ``{bucket: "provider:model"}``; empty when the state file is
+    absent, unreadable, or predates engine tracking.
+    """
+    if not output_dir:
+        return {}
+    config = read_state_dict(output_dir).get("config") or {}
+    prefix = "engine_"
+    return {
+        key[len(prefix):]: value
+        for key, value in sorted(config.items())
+        if key.startswith(prefix)
+    }
+
+
 def _scrub_prose(obj):
     """Recursively replace em dashes with a comma in every string in a parsed
     JSON structure (the manager's evaluation output). Leaves non-strings as-is."""
@@ -111,13 +130,17 @@ def _build_audit_lookup(audit) -> dict:
     return lookup
 
 
-def _audit_verdict_for(lookup: dict, key, kind, claim=None):
-    """Exact normalized-claim match first. A sole claim-less item for
-    ``(key, kind)`` applies regardless — that covers integrity items and
-    audits recorded before claim tracking. An item that names a claim only
-    ever applies to that claim's row; when nothing matches, no verdict
-    applies (conservative: better to keep the first-pass verdict than to
-    soften the wrong row)."""
+def _audit_verdict_for(lookup: dict, key, kind, claim=None, sole_row=False,
+                       consumed=None):
+    """Exact normalized-claim match first. A sole item for ``(key, kind)``
+    also applies when it names no claim (integrity items and audits recorded
+    before claim tracking) or when the check side has exactly one auditable
+    row for the key (``sole_row``) — an unambiguous pairing, so the audit's
+    paraphrase of the claim text cannot drop the verdict. Otherwise no
+    verdict applies (conservative: better to keep the first-pass verdict
+    than to soften the wrong row). Applied items are recorded in
+    ``consumed`` so the caller can report audit items that paired with no
+    row instead of dropping them silently."""
     if not isinstance(key, str):
         return None
     items = lookup.get((key, kind))
@@ -125,10 +148,14 @@ def _audit_verdict_for(lookup: dict, key, kind, claim=None):
         return None
     normalized = _normalize_audit_claim(claim)
     if normalized:
-        for item_claim, verdict in items:
+        for i, (item_claim, verdict) in enumerate(items):
             if item_claim == normalized:
+                if consumed is not None:
+                    consumed.add((key, kind, i))
                 return verdict
-    if len(items) == 1 and not items[0][0]:
+    if len(items) == 1 and (not items[0][0] or sole_row):
+        if consumed is not None:
+            consumed.add((key, kind, 0))
         return items[0][1]
     return None
 
@@ -166,22 +193,28 @@ class ReportGenerator:
         evaluation = self._load_evaluation(replicate_dir)
         # Reconstituted from artifacts so a from-disk re-render (report /
         # check-citations refresh) keeps the evidence and fixes sections the
-        # original run rendered from in-memory data.
-        evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        # original run rendered from in-memory data. The log is agent-written:
+        # any malformed shape costs the evidence section, never the render.
+        try:
+            evidence = gather_evidence(replicate_dir / REPLICATION_SUBDIR)
+        except (KeyError, AttributeError, TypeError, ValueError, OSError):
+            evidence = None
         fix_assessment = self._load_fix_assessment(replicate_dir)
         citation = self._load_citation_check(replicate_dir)
         citation_audit = self._load_citation_audit(replicate_dir)
 
+        engines = read_engines_from_state(replicate_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=mode,
             output_dir=replicate_dir,
             citation=citation, citation_audit=citation_audit,
+            engines=engines,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
-            citation=citation, citation_audit=citation_audit,
+            citation=citation, citation_audit=citation_audit, engines=engines,
         ))
 
         if output_path is None:
@@ -221,16 +254,18 @@ class ReportGenerator:
         evaluation = self._load_evaluation(output_dir)
         citation = self._load_citation_check(output_dir)
         citation_audit = self._load_citation_audit(output_dir)
+        engines = read_engines_from_state(output_dir)
         md_content = self._render(
             claims=claims, verdicts=verdicts, score=score,
             evidence=evidence, fix_assessment=fix_assessment,
             mode=config.mode,
             output_dir=output_dir,
             citation=citation, citation_audit=citation_audit,
+            engines=engines,
         )
         html_content = self._render_html(self._build_html_context(
             claims, verdicts, score, evidence, fix_assessment, evaluation, config.mode,
-            citation=citation, citation_audit=citation_audit,
+            citation=citation, citation_audit=citation_audit, engines=engines,
         ))
 
         report_dir = config.report_dir
@@ -328,16 +363,8 @@ class ReportGenerator:
         Reads from ``state['config']`` — the canonical location, since ``mode``
         is a runtime configuration knob, not an input artifact.
         """
-        state_path = replicate_dir / ".veritas" / "pipeline_state.json"
-        if not state_path.exists():
-            return None
-        try:
-            with open(state_path, encoding='utf-8') as f:
-                data = json.load(f)
-            config = data.get("config") or {}
-            return config.get("mode")
-        except (OSError, json.JSONDecodeError):
-            return None
+        config = read_state_dict(replicate_dir).get("config") or {}
+        return config.get("mode")
 
     def _load_fix_assessment(self, replicate_dir: Path) -> Optional[FixSeverityAssessment]:
         """Load assess/fix_severity.json for a from-artifacts re-render.
@@ -366,9 +393,16 @@ class ReportGenerator:
         output_dir: Optional[Path] = None,
         citation: Optional[dict] = None,
         citation_audit: Optional[dict] = None,
+        engines: Optional[dict] = None,
     ) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        report = f"# Replication Report\n\n**Generated:** {now}\n\n---\n\n"
+        report = f"# Replication Report\n\n**Generated:** {now}\n\n"
+        engines = engines or {}
+        if engines:
+            report += "**Models:** " + ", ".join(
+                f"{bucket}: {engine}" for bucket, engine in engines.items()
+            ) + "\n\n"
+        report += "---\n\n"
 
         # Manager / external-checker narrative (advisory; None when --evaluate
         # was not run or the output is malformed — the report stays complete).
@@ -565,6 +599,11 @@ class ReportGenerator:
             section += (
                 f"\n_The independent audit softened {view['softened_count']} flagged "
                 f"verdict(s) it could not confirm._\n\n"
+            )
+        if view["unmatched_audit"]:
+            section += (
+                f"\n_{view['unmatched_audit']} audit verdict(s) could not be "
+                f"matched to a first-pass entry and were not applied._\n\n"
             )
 
         return section
@@ -847,6 +886,7 @@ class ReportGenerator:
             return None
         audit_lookup = _build_audit_lookup(audit)
         softened_count = 0
+        consumed = set()
 
         s = citation.get("summary")
         s = s if isinstance(s, dict) else {}
@@ -856,7 +896,8 @@ class ReportGenerator:
             if not isinstance(f, dict):
                 continue
             first_status = _txt(f.get("status"))
-            audit_verdict = _audit_verdict_for(audit_lookup, f.get("key"), "integrity")
+            audit_verdict = _audit_verdict_for(
+                audit_lookup, f.get("key"), "integrity", consumed=consumed)
             final_status, softened = self._soften_verdict(first_status, audit_verdict, "integrity")
             if softened:
                 softened_count += 1
@@ -883,6 +924,17 @@ class ReportGenerator:
         fsum = s.get("faithfulness")
         fsum = fsum if isinstance(fsum, dict) else {}
         faith_rows = []
+        # Auditable rows per key — only verdicts the audit re-checks (see
+        # _has_auditable_findings) can be the target of an audit item. With a
+        # single such row, an item for the key pairs unambiguously even when
+        # its claim text drifted.
+        auditable_key_counts = Counter(
+            _txt(f.get("key"))
+            for f in citation.get("faithfulness") or []
+            if isinstance(f, dict)
+            and f.get("source_status") != "inaccessible"
+            and f.get("verdict") in ("contradicted", "partially_supported")
+        )
         if fsum.get("checked"):
             for f in citation.get("faithfulness") or []:
                 if not isinstance(f, dict):
@@ -892,7 +944,12 @@ class ReportGenerator:
                 else:
                     first_verdict = _txt(f.get("verdict"))
                     audit_verdict = _audit_verdict_for(
-                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"))
+                        audit_lookup, f.get("key"), "faithfulness", f.get("claim"),
+                        sole_row=(
+                            f.get("verdict") in ("contradicted", "partially_supported")
+                            and auditable_key_counts[_txt(f.get("key"))] == 1
+                        ),
+                        consumed=consumed)
                     final_verdict, softened = self._soften_verdict(
                         first_verdict, audit_verdict, "faithfulness")
                     if softened:
@@ -919,6 +976,9 @@ class ReportGenerator:
             "unresolved": s.get("unresolved", 0),
             "flagged": flagged_rows,
             "has_audit": bool(audit_lookup),
+            "unmatched_audit": (
+                sum(len(v) for v in audit_lookup.values()) - len(consumed)
+            ),
             "support_not_checked": citation.get("checked_support") is False,
             "faith_checked": fsum.get("checked", 0) or 0,
             "faith_scope": s.get("faithfulness_scope", "main"),
@@ -933,7 +993,7 @@ class ReportGenerator:
 
     def _build_html_context(
         self, claims, verdicts, score, evidence, fix_assessment, evaluation, mode,
-        citation=None, citation_audit=None,
+        citation=None, citation_audit=None, engines=None,
     ) -> dict:
         verdict_by_id = {v.claim_id: v for v in verdicts}
         claim_list = claims.claims if claims is not None else []
@@ -1035,6 +1095,7 @@ class ReportGenerator:
             "flags": (score.flags if (score is not None and score.flags) else []),
             "has_evaluation": evaluation is not None,
             "citations": self._citation_view(citation, citation_audit),
+            "engines": engines or {},
         }
 
     def _generate_pdf_from_html(self, html_content: str, output_path: Path) -> bool:

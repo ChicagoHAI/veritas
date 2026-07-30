@@ -146,3 +146,17 @@ def _env_opt_int(name: str, default):
             "Invalid int for %s=%r; using default %r", name, raw, default
         )
         return default
+
+
+def _env_opt_str(name: str, default=None):
+    """Optional-string env read (default may be ``None``); empty/unset -> default.
+
+    No value coercion happens here — callers that need validation (e.g. model
+    specs) validate the returned string themselves and may raise, since a
+    malformed engine must fail fast rather than silently fall back.
+    """
+    load_dotenv_once()
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip()

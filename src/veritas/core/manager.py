@@ -44,8 +44,9 @@ DECISION_REVISE = "revise"
 VALID_DECISIONS = {DECISION_ACCEPT, DECISION_REVISE}
 
 # Phases the manager is allowed to send a re-run back to. ``replicate`` is the
-# common case; ``plan`` when the plan itself was the problem. (codegen is
-# in-scope structurally but paper-only mode is rarer; we accept it if emitted.)
+# common case; ``plan`` when the plan itself was the problem. ``codegen`` is
+# accepted for robustness but the loop downgrades it to ``plan`` — code
+# regeneration is not reachable from inside the loop.
 VALID_TARGET_PHASES = {"replicate", "plan", "codegen"}
 
 # Genuineness buckets (§4.3). The manager must classify *why* the work fell

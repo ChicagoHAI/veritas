@@ -66,6 +66,7 @@
 
   <h1>Replication Report</h1>
   <div class="sub">{% if paper_title %}{{ paper_title }} · {% endif %}Mode: {{ mode or "n/a" }} · Generated {{ generated }}</div>
+  {% if engines %}<div class="sub">Models: {% for bucket, engine in engines.items() %}{{ bucket }}: {{ engine }}{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
 
   <!-- VERDICT CARD -->
   <div class="card">
@@ -171,6 +172,7 @@
   </ul>
   {% endif %}
   {% if citations.softened_count %}<p class="sub">The independent audit softened {{ citations.softened_count }} flagged verdict(s) it could not confirm.</p>{% endif %}
+  {% if citations.unmatched_audit %}<p class="sub">{{ citations.unmatched_audit }} audit verdict(s) could not be matched to a first-pass entry and were not applied.</p>{% endif %}
   {% endif %}
 
   <!-- DETAILS (collapsible) -->
