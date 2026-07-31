@@ -127,8 +127,21 @@ STALL_THRESHOLD = 2
 # Empirically, a killed `claude` session needs a several-second warm-up
 # before it becomes resumable at all — under ~5s in direct testing, resume
 # fails outright ("No conversation found"). 60s is a wide safety margin so
-# the heartbeat loop never operates anywhere near that window.
+# the heartbeat loop never operates anywhere near that window. Also the floor
+# on a *final* tick: with less than this much budget left, the loop skips
+# straight to the wrap-up rather than spending an agent start-up on a sliver.
 MIN_HEARTBEAT_SECONDS = 60
+
+# How many times the heartbeat loop will replace a session that failed to
+# resume before giving up on the phase. Small on purpose: one or two failures
+# read as a lost session (worth recovering from), a steady stream reads as a
+# broken provider (worth surfacing, not papering over).
+MAX_RESUME_FAILURES = 2
+
+# Ceiling on the post-budget wrap-up call. This is time spent BEYOND
+# --replicate-timeout: the budget bounds the replication work, and this is the
+# bounded grace period to write down what that work produced.
+WRAP_UP_MAX_SECONDS = 300
 
 # Per-million-token pricing for known models (input_price, output_price).
 # Unknown models produce None for estimated_cost_usd_approximate; the
@@ -906,11 +919,19 @@ class ReplicationRunner:
 
         Only called for providers in ``RESUME_CAPABLE`` with a configured
         ``replicate_timeout``. Each tick runs for up to
-        ``replicate_heartbeat_seconds`` (floored at ``MIN_HEARTBEAT_SECONDS``);
+        ``replicate_heartbeat`` (floored at ``MIN_HEARTBEAT_SECONDS``);
         when a tick times out, the loop checks the real elapsed time against
         ``budget`` and either resumes the same session (``--resume``) or, once
         the budget is exhausted, sends one final resumed call asking the agent
         to finalize its evidence instead of continuing, then stops for good.
+
+        That final call runs BEYOND ``budget`` — by up to
+        ``WRAP_UP_MAX_SECONDS`` (capped at one heartbeat). ``replicate_timeout``
+        therefore bounds the replication work, not the phase's total wall
+        clock. Compounding that: the manager loop re-enters ``_replicate`` once
+        per retry, so with ``--max-iters N`` the phase's real ceiling is
+        roughly ``N * (budget + WRAP_UP_MAX_SECONDS)``. Worth knowing before
+        sizing a budget against a hard external limit like a cluster job slot.
 
         Between resumes, progress is judged with the same objective-facts
         comparison the post-replicate manager loop uses (``facts_improved``);
@@ -918,61 +939,58 @@ class ReplicationRunner:
         Magentic-One threshold, arXiv:2411.04468) switches the resume
         instruction from "continue" to a stuck nudge.
 
+        Resume is best-effort, so its failure must not be silent. A resumed
+        call that fails *without* timing out almost always means the session
+        itself is gone (CLI upgrade, evicted session store, container restart)
+        rather than that the work finished; treating that as "stop" would
+        truncate the whole phase to a single heartbeat and still report a
+        clean run. Instead the loop starts a fresh session on the remaining
+        budget, up to ``MAX_RESUME_FAILURES`` times, and only then gives up —
+        reporting that as an early termination in its own right.
+
         This is a best-effort approximation of a real checkpoint/resume
         primitive (contrast LangGraph's checkpointer + ``interrupt()``, built
         for exactly this), riding on the `claude` CLI's own session
         persistence rather than a mechanism designed to guarantee it. Returns
         ``(terminated_early, termination_reason)``.
         """
-        heartbeat = max(self.config.replicate_heartbeat_seconds, MIN_HEARTBEAT_SECONDS)
+        heartbeat = max(self.config.replicate_heartbeat, MIN_HEARTBEAT_SECONDS)
         session_id = str(uuid.uuid4())
         elapsed = 0.0
-        first = True
         stall_count = 0
+        resume_failures = 0
+        # Whether the next call starts a session (``--session-id``) or resumes
+        # the current one (``--resume``); also gates the wrap-up call, which
+        # has nothing to resume if a fresh id was minted but never used.
+        start_new_session = True
+        # The first invocation truncates the transcript; every later one — a
+        # resume OR a post-failure fresh session — appends to it.
+        transcript_started = False
+        # Set once a resume has failed: the replacement session has no memory
+        # of the run, so it needs to be told to pick the work up from disk.
+        recovered = False
         prev_facts: Optional[ExecutionFacts] = None
 
         while True:
-            tick_timeout = min(heartbeat, max(budget - elapsed, 1))
-            extra = (*SESSION_ID_FLAG[provider], session_id) if first else (*RESUME_FLAG[provider], session_id)
-            if first:
+            remaining = budget - elapsed
+            if transcript_started and remaining < MIN_HEARTBEAT_SECONDS:
+                # Too little left to be worth starting the agent again — and a
+                # tick that short may not even leave a resumable session. Spend
+                # what remains on the wrap-up call instead.
+                break
+
+            tick_timeout = min(heartbeat, max(remaining, 1))
+            if start_new_session:
+                extra = (*SESSION_ID_FLAG[provider], session_id)
                 msg = session_instructions
-            elif stall_count > STALL_THRESHOLD:
-                msg = (
-                    "No progress across the last few check-ins. Don't repeat "
-                    "the same approach — try a genuinely different strategy "
-                    "for the current step, or move on if it's blocked, and "
-                    "say why in that step's notes. This is a non-interactive "
-                    "run: no one will read or answer a question you ask, so "
-                    "make the call yourself and record your reasoning in "
-                    "notes instead of stopping to ask. Do not use the Monitor "
-                    "tool or run_in_background for anything you need the "
-                    "result of before ending your turn — verified by testing, "
-                    "'I'll wait for it' followed by ending your turn silently "
-                    "abandons the work. If a step you started is still "
-                    "running detached, poll for its real completion with "
-                    "repeated separate foreground calls (e.g. `sleep 30; "
-                    "test -f <marker> && echo READY || echo NOT_READY`, "
-                    "issued again and again) rather than restarting it or "
-                    "assuming it's done."
-                )
+                if recovered:
+                    msg += "\n\n" + self.prompt_generator.generate_heartbeat_prompt(
+                        "fresh_session"
+                    )
             else:
-                msg = (
-                    "Continue the replication plan from where you left off; "
-                    "do not repeat completed steps. This is a non-interactive "
-                    "run: no one will read or answer a question you ask. If "
-                    "the last attempt failed or was interrupted, decide how "
-                    "to proceed yourself (retry, adjust approach, or record "
-                    "the failure in that step's notes) rather than stopping "
-                    "to ask for guidance. Do not use the Monitor tool or "
-                    "run_in_background for anything you need the result of "
-                    "before ending your turn — verified by testing, 'I'll "
-                    "wait for it' followed by ending your turn silently "
-                    "abandons the work. If a step you started is still "
-                    "running detached, poll for its real completion with "
-                    "repeated separate foreground calls (e.g. `sleep 30; "
-                    "test -f <marker> && echo READY || echo NOT_READY`, "
-                    "issued again and again) rather than restarting it or "
-                    "assuming it's done."
+                extra = (*RESUME_FLAG[provider], session_id)
+                msg = self.prompt_generator.generate_heartbeat_prompt(
+                    "stuck" if stall_count > STALL_THRESHOLD else "continue"
                 )
 
             start = time.monotonic()
@@ -983,16 +1001,42 @@ class ReplicationRunner:
                 timeout=tick_timeout,
                 expose_api_keys=True,
                 extra_cli_args=extra,
-                append=not first,
+                append=transcript_started,
             )
             elapsed += time.monotonic() - start
-            first = False
+            was_new_session = start_new_session
+            start_new_session = False
+            transcript_started = True
 
             if success:
                 return False, ""  # finished on its own
+
             if not self._last_invocation_timed_out:
-                print("  Warning: Provider invocation failed (not a timeout) — stopping.")
-                return False, ""
+                if was_new_session:
+                    # The session we just started is the one that failed, so
+                    # there is nothing to recover — this is a real failure.
+                    print("  Warning: Provider invocation failed (not a timeout) — stopping.")
+                    return False, ""
+                # A resume that failed fast means the session is gone, not that
+                # the work is done. Start a replacement on the remaining budget
+                # rather than truncating the phase to a single heartbeat.
+                resume_failures += 1
+                if resume_failures > MAX_RESUME_FAILURES:
+                    reason = (
+                        f"Session resume failed {resume_failures} times; stopped "
+                        f"after {elapsed:.0f}s of a {budget}s budget."
+                    )
+                    print(f"  Warning: {reason}")
+                    return True, reason
+                print(
+                    f"  Session resume failed ({resume_failures}/{MAX_RESUME_FAILURES}) — "
+                    "starting a fresh session on the remaining budget."
+                )
+                session_id = str(uuid.uuid4())
+                start_new_session = True
+                recovered = True
+                stall_count = 0
+                continue
 
             tick_evidence = gather_evidence(self.config.replication_dir)
             curr_facts = compute_execution_facts(tick_evidence, replication_plan)
@@ -1000,29 +1044,29 @@ class ReplicationRunner:
             prev_facts = curr_facts
 
             if elapsed >= budget:
-                self._invoke_provider(
-                    prompt=(
-                        "You've reached the time budget. Don't start new "
-                        "work — finalize replication_log.json to reflect "
-                        "exactly what you completed. This is a non-interactive "
-                        "run and this is your last turn: no one will read or "
-                        "answer a question, and there is no next turn to poll "
-                        "in — do not background or defer anything now. If the "
-                        "last step failed or was interrupted, record that "
-                        "honestly in its notes rather than asking what to do "
-                        "— just write the file and stop."
-                    ),
-                    working_dir=self.config.effective_repo_path,
-                    log_path=log_path,
-                    timeout=min(300, heartbeat),
-                    expose_api_keys=True,
-                    extra_cli_args=(*RESUME_FLAG[provider], session_id),
-                    append=True,
-                )
-                reason = f"Reached the {budget}s replicate budget after {elapsed:.0f}s."
-                return True, reason
+                break
             # else: budget not yet exhausted — loop again, resuming with
             # "continue" or the stall nudge decided above.
+
+        # Both loop exits mean the same thing — the clock stopped this run, not
+        # the agent — so the reason is worded once, here.
+        reason = f"Reached the {budget}s replicate budget after {elapsed:.0f}s."
+
+        # Budget spent: one last resumed call so the agent finalizes its
+        # evidence instead of being cut off mid-thought. Skipped when there is
+        # no live session to resume — a replacement id that no invocation has
+        # used yet would just fail the same way the resume did.
+        if not start_new_session:
+            self._invoke_provider(
+                prompt=self.prompt_generator.generate_heartbeat_prompt("wrap_up"),
+                working_dir=self.config.effective_repo_path,
+                log_path=log_path,
+                timeout=min(WRAP_UP_MAX_SECONDS, heartbeat),
+                expose_api_keys=True,
+                extra_cli_args=(*RESUME_FLAG[provider], session_id),
+                append=True,
+            )
+        return True, reason
 
     # -- Phase 2 loop: replicate + manager-controlled retries --------------
 
@@ -2565,7 +2609,12 @@ class ReplicationRunner:
         SIGKILL never leaves a resumable session; SIGTERM does, once the
         session has had its brief warm-up — see ``_replicate_with_heartbeat``).
         A second timer force-kills with SIGKILL only if the process ignores
-        SIGTERM for 5s. A plain ``process.wait(timeout=...)`` after a
+        SIGTERM for 5s. POSIX only: on Windows ``terminate()`` is
+        ``TerminateProcess``, which cannot be caught, so the CLI gets no
+        chance to flush and the resumable-session property is lost — the
+        heartbeat loop still runs there, but each tick starts from a colder
+        session than it does on Linux/macOS. A plain
+        ``process.wait(timeout=...)`` after a
         streaming loop does not enforce a wall-clock limit on its own, since
         the loop blocks until the subprocess closes stdout (which happens
         when it exits anyway) — the watchdog is what actually bounds it.
