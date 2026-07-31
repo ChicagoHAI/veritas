@@ -946,7 +946,12 @@ class ReplicationRunner:
         truncate the whole phase to a single heartbeat and still report a
         clean run. Instead the loop starts a fresh session on the remaining
         budget, up to ``MAX_RESUME_FAILURES`` times, and only then gives up —
-        reporting that as an early termination in its own right.
+        reporting that as an early termination in its own right. Same for a
+        replacement that cannot even start: that means sessions are broken
+        rather than just resumes, so there is no further fallback, but earlier
+        ticks did real work and the run is still reported as cut short. Only a
+        failure of the very first call — nothing run, nothing produced — is
+        reported as a plain failure, as before.
 
         This is a best-effort approximation of a real checkpoint/resume
         primitive (contrast LangGraph's checkpointer + ``interrupt()``, built
@@ -1005,6 +1010,7 @@ class ReplicationRunner:
             )
             elapsed += time.monotonic() - start
             was_new_session = start_new_session
+            was_first_call = not transcript_started
             start_new_session = False
             transcript_started = True
 
@@ -1012,11 +1018,24 @@ class ReplicationRunner:
                 return False, ""  # finished on its own
 
             if not self._last_invocation_timed_out:
-                if was_new_session:
-                    # The session we just started is the one that failed, so
-                    # there is nothing to recover — this is a real failure.
+                if was_first_call:
+                    # Nothing ran and nothing was produced: this is the agent
+                    # failing, not the session mechanism. Unchanged behavior.
                     print("  Warning: Provider invocation failed (not a timeout) — stopping.")
                     return False, ""
+                if was_new_session:
+                    # A replacement session that couldn't even start means
+                    # sessions are broken, not just resumes — there is no
+                    # further fallback. Report it as a cutoff rather than a
+                    # clean finish: earlier ticks did real work, and calling
+                    # this complete is the exact silent truncation the
+                    # recovery path exists to prevent.
+                    reason = (
+                        f"Replacement session failed to start after "
+                        f"{elapsed:.0f}s of a {budget}s budget."
+                    )
+                    print(f"  Warning: {reason}")
+                    return True, reason
                 # A resume that failed fast means the session is gone, not that
                 # the work is done. Start a replacement on the remaining budget
                 # rather than truncating the phase to a single heartbeat.
