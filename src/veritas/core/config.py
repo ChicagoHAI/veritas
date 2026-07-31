@@ -15,6 +15,10 @@ InputMode = Literal["full", "paper-only", "repo-only"]
 
 VALID_INPUT_MODES = ["auto", "full", "paper-only", "repo-only"]
 
+# Default interval between replicate heartbeat check-ins (15 min). Shared by
+# the Config default and the CLI flag's help text so the two can't drift.
+DEFAULT_REPLICATE_HEARTBEAT = 900
+
 
 # Output directory structure — each phase writes into its own subdir.
 ANALYZE_SUBDIR = "analyze"
@@ -144,7 +148,11 @@ class Config:
     # RESUME_CAPABLE). Clamped up to MIN_HEARTBEAT_SECONDS at use — a killed
     # session needs a brief warm-up before it's resumable at all, so an
     # interval much shorter than that risks losing a tick's work outright.
-    replicate_heartbeat_seconds: int = 900
+    #
+    # Resolution matches the timeouts (highest wins): CLI flag ->
+    # VERITAS_REPLICATE_HEARTBEAT env var -> DEFAULT_REPLICATE_HEARTBEAT. The
+    # CLI passes None when its flag is absent so the env var gets its turn.
+    replicate_heartbeat: Optional[int] = None
 
     # Opt-in contextual-evaluation phase (post-verify external checker). Off by
     # default to keep per-run cost predictable; benchmark sweeps enable it.
@@ -191,6 +199,14 @@ class Config:
         for field_name, env_name in self._TIMEOUT_ENV_VARS.items():
             if getattr(self, field_name) is None:
                 setattr(self, field_name, _env_opt_int(env_name, None))
+
+        # Same precedence for the heartbeat interval, but it has a real default
+        # rather than None — an unset heartbeat means "check in every 15 min",
+        # not "never check in".
+        if self.replicate_heartbeat is None:
+            self.replicate_heartbeat = _env_int(
+                "VERITAS_REPLICATE_HEARTBEAT", DEFAULT_REPLICATE_HEARTBEAT
+            )
 
         # Faithfulness scope: same CLI-then-env-then-default resolution.
         if self.faithfulness_scope is None:
