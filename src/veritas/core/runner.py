@@ -22,8 +22,10 @@ from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdi
 from veritas.core.paper_claims import parse_paper_claims_response
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
+    REPLICATION_LOG_FILE,
     parse_replication_plan_response,
     gather_evidence,
+    record_early_termination,
     _extract_json,
 )
 from veritas.core.diligence import compute_execution_facts, ExecutionFacts
@@ -861,6 +863,16 @@ class ReplicationRunner:
         if evidence is not None and terminated_early:
             evidence.terminated_early = True
             evidence.termination_reason = termination_reason
+            # Persist it too: a resumed pipeline skips this method entirely and
+            # re-reads the log from disk, so an in-memory-only flag would let
+            # the recomputed facts call a clock cutoff a completed run.
+            if not record_early_termination(
+                self.config.replication_dir, termination_reason
+            ):
+                print(
+                    f"  Warning: could not record the early-termination marker in "
+                    f"{REPLICATION_LOG_FILE}; it will not survive a re-run"
+                )
 
         if evidence:
             print(f"  Replication completed: {evidence.steps_succeeded}/{evidence.steps_attempted} steps succeeded")
