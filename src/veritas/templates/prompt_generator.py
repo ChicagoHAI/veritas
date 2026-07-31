@@ -197,6 +197,26 @@ class PromptGenerator:
         }
         return template.render(**context)
 
+    # Check-in kinds accepted by generate_heartbeat_prompt, mirroring the
+    # branches in replication/heartbeat_checkin.md.
+    HEARTBEAT_KINDS = ("continue", "stuck", "wrap_up", "fresh_session")
+
+    def generate_heartbeat_prompt(self, kind: str) -> str:
+        """Render one replicate-heartbeat check-in message.
+
+        Consumed by ``runner.py::_replicate_with_heartbeat`` between resumed
+        invocations. See ``HEARTBEAT_KINDS`` / the template's header for what
+        each kind is for. Raises ``ValueError`` on an unknown kind rather than
+        rendering an empty prompt, which would silently send the agent nothing.
+        """
+        if kind not in self.HEARTBEAT_KINDS:
+            raise ValueError(
+                f"Unknown heartbeat check-in kind: {kind!r} "
+                f"(expected one of {', '.join(self.HEARTBEAT_KINDS)})"
+            )
+        template = self.env.get_template("replication/heartbeat_checkin.md")
+        return template.render(kind=kind).strip()
+
     def generate_codegen_prompt(
         self,
         paper_path: Path,
