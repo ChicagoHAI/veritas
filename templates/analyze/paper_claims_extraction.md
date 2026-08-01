@@ -35,7 +35,8 @@ verifiable claim, return an empty `claims` array.
 
 ## Your Task
 
-{% if has_paper %}Read the paper.{% else %}Read the README.{% endif %} {% if claim_scope == "full" %}Identify every claim that:{% elif scope_n %}Extract exactly {{ scope_n }} claim(s) — and only {{ scope_n }}: the {{ scope_n }} most central reproducible result(s) the paper presents, ranked most-central first (the most central claim is `C1`). Each must be a claim that:{% else %}Extract only the central reproducible claims — the results the paper itself presents as its main findings (in the abstract, the headline table, or the marquee figure). Typically 1-3; follow the paper — if it clearly presents more co-equal central results, extract them all. Each must be a claim that:{% endif %}
+{% set source_noun = "the paper" if has_paper else "the source" %}
+{% if has_paper %}Read the paper.{% else %}Read the README.{% endif %} {% if claim_scope == "full" %}Identify every claim that:{% elif scope_n %}Extract exactly {{ scope_n }} claim(s) — and only {{ scope_n }}: the {{ scope_n }} most central reproducible result(s) {{ source_noun }} presents, ranked most-central first (the most central claim is `C1`). Each must be a claim that:{% else %}Extract only the central reproducible claims — the results {{ source_noun }} itself presents as its main findings{% if has_paper %} (in the abstract, the headline table, or the marquee figure){% endif %}. Typically 1-3; follow {{ source_noun }} — if it clearly presents more co-equal central results, extract them all. Each must be a claim that:{% endif %}
 1. Reports a result, observation, measurement, or behavior of the system under study, AND
 2. Could plausibly be checked by inspecting outputs that the paper's code is expected to produce (numbers, ranges, tables, figures, or qualitative behaviors).
 

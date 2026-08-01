@@ -257,7 +257,13 @@ def replicate(
         raise typer.Exit(1)
 
     console.print(f"[blue]Mode:[/blue] {config.mode}")
-    console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
+    if config.claims_path:
+        # A hand-authored claims file bypasses extraction entirely -- claim_scope
+        # is not consulted, and the run's claims are stamped "user". Print that
+        # instead of config.claim_scope so the banner matches the stamp.
+        console.print("[blue]Claim scope:[/blue] user (--claims supplied)")
+    else:
+        console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
     if config.max_iters > 1:
         console.print(
             f"[blue]Manager retry loop:[/blue] ON (max {config.max_iters} iterations)"
