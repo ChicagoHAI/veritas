@@ -132,6 +132,10 @@ class PaperClaims:
     """The set of claims extracted from a paper plus light metadata."""
     paper: Dict[str, Any] = field(default_factory=dict)
     claims: List[PaperClaim] = field(default_factory=list)
+    # Which claim scope produced this set: "main" | "full" | a numeric string
+    # ("1", "2", ...) | "user" (user-supplied --claims file). None on files
+    # written before claim scope existed.
+    scope: Optional[str] = None
 
     def claim_ids(self) -> "set[str]":
         return {c.id for c in self.claims}
@@ -149,16 +153,20 @@ class PaperClaims:
         return [c for c in self.claims if c.type == claim_type]
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "paper": self.paper,
             "claims": [c.to_dict() for c in self.claims],
         }
+        if self.scope is not None:
+            d["scope"] = self.scope
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PaperClaims":
         return cls(
             paper=data.get("paper", {}),
             claims=[PaperClaim.from_dict(c) for c in data.get("claims", [])],
+            scope=data.get("scope"),
         )
 
 
