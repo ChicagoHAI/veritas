@@ -117,6 +117,13 @@ so the agent uses local files instead of fetching from the network.
 
 ### Claim scope
 
+`--scope` controls which of the paper's claims a run extracts, replicates, and
+verifies. The default, `main`, is the paper's central headline claims —
+typically 1-3, not a hard cap. `full` extends extraction to supporting claims
+as well, and a positive integer N extracts exactly the N most central claims.
+A hand-authored `--claims` file bypasses scope entirely. See "Claim types and
+tiers" below for how scope relates to scoring.
+
 ```bash
 # Claim scope (default: main — only the paper's central claims)
 ./veritas replicate --paper paper.pdf --repo ./my-project --scope full  # headline + supporting claims
