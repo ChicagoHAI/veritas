@@ -17,7 +17,7 @@ from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore, NOT_ATTEMPTED_REASONS
-from veritas.core.paper_claims import parse_paper_claims_response
+from veritas.core.paper_claims import parse_paper_claims_response, enforce_claim_scope
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     parse_replication_plan_response,
@@ -133,6 +133,7 @@ FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
     'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -407,6 +408,8 @@ class ReplicationRunner:
         if len(claims.claims) == 0:
             raise _InsufficientSpec(path, self.config.mode)
 
+        claims.scope = "user"
+
         self.config.paper_claims_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
@@ -461,6 +464,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             readme_path=readme_path,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
@@ -517,6 +521,18 @@ class ReplicationRunner:
         if len(claims.claims) == 0:
             raise _InsufficientSpec(source_for_bail, self.config.mode)
 
+        claims, dropped, scope_warnings = enforce_claim_scope(
+            claims, self.config.claim_scope
+        )
+        for w in scope_warnings:
+            print(f"  Warning: {w}")
+        if dropped:
+            print(
+                f"  Scope {self.config.claim_scope}: dropped {len(dropped)} "
+                f"out-of-scope claim(s): {', '.join(dropped)}"
+            )
+        claims.scope = self.config.claim_scope
+
         output_json_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
@@ -525,7 +541,7 @@ class ReplicationRunner:
         n_s = len(claims.by_tier("supporting"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_h} headline, {n_s} supporting)"
+            f"({n_h} headline, {n_s} supporting) [scope={self.config.claim_scope}]"
         )
         return claims
 
@@ -2254,6 +2270,7 @@ class ReplicationRunner:
             'provider': self.config.provider,
             'mode': self.config.mode,
             'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
+            'claim_scope': self.config.claim_scope,
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:

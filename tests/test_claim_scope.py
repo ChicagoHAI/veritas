@@ -102,3 +102,19 @@ def test_prompt_default_scope_is_main():
         repo_path=None, output_dir=Path("."), paper_path=Path("x.pdf")
     )
     assert "Extract only the central reproducible claims" in p
+
+
+from veritas.core.config import Config
+from veritas.core.runner import FINGERPRINT_INVALIDATES, ReplicationRunner
+
+
+def test_claim_scope_invalidates_all_stages():
+    assert FINGERPRINT_INVALIDATES["claim_scope"] == (
+        "analyze", "plan", "replicate", "assess_fixes", "verify",
+    )
+
+
+def test_claim_scope_in_config_fingerprint(tmp_path):
+    config = Config(repo_path=tmp_path, output_dir=tmp_path / "out", claim_scope="2")
+    fp = ReplicationRunner(config)._config_fingerprint()
+    assert fp["claim_scope"] == "2"
