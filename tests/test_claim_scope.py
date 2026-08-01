@@ -118,3 +118,88 @@ def test_claim_scope_in_config_fingerprint(tmp_path):
     config = Config(repo_path=tmp_path, output_dir=tmp_path / "out", claim_scope="2")
     fp = ReplicationRunner(config)._config_fingerprint()
     assert fp["claim_scope"] == "2"
+
+
+from veritas.core.pipeline_state import PipelineState
+
+
+def test_detect_config_changes_missing_claim_scope_matches_full(tmp_path):
+    """A recorded config predating claim_scope implicitly ran full-scope."""
+    state = PipelineState(tmp_path)
+    state.record_config({"provider": "claude", "mode": "full", "claims_path": None})
+    changes = state.detect_config_changes(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "full"}
+    )
+    assert "claim_scope" not in changes
+
+
+def test_detect_config_changes_missing_claim_scope_vs_main_is_a_change(tmp_path):
+    state = PipelineState(tmp_path)
+    state.record_config({"provider": "claude", "mode": "full", "claims_path": None})
+    changes = state.detect_config_changes(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "main"}
+    )
+    assert "claim_scope" in changes
+
+
+def test_detect_config_changes_main_vs_numeric_is_a_change(tmp_path):
+    state = PipelineState(tmp_path)
+    state.record_config(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "main"}
+    )
+    changes = state.detect_config_changes(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "2"}
+    )
+    assert "claim_scope" in changes
+
+
+def test_detect_config_changes_main_vs_main_is_unchanged(tmp_path):
+    state = PipelineState(tmp_path)
+    state.record_config(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "main"}
+    )
+    changes = state.detect_config_changes(
+        {"provider": "claude", "mode": "full", "claims_path": None, "claim_scope": "main"}
+    )
+    assert "claim_scope" not in changes
+
+
+def test_reconcile_legacy_dir_full_scope_no_invalidation(tmp_path):
+    """A pre-feature run dir resumed with --scope full reconciles clean (Finding 2)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# repo", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = Config(repo_path=repo, output_dir=out, mode="repo-only", claim_scope="full")
+
+    state = PipelineState(out)
+    state.record_inputs(cfg.repo_path, cfg.paper_path, data_path=cfg.data_path)
+    # Pre-feature recorded config: no claim_scope key at all.
+    state.record_config({"provider": cfg.provider, "mode": cfg.mode, "claims_path": None})
+    state.start_stage("analyze")
+    state.complete_stage("analyze", success=True)
+
+    ReplicationRunner(cfg)._reconcile_with_prior_run(state)
+
+    assert state.is_stage_completed("analyze")
+
+
+def test_reconcile_legacy_dir_main_scope_invalidates(tmp_path):
+    """The same legacy dir resumed with --scope main is a real scope change."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# repo", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = Config(repo_path=repo, output_dir=out, mode="repo-only", claim_scope="main")
+
+    state = PipelineState(out)
+    state.record_inputs(cfg.repo_path, cfg.paper_path, data_path=cfg.data_path)
+    state.record_config({"provider": cfg.provider, "mode": cfg.mode, "claims_path": None})
+    state.start_stage("analyze")
+    state.complete_stage("analyze", success=True)
+
+    ReplicationRunner(cfg)._reconcile_with_prior_run(state)
+
+    assert not state.is_stage_completed("analyze")

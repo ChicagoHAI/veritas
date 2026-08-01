@@ -406,6 +406,11 @@ def evaluate(
     # patched codebase so evaluation works even if the source inputs moved.
     state_path = replicate_dir / ".veritas" / "pipeline_state.json"
     mode = "auto"
+    # Runs from before --scope existed never recorded claim_scope and were
+    # always full-scope (headline + supporting); recover that instead of
+    # letting Config default to "main", which would look like a scope change
+    # and invalidate analyze..verify for every such run.
+    claim_scope = "full"
     paper = repo = data = None
     if state_path.exists():
         try:
@@ -413,6 +418,7 @@ def evaluate(
             cfg = st.get("config") or {}
             inp = st.get("inputs") or {}
             mode = cfg.get("mode", "auto")
+            claim_scope = cfg.get("claim_scope") or "full"
             paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
             repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
             data = Path(inp["data_path"]) if inp.get("data_path") else None
@@ -444,6 +450,7 @@ def evaluate(
             output_dir=replicate_dir,
             provider=provider,
             mode=mode,
+            claim_scope=claim_scope,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
             generate_pdf=generate_pdf,

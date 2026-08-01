@@ -21,6 +21,18 @@ STATE_SCHEMA_VERSION = 3
 # Terminal status for the analyze phase when claim extraction yields zero claims.
 STATUS_INSUFFICIENT_SPEC = "insufficient_spec"
 
+# Default value to assume for a config key that is absent from a recorded run's
+# config fingerprint, rather than treating the absence as an unset ``None``.
+# A key is absent only when the run predates that key's introduction, in which
+# case the value it implicitly used was whatever the pipeline did before the
+# key existed -- not the key's current-code default. ``claim_scope`` was
+# introduced after every prior run always extracted the full claim set
+# (headline + supporting), so an absent recorded value means "full", not the
+# current default "main".
+CONFIG_DEFAULTS_FOR_ABSENT_KEYS: Dict[str, Any] = {
+    'claim_scope': 'full',
+}
+
 
 class PipelineState:
     """Tracks pipeline execution state for resumable phases."""
@@ -232,9 +244,19 @@ class PipelineState:
         a state file that predates config tracking) or when everything matches.
         Only fields present in ``current`` are compared; recorded-only fields
         are ignored so the schema can grow without breaking older states.
+
+        A key entirely absent from the recorded config (the run predates that
+        key's introduction) is compared against ``CONFIG_DEFAULTS_FOR_ABSENT_KEYS``
+        instead of ``None``, so rolling out a new config key doesn't flag every
+        pre-existing run as changed.
         """
         recorded = self.state.get('config') or {}
-        return [k for k in current if recorded.get(k) != current.get(k)]
+        changed = []
+        for k, current_value in current.items():
+            recorded_value = recorded[k] if k in recorded else CONFIG_DEFAULTS_FOR_ABSENT_KEYS.get(k)
+            if recorded_value != current_value:
+                changed.append(k)
+        return changed
 
 
 def _sha256_of_file(path: Optional[Path]) -> Optional[str]:
