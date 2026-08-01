@@ -60,6 +60,17 @@ def replicate(
             "'repo-only' = repo alone (claims extracted from README)."
         ),
     ),
+    scope: Optional[str] = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Claim scope. 'main' (default) extracts only the paper's central "
+            "claims (headline tier, typically 1-3). 'full' extracts headline "
+            "+ supporting claims. A positive integer N extracts exactly the "
+            "N most central claims. Falls back to VERITAS_CLAIM_SCOPE, else "
+            "'main'. Ignored when --claims supplies a hand-authored file."
+        ),
+    ),
     claims: Optional[Path] = typer.Option(
         None,
         "--claims",
@@ -234,6 +245,7 @@ def replicate(
             citation_timeout=citation_timeout,
             faithfulness_scope=check_citations_faithfulness,
             mode=mode,
+            claim_scope=scope,
             claims_path=claims,
             data_path=data,
         )
@@ -245,6 +257,7 @@ def replicate(
         raise typer.Exit(1)
 
     console.print(f"[blue]Mode:[/blue] {config.mode}")
+    console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
     if config.max_iters > 1:
         console.print(
             f"[blue]Manager retry loop:[/blue] ON (max {config.max_iters} iterations)"
@@ -276,6 +289,7 @@ def estimate(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     provider: str = typer.Option("claude", "--provider", help="AI provider (claude, codex, gemini)"),
     mode: str = typer.Option("auto", "--mode"),
+    scope: Optional[str] = typer.Option(None, "--scope", help="Claim scope: 'main' (default), 'full', or a positive integer N."),
 ):
     """
     Estimate the compute and cost required to replicate a paper, without running replication.
@@ -296,7 +310,7 @@ def estimate(
         raise typer.Exit(1)
 
     try:
-        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode)
+        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode, claim_scope=scope)
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
