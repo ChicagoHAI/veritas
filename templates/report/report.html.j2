@@ -65,7 +65,7 @@
 <div class="wrap">
 
   <h1>Replication Report</h1>
-  <div class="sub">{% if paper_title %}{{ paper_title }} · {% endif %}Mode: {{ mode or "n/a" }} · Generated {{ generated }}</div>
+  <div class="sub">{% if paper_title %}{{ paper_title }} · {% endif %}Mode: {{ mode or "n/a" }}{% if claim_scope %} · Scope: {{ claim_scope }}{% endif %} · Generated {{ generated }}</div>
 
   <!-- VERDICT CARD -->
   <div class="card">
