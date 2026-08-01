@@ -62,3 +62,43 @@ def test_numeric_scope_zero_keeps_all_with_warning():
     kept, dropped, warnings = enforce_claim_scope(claims, "0")
     assert len(kept.claims) == 2 and dropped == []
     assert warnings and "not a positive count" in warnings[0]
+
+
+from pathlib import Path
+
+from veritas.templates.prompt_generator import PromptGenerator
+
+
+def _render_prompt(claim_scope):
+    return PromptGenerator().generate_paper_claims_prompt(
+        repo_path=None,
+        output_dir=Path("."),
+        paper_path=Path("x.pdf"),
+        claim_scope=claim_scope,
+    )
+
+
+def test_prompt_main_scope_branch():
+    p = _render_prompt("main")
+    assert "Extract only the central reproducible claims" in p
+    assert "Typically 1-3" in p
+    assert "favor `supporting`" not in p
+
+
+def test_prompt_full_scope_branch():
+    p = _render_prompt("full")
+    assert "Identify every claim that:" in p
+    assert "favor `supporting`" in p
+
+
+def test_prompt_numeric_scope_branch():
+    p = _render_prompt("2")
+    assert "exactly 2 claim(s)" in p and "and only 2" in p
+    assert "favor `supporting`" not in p
+
+
+def test_prompt_default_scope_is_main():
+    p = PromptGenerator().generate_paper_claims_prompt(
+        repo_path=None, output_dir=Path("."), paper_path=Path("x.pdf")
+    )
+    assert "Extract only the central reproducible claims" in p
