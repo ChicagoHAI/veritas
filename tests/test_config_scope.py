@@ -1,7 +1,6 @@
 """Config.claim_scope: CLI -> VERITAS_CLAIM_SCOPE -> "main" resolution and validation."""
 
 import pytest
-
 from veritas.core import config_env
 from veritas.core.config import Config
 

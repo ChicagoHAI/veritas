@@ -1,7 +1,13 @@
 """PaperClaims.scope stamp round-trip and the enforce_claim_scope guard."""
 
+from pathlib import Path
+
+from veritas.core.config import Config
 from veritas.core.models.paper_claims import PaperClaim, PaperClaims
 from veritas.core.paper_claims import enforce_claim_scope
+from veritas.core.pipeline_state import PipelineState
+from veritas.core.runner import FINGERPRINT_INVALIDATES, ReplicationRunner
+from veritas.templates.prompt_generator import PromptGenerator
 
 
 def _claims(tiers):
@@ -64,11 +70,6 @@ def test_numeric_scope_zero_keeps_all_with_warning():
     assert warnings and "not a positive count" in warnings[0]
 
 
-from pathlib import Path
-
-from veritas.templates.prompt_generator import PromptGenerator
-
-
 def _render_prompt(claim_scope):
     return PromptGenerator().generate_paper_claims_prompt(
         repo_path=None,
@@ -104,10 +105,6 @@ def test_prompt_default_scope_is_main():
     assert "Extract only the central reproducible claims" in p
 
 
-from veritas.core.config import Config
-from veritas.core.runner import FINGERPRINT_INVALIDATES, ReplicationRunner
-
-
 def test_claim_scope_invalidates_all_stages():
     assert FINGERPRINT_INVALIDATES["claim_scope"] == (
         "analyze", "plan", "replicate", "assess_fixes", "verify",
@@ -118,9 +115,6 @@ def test_claim_scope_in_config_fingerprint(tmp_path):
     config = Config(repo_path=tmp_path, output_dir=tmp_path / "out", claim_scope="2")
     fp = ReplicationRunner(config)._config_fingerprint()
     assert fp["claim_scope"] == "2"
-
-
-from veritas.core.pipeline_state import PipelineState
 
 
 def test_detect_config_changes_missing_claim_scope_matches_full(tmp_path):
