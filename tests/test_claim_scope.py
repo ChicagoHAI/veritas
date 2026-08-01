@@ -55,3 +55,10 @@ def test_numeric_scope_undercount_keeps_all_with_warning():
     kept, dropped, warnings = enforce_claim_scope(claims, "3")
     assert len(kept.claims) == 1 and dropped == []
     assert warnings and "only 1" in warnings[0]
+
+
+def test_numeric_scope_zero_keeps_all_with_warning():
+    claims = _claims(["headline", "supporting"])
+    kept, dropped, warnings = enforce_claim_scope(claims, "0")
+    assert len(kept.claims) == 2 and dropped == []
+    assert warnings and "not a positive count" in warnings[0]

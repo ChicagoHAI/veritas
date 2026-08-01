@@ -55,6 +55,10 @@ def enforce_claim_scope(
 
     if claim_scope.isdigit():
         n = int(claim_scope)
+        if n < 1:
+            return claims, [], [
+                f"scope {n} is not a positive count; keeping all claims"
+            ]
         if len(claims.claims) <= n:
             warnings = []
             if len(claims.claims) < n:
