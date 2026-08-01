@@ -80,8 +80,10 @@ def compute_replication_score(
       added.
     - Zero headline claims extracted: score still computes from supporting;
       a flag is added.
-    - Fewer than ``MIN_JUDGEABLE_CLAIMS`` claims counted: the score still
-      computes but carries a low-confidence flag.
+    - Fewer than ``MIN_JUDGEABLE_CLAIMS`` claims counted AND at least one
+      claim dropped out of the denominator: the score still computes but
+      carries a low-confidence flag. A claim set that is small by design
+      (main / numeric claim scope) is not flagged.
     """
     verdict_by_id = {v.claim_id: v for v in verdicts}
 
@@ -126,15 +128,22 @@ def compute_replication_score(
     else:
         score = numerator / denominator
 
-    # Low-confidence guard: when few claims survive to the denominator (the rest
-    # excluded as not_applicable / blocked_infra / no_evidence), the score is a
-    # ratio over a tiny base and reads as more authoritative than it is — e.g.
-    # a lone matching claim yields 1.0. Surface that rather than let it mislead.
-    if score is not None and counted < MIN_JUDGEABLE_CLAIMS:
+    # Low-confidence guard: when claims drop out of the denominator (excluded
+    # as not_applicable / blocked_infra / no_evidence, or missing a verdict)
+    # and few survive, the score is a ratio over a shrunken base and reads as
+    # more authoritative than it is — e.g. a lone surviving match yields 1.0.
+    # A claim set that is *small by design* (main or numeric claim scope) is
+    # not low-confidence by itself, so the flag requires an actual drop-out.
+    if (
+        score is not None
+        and counted < MIN_JUDGEABLE_CLAIMS
+        and counted < len(claims.claims)
+    ):
         flags.append(
-            f"Low-confidence score: only {counted} judgeable claim(s) counted "
-            f"(min {MIN_JUDGEABLE_CLAIMS} for a reliable score); the rest were "
-            f"excluded (not_applicable / run-limited). Interpret with caution."
+            f"Low-confidence score: only {counted} of {len(claims.claims)} "
+            f"claim(s) counted (min {MIN_JUDGEABLE_CLAIMS} for a reliable "
+            f"score); the rest were excluded (not_applicable / run-limited) "
+            f"or missing. Interpret with caution."
         )
 
     if not claims.by_tier("headline"):

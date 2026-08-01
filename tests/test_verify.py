@@ -80,3 +80,35 @@ def test_no_low_confidence_flag_when_enough_judgeable():
     score = compute_replication_score(claims, verdicts)
     assert score.counted_claims == 3
     assert not any("Low-confidence" in f for f in score.flags)
+
+
+# -- low-confidence flag: small-by-design vs exclusion-shrunk ---------------
+
+def test_no_low_confidence_flag_when_small_by_design():
+    # Two claims, both cleanly graded (a main-scope-shaped run): the
+    # denominator is small because the run was scoped small, not because
+    # claims dropped out. No warning.
+    score = _two_claim_score("match", "no_match")
+    assert score.counted_claims == 2
+    assert not any("Low-confidence" in f for f in score.flags)
+
+
+def test_no_low_confidence_flag_single_clean_claim():
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+    ])
+    verdicts = [ClaimVerdict(claim_id="C1", status="match")]
+    score = compute_replication_score(claims, verdicts)
+    assert score.counted_claims == 1
+    assert not any("Low-confidence" in f for f in score.flags)
+
+
+def test_low_confidence_flag_when_verdict_missing():
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+        PaperClaim(id="C2", description="d", type="scalar", tier="headline"),
+    ])
+    verdicts = [ClaimVerdict(claim_id="C1", status="match")]
+    score = compute_replication_score(claims, verdicts)
+    assert score.counted_claims == 1
+    assert any("Low-confidence" in f for f in score.flags)
