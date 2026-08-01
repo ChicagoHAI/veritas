@@ -85,6 +85,11 @@ CITATION_AUDIT_TRANSCRIPT_FILE = "citation_audit_transcript.jsonl"
 
 VALID_FAITHFULNESS_SCOPES = ["main", "all"]
 
+# Claim scope for automatic extraction: "main" (headline claims only, the
+# default), "full" (headline + supporting), or a positive-integer string
+# ("1", "2", ...) meaning "exactly the N most central claims".
+VALID_CLAIM_SCOPES = ["main", "full"]
+
 # Manager-controlled retry loop filenames. The manager review pass is
 # the post-replicate control gate; its structured verdict lands in the
 # replication subdir, its transcript alongside, and the workflow/decision log
@@ -155,6 +160,14 @@ class Config:
     # None when its flag is not set, mirroring the timeout fields.
     faithfulness_scope: Optional[str] = None
 
+    # Claim scope: which of the paper's claims a run extracts (and therefore
+    # replicates and verifies). "main" = headline claims only; "full" =
+    # headline + supporting; a positive integer N = exactly the N most
+    # central claims. Resolution (highest wins): CLI flag ->
+    # VERITAS_CLAIM_SCOPE env var -> "main". The CLI passes None when its
+    # flag is not set, mirroring faithfulness_scope.
+    claim_scope: Optional[str] = None
+
     # Hard cap on manager-driven retry iterations (reserved for the later
     # iterative-manager loop phase; no behavior wired yet). Overridable via
     # ``VERITAS_MAX_ITERS`` (default 3). Benchmark runs set 1 for single-pass.
@@ -187,6 +200,19 @@ class Config:
         if self.faithfulness_scope is None:
             self.faithfulness_scope = _env_str(
                 "VERITAS_CITATION_FAITHFULNESS_SCOPE", "main"
+            )
+
+        # Claim scope: same CLI-then-env-then-default resolution. Empty
+        # string is treated as unset.
+        if self.claim_scope is None or not str(self.claim_scope).strip():
+            self.claim_scope = _env_str("VERITAS_CLAIM_SCOPE", "main")
+        self.claim_scope = str(self.claim_scope).strip().lower()
+        if self.claim_scope not in VALID_CLAIM_SCOPES and not (
+            self.claim_scope.isdigit() and int(self.claim_scope) >= 1
+        ):
+            raise ValueError(
+                f"claim_scope must be 'main', 'full', or a positive integer; "
+                f"got '{self.claim_scope}'"
             )
 
         # Convert input paths to Path objects (if provided)
