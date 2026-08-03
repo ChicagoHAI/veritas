@@ -121,19 +121,23 @@ KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Every output-affecting field currently
-# invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. a knob that only affects the verify phase).
+# invalidates the same downstream stages; the dict shape is preserved so
+# finer-grained rules can be added later (e.g. a knob that only affects the
+# verify phase). resource_estimate is derived from the plan, so any field that
+# invalidates plan invalidates it too — otherwise a stale estimate from the
+# prior run would be reused (most visibly on `estimate --scope`, whose whole
+# point is comparing compute across scopes on the same paper).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'data_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claim_scope':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'provider':      ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
 }
 
 

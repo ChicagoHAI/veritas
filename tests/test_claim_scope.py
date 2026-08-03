@@ -106,8 +106,10 @@ def test_prompt_default_scope_is_main():
 
 
 def test_claim_scope_invalidates_all_stages():
+    # resource_estimate is derived from the plan, so a scope change must drop it
+    # too — otherwise `estimate --scope` reuses the prior scope's estimate.
     assert FINGERPRINT_INVALIDATES["claim_scope"] == (
-        "analyze", "plan", "replicate", "assess_fixes", "verify",
+        "analyze", "plan", "resource_estimate", "replicate", "assess_fixes", "verify",
     )
 
 
@@ -197,3 +199,27 @@ def test_reconcile_legacy_dir_main_scope_invalidates(tmp_path):
     ReplicationRunner(cfg)._reconcile_with_prior_run(state)
 
     assert not state.is_stage_completed("analyze")
+
+
+def test_scope_change_invalidates_resource_estimate(tmp_path):
+    """`estimate --scope` on the same dir must re-estimate, not reuse the prior
+    scope's estimate: the estimate is derived from the scope-shaped plan."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# repo", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = Config(repo_path=repo, output_dir=out, mode="repo-only", claim_scope="main")
+
+    state = PipelineState(out)
+    state.record_inputs(cfg.repo_path, cfg.paper_path, data_path=cfg.data_path)
+    # Prior run was full scope, with the estimate already computed and cached.
+    state.record_config({"provider": cfg.provider, "mode": cfg.mode, "claims_path": None, "claim_scope": "full"})
+    for stage in ("analyze", "plan", "resource_estimate"):
+        state.start_stage(stage)
+        state.complete_stage(stage, success=True)
+
+    ReplicationRunner(cfg)._reconcile_with_prior_run(state)
+
+    assert not state.is_stage_completed("resource_estimate")
+    assert not state.is_stage_completed("plan")
