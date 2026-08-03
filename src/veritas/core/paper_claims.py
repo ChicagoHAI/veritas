@@ -67,8 +67,9 @@ def enforce_claim_scope(
                     f"claim(s) extracted; keeping all"
                 )
             return claims, [], warnings
-        # Extraction order is most-central first, so the first N are the N
-        # most central claims.
+        # The guard enforces exactly N; it keeps the first N in extraction
+        # order. Centrality ranking is trusted from the extractor (the prompt
+        # asks for most-central-first) and is not recomputed here.
         kept = PaperClaims(
             paper=claims.paper, claims=claims.claims[:n], scope=claims.scope
         )
