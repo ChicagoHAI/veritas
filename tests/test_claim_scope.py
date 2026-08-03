@@ -159,7 +159,7 @@ def test_detect_config_changes_main_vs_main_is_unchanged(tmp_path):
 
 
 def test_reconcile_legacy_dir_full_scope_no_invalidation(tmp_path):
-    """A pre-feature run dir resumed with --scope full reconciles clean (Finding 2)."""
+    """A run dir whose recorded config predates claim_scope reconciles clean under --scope full."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text("# repo", encoding="utf-8")
