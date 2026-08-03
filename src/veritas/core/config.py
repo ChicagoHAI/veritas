@@ -214,6 +214,10 @@ class Config:
                 f"claim_scope must be 'main', 'full', or a positive integer; "
                 f"got '{self.claim_scope}'"
             )
+        # Canonicalize numeric scope so equivalent spellings ("02", "2") produce
+        # the same stamp and fingerprint and don't spuriously invalidate a run.
+        if self.claim_scope.isdigit():
+            self.claim_scope = str(int(self.claim_scope))
 
         # Convert input paths to Path objects (if provided)
         if self.repo_path is not None:

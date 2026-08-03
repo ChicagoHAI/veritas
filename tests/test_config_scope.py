@@ -23,6 +23,12 @@ def test_numeric_scope_accepted(tmp_path):
     assert _cfg(tmp_path, claim_scope="2").claim_scope == "2"
 
 
+def test_numeric_scope_canonicalized(tmp_path):
+    # Equivalent spellings must collapse so they don't mis-stamp or spuriously
+    # invalidate a run via the config fingerprint.
+    assert _cfg(tmp_path, claim_scope="02").claim_scope == "2"
+
+
 def test_scope_normalized(tmp_path):
     assert _cfg(tmp_path, claim_scope="  MAIN ").claim_scope == "main"
 
