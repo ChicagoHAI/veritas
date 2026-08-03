@@ -321,6 +321,9 @@ def estimate(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
 
+    console.print(f"[blue]Mode:[/blue] {config.mode}")
+    console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
+
     runner = ReplicationRunner(config)
     try:
         result = runner.run(dry_run=True)
