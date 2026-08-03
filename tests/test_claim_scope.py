@@ -4,7 +4,7 @@ from pathlib import Path
 
 from veritas.core.config import Config
 from veritas.core.models.paper_claims import PaperClaim, PaperClaims
-from veritas.core.paper_claims import enforce_claim_scope
+from veritas.core.paper_claims import effective_claim_scope, enforce_claim_scope
 from veritas.core.pipeline_state import PipelineState
 from veritas.core.runner import FINGERPRINT_INVALIDATES, ReplicationRunner
 from veritas.templates.prompt_generator import PromptGenerator
@@ -68,6 +68,23 @@ def test_numeric_scope_zero_keeps_all_with_warning():
     kept, dropped, warnings = enforce_claim_scope(claims, "0")
     assert len(kept.claims) == 2 and dropped == []
     assert warnings and "not a positive count" in warnings[0]
+
+
+def test_effective_scope_main_with_headline_stays_main():
+    kept, _, _ = enforce_claim_scope(_claims(["headline", "supporting"]), "main")
+    assert effective_claim_scope("main", kept) == "main"
+
+
+def test_effective_scope_main_without_headline_is_full():
+    # main fell back to keeping every tier; the report must not call it "main".
+    kept, _, _ = enforce_claim_scope(_claims(["supporting", "supporting"]), "main")
+    assert effective_claim_scope("main", kept) == "full"
+
+
+def test_effective_scope_full_and_numeric_unchanged():
+    assert effective_claim_scope("full", _claims(["headline", "supporting"])) == "full"
+    # A numeric request that couldn't be fully met still reports as requested.
+    assert effective_claim_scope("3", _claims(["headline"])) == "3"
 
 
 def _render_prompt(claim_scope):

@@ -17,7 +17,11 @@ from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore, NOT_ATTEMPTED_REASONS
-from veritas.core.paper_claims import parse_paper_claims_response, enforce_claim_scope
+from veritas.core.paper_claims import (
+    parse_paper_claims_response,
+    enforce_claim_scope,
+    effective_claim_scope,
+)
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     parse_replication_plan_response,
@@ -535,7 +539,11 @@ class ReplicationRunner:
                 f"  Scope {self.config.claim_scope}: dropped {len(dropped)} "
                 f"out-of-scope claim(s): {', '.join(dropped)}"
             )
-        claims.scope = self.config.claim_scope
+        # Record the scope that actually shaped the set, not the one requested:
+        # a main run that found no headline claims kept every tier and is really
+        # a full-scope set.
+        scope = effective_claim_scope(self.config.claim_scope, claims)
+        claims.scope = scope
 
         output_json_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
@@ -545,7 +553,7 @@ class ReplicationRunner:
         n_s = len(claims.by_tier("supporting"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_h} headline, {n_s} supporting) [scope={self.config.claim_scope}]"
+            f"({n_h} headline, {n_s} supporting) [scope={scope}]"
         )
         return claims
 

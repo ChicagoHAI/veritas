@@ -87,3 +87,19 @@ def enforce_claim_scope(
         return claims, [], []
     kept = PaperClaims(paper=claims.paper, claims=headline, scope=claims.scope)
     return kept, dropped, []
+
+
+def effective_claim_scope(requested_scope: str, kept: "PaperClaims") -> str:
+    """The scope that actually shaped ``kept``, which can differ from the one
+    requested when the guard fell back.
+
+    main scope keeps every tier when the extractor produced no headline claims;
+    that outcome is a full-tier claim set, so it is reported as ``full`` rather
+    than misdescribed as ``main`` (which would make a full-scope score look
+    scope-limited). Every other case reports the requested scope unchanged.
+    """
+    if requested_scope == "main" and any(
+        c.tier != "headline" for c in kept.claims
+    ):
+        return "full"
+    return requested_scope
