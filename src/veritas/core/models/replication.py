@@ -140,6 +140,11 @@ class ExecutionEvidence:
     """Evidence collected from a replication attempt."""
     environment: Dict[str, Any]
     step_outcomes: List[StepOutcome]
+    # Set when the replicate heartbeat loop cut the run off at its configured
+    # time budget (see runner.py::_replicate) rather than the agent finishing
+    # or crashing on its own.
+    terminated_early: bool = False
+    termination_reason: str = ""
 
     @property
     def steps_attempted(self) -> int:
@@ -179,6 +184,8 @@ class ExecutionEvidence:
             "steps_succeeded": self.steps_succeeded,
             "steps_failed": self.steps_failed,
             "total_duration_seconds": self.total_duration_seconds,
+            "terminated_early": self.terminated_early,
+            "termination_reason": self.termination_reason,
         }
 
     @classmethod
@@ -186,4 +193,6 @@ class ExecutionEvidence:
         return cls(
             environment=data.get("environment", {}),
             step_outcomes=[StepOutcome.from_dict(s) for s in data.get("step_outcomes", [])],
+            terminated_early=data.get("terminated_early", False),
+            termination_reason=data.get("termination_reason", ""),
         )

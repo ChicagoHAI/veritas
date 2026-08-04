@@ -9,6 +9,7 @@ from rich.console import Console
 from veritas.core.runner import ReplicationRunner
 from veritas.core.config import (
     Config,
+    DEFAULT_REPLICATE_HEARTBEAT,
     EVALUATION_SUBDIR,
     CITATION_CHECK_FILE,
     CITATION_CHECK_META_FILE,
@@ -100,7 +101,18 @@ def replicate(
     replicate_timeout: Optional[int] = typer.Option(
         None,
         "--replicate-timeout",
-        help="Timeout in seconds for the replicate phase. Default: no timeout.",
+        help="Timeout in seconds for the replicate phase. Bounds the replication "
+             "work, not the phase's total wall clock: a final wrap-up call runs "
+             "up to 300s beyond it, and --max-iters > 1 re-runs the whole phase. "
+             "Default: no timeout.",
+    ),
+    replicate_heartbeat: Optional[int] = typer.Option(
+        None,
+        "--replicate-heartbeat",
+        help="Seconds between check-ins during the replicate phase when "
+             "--replicate-timeout is set and the provider supports session "
+             "resume (claude only). Default: VERITAS_REPLICATE_HEARTBEAT or "
+             f"{DEFAULT_REPLICATE_HEARTBEAT} (15 min).",
     ),
     verify_timeout: Optional[int] = typer.Option(
         None,
@@ -227,6 +239,7 @@ def replicate(
             analyze_timeout=analyze_timeout,
             codegen_timeout=codegen_timeout,
             replicate_timeout=replicate_timeout,
+            replicate_heartbeat=replicate_heartbeat,
             verify_timeout=verify_timeout,
             evaluate_timeout=evaluate_timeout,
             run_evaluation=evaluate,

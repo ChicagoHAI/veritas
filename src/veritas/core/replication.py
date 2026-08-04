@@ -141,4 +141,43 @@ def gather_evidence(replication_dir: Path) -> Optional[ExecutionEvidence]:
     return ExecutionEvidence(
         environment=environment,
         step_outcomes=step_outcomes,
+        # Not written by the agent — stamped into its log by
+        # record_early_termination() after the heartbeat loop cuts a run off.
+        terminated_early=bool(log_data.get("terminated_early", False)),
+        termination_reason=log_data.get("termination_reason", "") or "",
     )
+
+
+def record_early_termination(replication_dir: Path, reason: str) -> bool:
+    """Stamp the heartbeat loop's early-termination marker into
+    ``replication_log.json`` so it outlives the run that set it.
+
+    ``runner.py::_replicate`` learns that a run was cut off at its time budget,
+    but the agent's own log has no idea — the agent was killed. Keeping the
+    marker only on the in-memory evidence object would lose it the moment a
+    later run re-reads that log from disk (a resumed pipeline with
+    ``--max-iters > 1`` recomputes the execution facts from it), silently
+    re-labelling a budget-truncated run as one that finished on its own and
+    handing the manager a lazy-agent verdict for what was really a clock cutoff.
+
+    Merges into whatever the agent wrote rather than rewriting the file, and is
+    called only after the agent's final write. Returns True when the marker was
+    persisted. Never raises: a missing or unparseable log means there is no
+    evidence to annotate, which ``compute_execution_facts`` already reports as
+    its own, louder signal.
+    """
+    log_path = replication_dir / REPLICATION_LOG_FILE
+    try:
+        log_data = json.loads(log_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(log_data, dict):
+        return False
+
+    log_data["terminated_early"] = True
+    log_data["termination_reason"] = reason
+    try:
+        log_path.write_text(json.dumps(log_data, indent=2), encoding="utf-8")
+    except OSError:
+        return False
+    return True
