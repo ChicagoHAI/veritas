@@ -132,10 +132,13 @@ STALL_THRESHOLD = 2
 # straight to the wrap-up rather than spending an agent start-up on a sliver.
 MIN_HEARTBEAT_SECONDS = 60
 
-# How many times the heartbeat loop will replace a session that failed to
-# resume before giving up on the phase. Small on purpose: one or two failures
-# read as a lost session (worth recovering from), a steady stream reads as a
-# broken provider (worth surfacing, not papering over).
+# How many lost sessions the heartbeat loop will replace across the whole
+# phase before giving up. Cumulative by design — a consecutive count would be
+# meaningless here, because two resume failures are always separated by a
+# replacement-session start that either works (which would reset such a
+# count) or fails (which ends the phase on its own). Small on purpose: one or
+# two losses over a run read as bad luck (worth recovering from), a third
+# reads as a broken provider (worth surfacing, not papering over).
 MAX_RESUME_FAILURES = 2
 
 # Ceiling on the post-budget wrap-up call. This is time spent BEYOND
