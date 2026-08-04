@@ -2008,7 +2008,7 @@ class ReplicationRunner:
 
         if not success or not output_path.exists():
             print("  Warning: Resource estimation did not produce output")
-            return ResourceEstimate(**static)
+            return self._write_overhead_only_estimate(static, claim_count)
 
         try:
             raw = _extract_json(output_path.read_text(encoding="utf-8"))
@@ -2027,7 +2027,45 @@ class ReplicationRunner:
             return result
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  Warning: Could not parse resource estimate: {e}")
-            return ResourceEstimate(**static)
+            # Keep what the model actually wrote — it is the only record of why
+            # the parse failed that is not buried in the transcript.
+            salvage = output_path.with_suffix(".unparsed.txt")
+            try:
+                salvage.write_text(output_path.read_text(encoding="utf-8"), encoding="utf-8")
+                print(f"  Unparsed output kept at {salvage.name}")
+            except OSError:
+                pass
+            return self._write_overhead_only_estimate(static, claim_count)
+
+    def _write_overhead_only_estimate(
+        self, static: Dict[str, Any], claim_count: int
+    ) -> ResourceEstimate:
+        """Persist the deterministic half of the estimate when the LLM pass fails.
+
+        Static analysis and pipeline overhead don't depend on the model, so a failed
+        or unparseable estimation pass shouldn't leave the file with nothing in it.
+        What is missing is the paper-derived half — experiment runtime and cost — so
+        the file says so rather than reading like a complete estimate.
+        """
+        data: Dict[str, Any] = dict(static)
+        data["estimated_veritas_overhead"] = build_veritas_overhead(
+            claim_count, self.config.mode
+        )
+        data["estimate_status"] = (
+            "partial: the resource-estimation LLM pass did not produce usable output. "
+            "Pipeline overhead and static analysis below are still accurate; the paper's "
+            "own experiment runtime and cost are unknown."
+        )
+        try:
+            self.config.resource_estimate_path.write_text(
+                json.dumps(data, indent=2), encoding="utf-8"
+            )
+        except OSError as e:
+            print(f"  Warning: could not write partial resource estimate: {e}")
+        # from_dict, not ResourceEstimate(**static): analyze_repo returns keys the
+        # dataclass doesn't declare (key_dependencies, requires_data_download), and
+        # splatting them raises TypeError. They stay in the JSON above regardless.
+        return ResourceEstimate.from_dict(data)
 
     # -- Report ------------------------------------------------------------
 
