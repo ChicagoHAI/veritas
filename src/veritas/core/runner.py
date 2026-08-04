@@ -50,6 +50,82 @@ from veritas.templates.prompt_generator import PromptGenerator
 from veritas.utils.security import sanitize_logs_directory, sanitize_text
 
 
+# Wall-clock cost of the veritas scaffolding itself, as (low, high) minutes per
+# phase. Deliberately excludes replicate: that phase is where the paper's own
+# methodology runs, so its duration is the experiment's runtime, not our overhead.
+# Giving it a fixed budget here would contradict the replicate prompts, which tell
+# the agent a heavy step may legitimately run for hours or days.
+#
+# These are constants, so they are injected into resource_estimate.json in code
+# rather than asked for in the estimation prompt — a model told to "copy a block
+# as-is" rounds it, paraphrases the hedges, or drops fields.
+_OVERHEAD_MINUTES: Dict[str, Tuple[int, int]] = {
+    "analyze": (1, 3),
+    "plan": (1, 3),
+    "resource_estimate": (1, 3),
+    "codegen": (10, 20),      # paper-only mode only
+    "assess_fixes": (1, 3),
+    "verify": (1, 5),         # per claim
+    "report": (1, 2),
+}
+
+
+def _format_minutes(low: int, high: int) -> str:
+    """Render a minute range, switching to hours only once the floor clears an hour.
+
+    Keyed on the low end so ranges that straddle the hour mark stay in minutes:
+    "24-120 min" reads better than "0.4-2.0 hours".
+    """
+    if low < 60:
+        return f"{low}-{high} min"
+    return f"{_trim(low / 60)}-{_trim(high / 60)} hours"
+
+
+def _trim(hours: float) -> str:
+    """One decimal place, with a bare integer when the fraction is zero."""
+    return f"{hours:.1f}".removesuffix(".0")
+
+
+def build_veritas_overhead(claim_count: int, mode: str) -> Dict[str, Any]:
+    """Fixed per-phase overhead for this run's shape, plus a summed total.
+
+    ``claim_count`` scales verify, which is one provider invocation per claim;
+    ``mode`` decides whether codegen runs at all. Phases that will not run for
+    this configuration are omitted rather than listed at zero.
+    """
+    phases: Dict[str, str] = {}
+    total_low = total_high = 0
+
+    for phase, (low, high) in _OVERHEAD_MINUTES.items():
+        if phase == "codegen" and mode != "paper-only":
+            continue
+        if phase == "verify":
+            rate = f"{low}-{high} min per claim"
+            if claim_count <= 0:
+                # Claim count unknown: report the rate and leave it out of the
+                # total rather than summing a bogus zero.
+                phases[phase] = rate
+                continue
+            low, high = low * claim_count, high * claim_count
+            phases[phase] = f"{_format_minutes(low, high)} ({rate} x {claim_count} claims)"
+        else:
+            phases[phase] = _format_minutes(low, high)
+        total_low += low
+        total_high += high
+
+    total = f"~{_format_minutes(total_low, total_high)}"
+    if claim_count <= 0:
+        total += " (verify not included — claim count unknown)"
+    phases["total_excluding_replicate"] = total
+    phases["note"] = (
+        "Excludes replicate, where the paper's methodology actually runs. That phase's "
+        "duration is the experiment's own runtime (see estimated_replication_run_time), "
+        "not veritas overhead, and it has no fixed budget. Figures are rough and assume "
+        "the provider is responsive."
+    )
+    return phases
+
+
 class _InsufficientSpec(Exception):
     """Signal raised when claim extraction returns zero verifiable claims.
 
@@ -236,7 +312,9 @@ class ReplicationRunner:
             else:
                 state.start_stage('resource_estimate')
                 try:
-                    resource_estimate = self._estimate_resources(replication_plan, state)
+                    resource_estimate = self._estimate_resources(
+                        replication_plan, state, claim_count=len(claims.claims)
+                    )
                     state.complete_stage('resource_estimate', success=True)
                 except Exception as e:
                     print(f"Warning: resource estimation failed (continuing): {e}")
@@ -1882,12 +1960,16 @@ class ReplicationRunner:
         self,
         replication_plan: Optional[ReplicationPlan],
         state: Optional["PipelineState"] = None,
+        claim_count: int = 0,
     ) -> ResourceEstimate:
         """Combine static code analysis with an LLM pass to produce resource_estimate.json.
 
         The LLM output is written to disk as free-form JSON — the schema is a suggestion,
         not a contract. We only parse the fields the code needs programmatically; everything
         else stays in the raw JSON for downstream LLM consumers.
+
+        veritas's own pipeline overhead is a constant, so it is injected here rather than
+        requested from the model; ``claim_count`` scales the per-claim verify phase.
         """
         print("Estimating replication resources...")
 
@@ -1933,6 +2015,11 @@ class ReplicationRunner:
             data = json.loads(raw)
             # Static analysis fields always win (they are deterministic).
             data.update(static)
+            # So does our own pipeline overhead — a fixed cost the model is never
+            # asked to guess at, overwritten here even if it volunteered one.
+            data["estimated_veritas_overhead"] = build_veritas_overhead(
+                claim_count, self.config.mode
+            )
             # Write the merged free-form JSON back to disk as-is.
             output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             result = ResourceEstimate.from_dict(data)
