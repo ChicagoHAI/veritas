@@ -179,4 +179,5 @@ def compute_replication_score(
         counted_claims=counted,
         missing_verdicts=missing_verdicts,
         flags=flags,
+        scope=claims.scope,
     )

@@ -229,9 +229,13 @@ class ReplicationScore:
     counted_claims: int = 0  # excludes ``not_applicable`` from denominator
     missing_verdicts: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
+    # Claim scope of the graded set, copied from ``PaperClaims.scope`` — scores
+    # produced under different scopes are not comparable, so the score artifact
+    # must say which scope produced it. None on scores from before claim scope.
+    scope: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "score": self.score,
             "headline": self.headline,
             "supporting": self.supporting,
@@ -240,6 +244,9 @@ class ReplicationScore:
             "missing_verdicts": self.missing_verdicts,
             "flags": self.flags,
         }
+        if self.scope is not None:
+            d["scope"] = self.scope
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ReplicationScore":
@@ -251,4 +258,5 @@ class ReplicationScore:
             counted_claims=data.get("counted_claims", 0),
             missing_verdicts=data.get("missing_verdicts", []),
             flags=data.get("flags", []),
+            scope=data.get("scope"),
         )
