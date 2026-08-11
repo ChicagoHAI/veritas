@@ -3,10 +3,16 @@
 from pathlib import Path
 
 from veritas.core.config import Config
-from veritas.core.models.paper_claims import PaperClaim, PaperClaims
+from veritas.core.models.paper_claims import (
+    ClaimVerdict,
+    PaperClaim,
+    PaperClaims,
+    ReplicationScore,
+)
 from veritas.core.paper_claims import effective_claim_scope, enforce_claim_scope
 from veritas.core.pipeline_state import PipelineState
 from veritas.core.runner import FINGERPRINT_INVALIDATES, ReplicationRunner
+from veritas.core.verify import compute_replication_score
 from veritas.templates.prompt_generator import PromptGenerator
 
 
@@ -240,3 +246,50 @@ def test_scope_change_invalidates_resource_estimate(tmp_path):
 
     assert not state.is_stage_completed("resource_estimate")
     assert not state.is_stage_completed("plan")
+
+
+# -- scope in the score artifact --------------------------------------------
+
+def test_score_carries_claim_scope():
+    claims = _claims(["headline"])
+    claims.scope = "main"
+    verdicts = [ClaimVerdict(claim_id="C1", status="match")]
+    score = compute_replication_score(claims, verdicts)
+    assert score.to_dict()["scope"] == "main"
+
+
+def test_score_scope_omitted_for_legacy_claims():
+    claims = _claims(["headline"])
+    verdicts = [ClaimVerdict(claim_id="C1", status="match")]
+    d = compute_replication_score(claims, verdicts).to_dict()
+    assert "scope" not in d
+    assert ReplicationScore.from_dict(d).scope is None
+
+
+# -- fingerprint with a user claims file ------------------------------------
+
+def test_fingerprint_records_user_scope_with_claims_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    claims_file = tmp_path / "claims.json"
+    claims_file.write_text(
+        '{"claims": [{"id": "C1", "description": "d", "type": "scalar"}]}',
+        encoding="utf-8",
+    )
+    config = Config(
+        repo_path=repo,
+        output_dir=tmp_path / "out",
+        claims_path=claims_file,
+        claim_scope="full",
+    )
+    fp = ReplicationRunner(config)._config_fingerprint()
+    assert fp["claim_scope"] == "user"
+
+
+# -- tier normalization at parse time ---------------------------------------
+
+def test_tier_normalized_at_parse():
+    c = PaperClaim.from_dict(
+        {"id": "C1", "description": "d", "type": "scalar", "tier": " Headline "}
+    )
+    assert c.tier == "headline"
