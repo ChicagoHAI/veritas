@@ -117,7 +117,11 @@ class PaperClaim:
             id=str(data["id"]),
             description=data["description"],
             type=data["type"],
-            tier=data.get("tier", "supporting"),
+            # Normalized: tier now decides whether a claim is in scope (the
+            # main-scope guard matches "headline" exactly), so case/whitespace
+            # variants from the extractor or a hand-authored file must not
+            # silently miss the match.
+            tier=str(data.get("tier", "supporting")).strip().lower(),
             paper_value=data.get("paper_value"),
             units=data.get("units"),
             expected_output_file=data.get("expected_output_file"),
