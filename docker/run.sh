@@ -1419,9 +1419,20 @@ cmd_estimate() {
     local credential_mounts=$(get_cli_credential_mounts)
     ensure_credential_perms
 
+    # The documented VERITAS_CLAIM_SCOPE fallback must reach the container:
+    # estimate gets no --env-file (that carries replication API keys and is
+    # scoped to replicate/shell), so forward this one knob explicitly. Host
+    # shell wins; .env fills in.
+    local scope_flag=""
+    local claim_scope="${VERITAS_CLAIM_SCOPE:-$(get_env_value VERITAS_CLAIM_SCOPE)}"
+    if [ -n "$claim_scope" ]; then
+        scope_flag="-e VERITAS_CLAIM_SCOPE=$claim_scope"
+    fi
+
     eval "docker run $tty_flag --rm \\
         $platform_flag \\
         $credential_mounts \\
+        $scope_flag \\
         $MOUNTS \\
         -w /workspace \\
         \"$IMAGE_NAME\" \\
