@@ -2282,7 +2282,13 @@ class ReplicationRunner:
             'provider': self.config.provider,
             'mode': self.config.mode,
             'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
-            'claim_scope': self.config.claim_scope,
+            # With --claims the scope is never consulted (the set is stamped
+            # "user"), so record "user" — otherwise changing --scope between
+            # --claims runs would invalidate stages for a provable no-op.
+            'claim_scope': (
+                "user" if self.config.has_user_claims
+                else self.config.claim_scope
+            ),
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
