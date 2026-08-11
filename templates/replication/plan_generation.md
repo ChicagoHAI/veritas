@@ -130,7 +130,7 @@ When a step is genuinely expensive, plan for *efficiency at full scale* instead:
 
 ## Scope
 
-Focus on the paper's **headline and supporting claims**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to a headline claim.
+Focus on the **claims listed above**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to one of those claims.
 
 ## Rules
 
