@@ -157,10 +157,15 @@ def extract_actions(transcript_path: Path) -> List[Action]:
 
 
 def _norm(path_str: str) -> str:
+    # Transcript paths are posix in docker mode but can carry backslashes when
+    # the agent ran on a Windows host. Normalize before matching so prefixes
+    # still strip, and so VFS keys never disagree with the posix keys built
+    # from a --seed tree (or materialize as one filename containing "\").
+    p = path_str.replace("\\", "/")
     for prefix in STRIP_PREFIXES:
-        if path_str.startswith(prefix):
-            return path_str[len(prefix):]
-    return path_str
+        if p.startswith(prefix):
+            return p[len(prefix):]
+    return p
 
 
 def _apply_edit(content: str, old: str, new: str, replace_all: bool) -> Optional[str]:
@@ -179,7 +184,10 @@ def replay(
     if seed_dir:
         for p in Path(seed_dir).rglob("*"):
             if p.is_file():
-                key = str(p.relative_to(seed_dir))
+                # as_posix(), not str(): on Windows str() yields backslash
+                # keys that never match _norm's forward-slash transcript keys,
+                # so every seeded Edit would look unreconstructable.
+                key = p.relative_to(seed_dir).as_posix()
                 try:
                     vfs[key] = p.read_text(encoding="utf-8")
                 except UnicodeDecodeError:

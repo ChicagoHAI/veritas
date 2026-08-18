@@ -104,6 +104,35 @@ def test_seed_dir_supplies_prior_content_for_edits(tmp_path):
     assert not res.broken
 
 
+def test_nested_seed_entry_matches_transcript_path(tmp_path):
+    # Seed keys are built from the filesystem, transcript keys from the log.
+    # A nested path is where the two spellings can diverge (str() gives
+    # backslashes on Windows); they must agree or the Edit looks broken.
+    seed = tmp_path / "seed"
+    (seed / "pkg").mkdir(parents=True)
+    (seed / "pkg" / "mod.py").write_text("a = 1\n", encoding="utf-8")
+    events = [
+        _tool_use("t1", "Edit", {
+            "file_path": "/workspace/output/replication/codebase/pkg/mod.py",
+            "old_string": "a = 1", "new_string": "a = 2"}),
+        _tool_result("t1", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions, seed_dir=seed)
+    assert res.reconstructed["pkg/mod.py"] == "a = 2\n"
+    assert not res.broken
+
+
+def test_backslash_transcript_paths_normalize(tmp_path):
+    events = [
+        _tool_use("t1", "Write", {
+            "file_path": r"C:\runs\out\pkg\mod.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    assert "C:/runs/out/pkg/mod.py" in replay(actions).reconstructed
+
+
 def test_failed_write_does_not_change_state(tmp_path):
     path = "/workspace/output/replication/codebase/analyze.py"
     events = [
