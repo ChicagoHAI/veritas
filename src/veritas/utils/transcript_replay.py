@@ -286,7 +286,11 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # The opening sentence wraps across lines; collapse the whole first
+    # paragraph so --help doesn't print a truncated fragment of it.
+    ap = argparse.ArgumentParser(
+        description=" ".join(__doc__.split("\n\n")[0].split())
+    )
     ap.add_argument("transcript", type=Path)
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("--seed", type=Path, default=None)
