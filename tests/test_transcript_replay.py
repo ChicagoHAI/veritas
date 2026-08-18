@@ -2,7 +2,12 @@
 
 import json
 
-from veritas.utils.transcript_replay import extract_actions, replay, UNKNOWN
+from veritas.utils.transcript_replay import (
+    extract_actions,
+    replay,
+    write_outputs,
+    UNKNOWN,
+)
 
 
 def _transcript(tmp_path, events):
@@ -299,3 +304,25 @@ def test_failed_write_does_not_change_state(tmp_path):
     ]
     actions = extract_actions(_transcript(tmp_path, events))
     assert replay(actions).reconstructed["analyze.py"] == "good\n"
+
+
+def test_traversal_path_is_not_materialized_outside_the_tree(tmp_path):
+    # VFS keys come from agent-authored tool input. write_outputs rmtree's its
+    # destination first, so a key that resolves outside the tree would write
+    # into an already-destructive context.
+    events = [
+        _tool_use("t1", "Write", {
+            "file_path": "/workspace/repo/../../../escaped.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "Write", {
+            "file_path": "/workspace/repo/kept.py", "content": "y\n"}),
+        _tool_result("t2", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    res = replay(extract_actions(transcript))
+    out = tmp_path / "out"
+    write_outputs(res, out, transcript, 2, None)
+
+    assert (out / "reconstructed" / "kept.py").read_text() == "y\n"
+    assert not list(tmp_path.parent.glob("escaped.py"))
+    assert "escape the output tree" in (out / "report.md").read_text()

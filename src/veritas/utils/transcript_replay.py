@@ -352,8 +352,18 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     tree = out_dir / "reconstructed"
     tree.mkdir(parents=True)
 
+    # VFS keys come from the transcript, i.e. from agent-authored tool input.
+    # A key containing ".." (or an absolute path no prefix stripped) would
+    # resolve outside the output tree -- and this function rmtree's its
+    # destination, so a stray write here lands in an already-destructive
+    # context. Materialize only what stays inside the tree; report the rest.
+    tree_resolved = tree.resolve()
+    escaped: List[str] = []
     for path, content in sorted(res.reconstructed.items()):
         dest = tree / path.lstrip("/")
+        if not dest.resolve().is_relative_to(tree_resolved):
+            escaped.append(path)
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
 
@@ -369,6 +379,13 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     report += [f"  action {seq}: {cmd}" for seq, cmd in res.opaque] or ["  (none)"]
     report += ["", "## Unreconstructable edits", ""]
     report += [f"  action {seq}: {path} — {why}" for seq, path, why in res.broken] or ["  (none)"]
+    if escaped:
+        report += [
+            "", "## Paths not materialized (escape the output tree)", "",
+            "  Reconstructed, but the path resolves outside the output "
+            "directory.", "",
+        ]
+        report += [f"  {p}" for p in escaped]
     if res.approximate:
         report += [
             "", "## Files recovered from Read output (approximate)", "",
