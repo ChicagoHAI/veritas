@@ -47,7 +47,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 # Commands that plausibly mutate the filesystem -> flagged opaque. Heuristic
 # by design: over-flagging costs a false warning, under-flagging hides a gap.
@@ -75,6 +75,38 @@ class _Unknown:
 
 UNKNOWN = _Unknown()
 
+# A Read result line: `cat -n` numbering, then a tab, then the file's line.
+_READ_LINE = re.compile(r"^\s*(\d+)\t(.*)$")
+
+
+def _denumber_read(text: str) -> Optional[str]:
+    """Recover file content from a `cat -n`-formatted Read result.
+
+    Returns None when the result isn't a whole-file dump — an empty-file
+    notice, a bare system reminder, an image, or a partial read (an
+    ``offset`` starts the numbering above 1) — so the caller leaves the
+    path UNKNOWN rather than storing prose as if it were content.
+
+    Content recovered this way is *approximate*: `cat -n` cannot distinguish
+    a file ending in a newline from one that doesn't, and a trailing newline
+    is assumed. Callers should record the path in ``ReplayResult.approximate``.
+    """
+    out: List[str] = []
+    first_no: Optional[int] = None
+    for line in text.split("\n"):
+        m = _READ_LINE.match(line)
+        if m:
+            if first_no is None:
+                first_no = int(m.group(1))
+            out.append(m.group(2))
+        elif out:
+            break  # trailing reminder / truncation notice — content ended
+        else:
+            return None  # never looked like a file dump
+    if first_no != 1:
+        return None  # partial read: this is not the whole file
+    return "\n".join(out) + "\n"
+
 
 @dataclass
 class Action:
@@ -93,6 +125,11 @@ class ReplayResult:
     sequence: List[str] = field(default_factory=list)
     opaque: List[Tuple[int, str]] = field(default_factory=list)
     broken: List[Tuple[int, str, str]] = field(default_factory=list)
+    # Paths whose content was recovered from a Read result rather than from a
+    # Write. Byte-identity is not guaranteed for these: `cat -n` output cannot
+    # express whether the file ended in a newline. Kept separate so the report
+    # never claims exact reconstruction for content it only inferred.
+    approximate: Set[str] = field(default_factory=set)
 
     @property
     def reconstructed(self) -> Dict[str, str]:
@@ -254,9 +291,20 @@ def replay(
         elif a.tool == "Read":
             path = _norm(a.input.get("file_path", "?"))
             res.sequence.append(f"{a.seq:>4}. [{status}] Read   {path}")
-            # A successful Read of an unknown file recovers its content.
-            if not a.is_error and a.result_text and vfs.get(path) is UNKNOWN:
-                vfs[path] = a.result_text
+            # A successful Read recovers the content of a file we don't have
+            # bytes for -- either never seen (None: pre-existed without --seed)
+            # or seen but unrecoverable (UNKNOWN). Both cases matter: recovering
+            # here is what lets a later Edit on that file replay.
+            cur = vfs.get(path)
+            if (
+                not a.is_error
+                and a.result_text is not None
+                and (cur is None or cur is UNKNOWN)
+            ):
+                recovered = _denumber_read(a.result_text)
+                if recovered is not None:
+                    vfs[path] = recovered
+                    res.approximate.add(path)
         else:
             res.sequence.append(f"{a.seq:>4}. [{status}] {a.tool}")
 
@@ -287,6 +335,14 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     report += [f"  action {seq}: {cmd}" for seq, cmd in res.opaque] or ["  (none)"]
     report += ["", "## Unreconstructable edits", ""]
     report += [f"  action {seq}: {path} — {why}" for seq, path, why in res.broken] or ["  (none)"]
+    if res.approximate:
+        report += [
+            "", "## Files recovered from Read output (approximate)", "",
+            "  Content came from a Read result, not a logged Write. The `cat -n`",
+            "  format cannot express whether the file ended in a newline, so one",
+            "  is assumed; these may differ from the original by that byte.", "",
+        ]
+        report += [f"  {p}" for p in sorted(res.approximate)]
     if res.unknown_paths:
         report += ["", "## Files whose content could not be recovered", ""]
         report += [f"  {p}" for p in res.unknown_paths]
@@ -311,6 +367,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(
         f"Actions: {len(actions)}  |  reconstructed files: {len(res.reconstructed)}"
+        f" ({len(res.approximate)} approximate)"
         f"  |  opaque commands: {len(res.opaque)}  |  broken edits: {len(res.broken)}"
     )
     print(f"Report: {args.out_dir / 'report.md'}")

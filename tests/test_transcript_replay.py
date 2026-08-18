@@ -104,6 +104,87 @@ def test_seed_dir_supplies_prior_content_for_edits(tmp_path):
     assert not res.broken
 
 
+def _numbered(*lines):
+    """A Read result in the CLI's `cat -n` format."""
+    return "\n".join(f"{i:>6}\t{ln}" for i, ln in enumerate(lines, 1))
+
+
+def test_read_recovers_content_for_a_later_edit_without_seed(tmp_path):
+    # The file pre-existed, so there is no Write to replay -- but the agent
+    # Read it before editing, and that result carries the prior content.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("a = 1", "b = 2")),
+        _tool_use("t2", "Edit", {"file_path": path,
+                                 "old_string": "b = 2", "new_string": "b = 3"}),
+        _tool_result("t2", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions)
+    assert res.reconstructed["pre.py"] == "a = 1\nb = 3\n"
+    assert not res.broken
+    assert "pre.py" in res.approximate
+
+
+def test_read_content_is_denumbered(tmp_path):
+    # Storing the raw result would keep the "     1\t" prefixes, corrupting
+    # the materialized file and breaking every subsequent old_string match.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("x = 1", "", "y = 2")),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    assert replay(actions).reconstructed["pre.py"] == "x = 1\n\ny = 2\n"
+
+
+def test_read_of_non_file_output_leaves_path_unrecovered(tmp_path):
+    # An empty-file notice or system reminder is prose, not content. Storing
+    # it would be worse than admitting the content is unknown.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", "<system-reminder>File exists but is empty</system-reminder>"),
+        _tool_use("t2", "Edit", {"file_path": path,
+                                 "old_string": "a", "new_string": "b"}),
+        _tool_result("t2", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions)
+    assert res.vfs["pre.py"] is UNKNOWN
+    assert res.broken
+    assert not res.approximate
+
+
+def test_partial_read_is_not_treated_as_whole_file(tmp_path):
+    # An offset Read numbers from the offset, so its text is a slice of the
+    # file. Accepting it would silently truncate the reconstruction.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path, "offset": 40}),
+        _tool_result("t1", "    40\tlate = 1\n    41\tlater = 2"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions)
+    assert "pre.py" not in res.reconstructed
+
+
+def test_read_does_not_clobber_known_content(tmp_path):
+    # A Read after a Write must not downgrade exact content to approximate.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Write", {"file_path": path, "content": "exact\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "Read", {"file_path": path}),
+        _tool_result("t2", _numbered("exact")),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions)
+    assert res.reconstructed["a.py"] == "exact\n"
+    assert not res.approximate
+
+
 def test_nested_seed_entry_matches_transcript_path(tmp_path):
     # Seed keys are built from the filesystem, transcript keys from the log.
     # A nested path is where the two spellings can diverge (str() gives
