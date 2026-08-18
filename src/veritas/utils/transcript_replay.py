@@ -21,12 +21,17 @@ Codex/gemini transcripts need their own adapters.
 
 Usage:
     python -m veritas.utils.transcript_replay TRANSCRIPT.jsonl OUT_DIR \
-        [--seed DIR] [--upto N]
+        [--seed DIR] [--upto N] [--strip-prefix PREFIX]
 
     --seed DIR   initial file tree (e.g. a reconstructed codegen tree, or the
                  pre-run repo copy); edits to pre-existing files can only be
                  replayed when their prior content is known.
     --upto N     materialize state as of action N instead of the end.
+    --strip-prefix PREFIX
+                 extra absolute path prefix to strip, repeatable. The built-in
+                 prefixes are the docker-mode container paths; a host-mode
+                 transcript records that host's own absolute paths, which need
+                 stripping here to line up with --seed and the codebase copy.
 
 Validation against a real run: reconstruct codegen, then replicate seeded on
 it, then diff against the run's final codebase::
@@ -47,7 +52,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 # Commands that plausibly mutate the filesystem -> flagged opaque. Heuristic
 # by design: over-flagging costs a false warning, under-flagging hides a gap.
@@ -59,7 +64,9 @@ MUTATING_BASH = re.compile(
 )
 
 # Container path prefixes stripped so replayed paths line up with a --seed
-# tree and with the on-host copy of the codebase.
+# tree and with the on-host copy of the codebase. These are docker-mode paths;
+# a host-mode run's transcript carries whatever absolute paths that host used,
+# so it needs --strip-prefix to line up the same way.
 STRIP_PREFIXES = (
     "/workspace/output/replication/codebase/",
     "/workspace/repo/",
@@ -214,13 +221,15 @@ def extract_actions(transcript_path: Path) -> List[Action]:
     return actions
 
 
-def _norm(path_str: str) -> str:
+def _norm(path_str: str, strip_prefixes: Sequence[str] = STRIP_PREFIXES) -> str:
     # Transcript paths are posix in docker mode but can carry backslashes when
     # the agent ran on a Windows host. Normalize before matching so prefixes
     # still strip, and so VFS keys never disagree with the posix keys built
     # from a --seed tree (or materialize as one filename containing "\").
     p = path_str.replace("\\", "/")
-    for prefix in STRIP_PREFIXES:
+    # Longest first, so a caller who passes both a run root and its codebase
+    # subdirectory gets the more specific match.
+    for prefix in sorted(strip_prefixes, key=len, reverse=True):
         if p.startswith(prefix):
             return p[len(prefix):]
     return p
@@ -236,8 +245,12 @@ def replay(
     actions: List[Action],
     seed_dir: Optional[Path] = None,
     upto: Optional[int] = None,
+    strip_prefixes: Sequence[str] = STRIP_PREFIXES,
 ) -> ReplayResult:
     """Replay file-editing actions into a virtual file tree."""
+    def norm(path_str: str) -> str:
+        return _norm(path_str, strip_prefixes)
+
     vfs: Dict[str, Any] = {}
     if seed_dir:
         for p in Path(seed_dir).rglob("*"):
@@ -259,7 +272,7 @@ def replay(
         status = "ERR" if a.is_error else "ok"
 
         if a.tool == "Write":
-            path = _norm(a.input.get("file_path", "?"))
+            path = norm(a.input.get("file_path", "?"))
             body = a.input.get("content", "")
             if not a.is_error:
                 vfs[path] = body
@@ -267,7 +280,7 @@ def replay(
                 f"{a.seq:>4}. [{status}] Write  {path}  ({len(body.splitlines())} lines)"
             )
         elif a.tool == "Edit":
-            path = _norm(a.input.get("file_path", "?"))
+            path = norm(a.input.get("file_path", "?"))
             cur = vfs.get(path)
             if a.is_error:
                 res.sequence.append(
@@ -310,7 +323,7 @@ def replay(
             tag = "Bash*" if mutating else "Bash "
             res.sequence.append(f"{a.seq:>4}. [{status}] {tag}  {first}")
         elif a.tool == "Read":
-            path = _norm(a.input.get("file_path", "?"))
+            path = norm(a.input.get("file_path", "?"))
             res.sequence.append(f"{a.seq:>4}. [{status}] Read   {path}")
             # A successful Read recovers the content of a file we don't have
             # bytes for -- either never seen (None: pre-existed without --seed)
@@ -380,10 +393,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("--seed", type=Path, default=None)
     ap.add_argument("--upto", type=int, default=None)
+    ap.add_argument(
+        "--strip-prefix", action="append", default=[], metavar="PREFIX",
+        help="Extra absolute path prefix to strip, repeatable. Needed for "
+             "host-mode transcripts, whose paths aren't under /workspace/.",
+    )
     args = ap.parse_args(argv)
 
+    # Normalize to the trailing-slash form the built-ins use, so a prefix
+    # given without one still strips the separator instead of leaving a
+    # leading "/" that would make the key look absolute.
+    strip_prefixes = tuple(
+        p.replace("\\", "/").rstrip("/") + "/" for p in args.strip_prefix
+    ) + STRIP_PREFIXES
+
     actions = extract_actions(args.transcript)
-    res = replay(actions, args.seed, args.upto)
+    res = replay(actions, args.seed, args.upto, strip_prefixes)
     write_outputs(res, args.out_dir, args.transcript, len(actions), args.upto)
 
     print(

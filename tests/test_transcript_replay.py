@@ -260,6 +260,35 @@ def test_malformed_and_non_dict_lines_are_skipped(tmp_path):
     assert res.reconstructed["a.py"] == "x\n"
 
 
+def test_strip_prefix_handles_host_mode_paths(tmp_path):
+    # Host-mode transcripts carry the host's own absolute paths, which no
+    # built-in docker prefix matches; without stripping, the key stays
+    # absolute and never lines up with a --seed tree.
+    events = [
+        _tool_use("t1", "Write", {
+            "file_path": "/home/me/run/replication/codebase/pkg/mod.py",
+            "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    assert "pkg/mod.py" in replay(
+        actions, strip_prefixes=("/home/me/run/replication/codebase/",)
+    ).reconstructed
+
+
+def test_longest_strip_prefix_wins(tmp_path):
+    # A caller who passes both a run root and its codebase subdirectory should
+    # get the more specific match, regardless of argument order.
+    events = [
+        _tool_use("t1", "Write", {
+            "file_path": "/run/replication/codebase/mod.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    res = replay(actions, strip_prefixes=("/run/", "/run/replication/codebase/"))
+    assert "mod.py" in res.reconstructed
+
+
 def test_failed_write_does_not_change_state(tmp_path):
     path = "/workspace/output/replication/codebase/analyze.py"
     events = [
