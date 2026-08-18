@@ -147,9 +147,14 @@ def iter_events(path: Path) -> Iterator[Dict[str, Any]]:
             if not line:
                 continue
             try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
+                obj = json.loads(line)
+            except (ValueError, RecursionError):
+                # JSONDecodeError is a ValueError, but json.loads also raises
+                # bare ValueError (>4300-digit ints, Py3.11+) and RecursionError
+                # (deep nesting); a malformed line just gets skipped.
                 continue
+            if isinstance(obj, dict):
+                yield obj
 
 
 def extract_actions(transcript_path: Path) -> List[Action]:
@@ -158,9 +163,18 @@ def extract_actions(transcript_path: Path) -> List[Action]:
     Order is the order of ``tool_use`` blocks in the event stream; array
     order within one assistant message preserves issue order for parallel
     calls. Results are attached by ``tool_use_id``.
+
+    One transcript file legitimately holds several appended provider
+    invocations (a JSON-repair re-prompt, a heartbeat session resume), each
+    opening with a ``system``/``init`` line and each capable of re-emitting
+    ``tool_use`` blocks the earlier session already carried. A block id is
+    honored once: a duplicate would take a fresh sequence number, inflating
+    the action count and replaying its Edit a second time against content
+    that already has it applied.
     """
     actions: List[Action] = []
     by_id: Dict[str, Action] = {}
+    seen_ids: set[str] = set()
     for event in iter_events(transcript_path):
         msg = event.get("message") or {}
         content = msg.get("content")
@@ -169,13 +183,20 @@ def extract_actions(transcript_path: Path) -> List[Action]:
         if event.get("type") == "assistant":
             for block in content:
                 if block.get("type") == "tool_use":
+                    block_id = block.get("id") or ""
+                    if block_id and block_id in seen_ids:
+                        continue
                     action = Action(
                         seq=len(actions) + 1,
                         tool=block.get("name", "?"),
                         input=block.get("input", {}),
                     )
                     actions.append(action)
-                    by_id[block.get("id", "")] = action
+                    # Index only real ids: keying id-less blocks on "" made
+                    # them share one slot, cross-attaching their results.
+                    if block_id:
+                        seen_ids.add(block_id)
+                        by_id[block_id] = action
         elif event.get("type") == "user":
             for block in content:
                 if block.get("type") != "tool_result":

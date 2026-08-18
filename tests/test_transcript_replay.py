@@ -104,6 +104,11 @@ def test_seed_dir_supplies_prior_content_for_edits(tmp_path):
     assert not res.broken
 
 
+def _init():
+    """A session-boundary line: veritas transcripts hold several sessions."""
+    return {"type": "system", "subtype": "init"}
+
+
 def _numbered(*lines):
     """A Read result in the CLI's `cat -n` format."""
     return "\n".join(f"{i:>6}\t{ln}" for i, ln in enumerate(lines, 1))
@@ -212,6 +217,47 @@ def test_backslash_transcript_paths_normalize(tmp_path):
     ]
     actions = extract_actions(_transcript(tmp_path, events))
     assert "C:/runs/out/pkg/mod.py" in replay(actions).reconstructed
+
+
+def test_duplicate_tool_use_id_across_sessions_replays_once(tmp_path):
+    # A resumed session re-emits blocks the first one already carried. Counting
+    # the repeat would inflate the sequence and re-apply the Edit to content
+    # that already has it -- here, turning "v2" into a mismatch.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _init(),
+        _tool_use("t1", "Write", {"file_path": path, "content": "v1\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "Edit", {"file_path": path,
+                                 "old_string": "v1", "new_string": "v2"}),
+        _tool_result("t2", "ok"),
+        _init(),
+        _tool_use("t2", "Edit", {"file_path": path,
+                                 "old_string": "v1", "new_string": "v2"}),
+        _tool_result("t2", "ok"),
+        _tool_use("t3", "Edit", {"file_path": path,
+                                 "old_string": "v2", "new_string": "v3"}),
+        _tool_result("t3", "ok"),
+    ]
+    actions = extract_actions(_transcript(tmp_path, events))
+    assert [a.seq for a in actions] == [1, 2, 3]
+    res = replay(actions)
+    assert res.reconstructed["a.py"] == "v3\n"
+    assert not res.broken
+
+
+def test_malformed_and_non_dict_lines_are_skipped(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(
+        "not json at all\n"
+        '["a list, not an event"]\n'
+        + json.dumps(_tool_use("t1", "Write", {
+            "file_path": "/workspace/repo/a.py", "content": "x\n"})) + "\n"
+        + json.dumps(_tool_result("t1", "ok")) + "\n",
+        encoding="utf-8",
+    )
+    res = replay(extract_actions(p))
+    assert res.reconstructed["a.py"] == "x\n"
 
 
 def test_failed_write_does_not_change_state(tmp_path):
