@@ -45,10 +45,14 @@ def enforce_claim_scope(
     """Deterministically enforce the extraction-scope contract on parsed claims.
 
     The extraction prompt already instructs the agent per scope; this guard
-    makes the scope a hard guarantee. Returns ``(kept, dropped_ids,
-    warnings)``. Never turns a non-empty claim set into an empty one: when
-    filtering would drop everything, the set is kept unfiltered and a
-    warning explains why.
+    makes the outcome deterministic. What it can guarantee differs by scope:
+    a numeric scope is a hard cap (at most N claims survive); main scope
+    keeps only claims the extractor tiered ``headline`` — the tier labels
+    themselves come from the extractor, so main's typical 1-3 count is
+    advisory, not a cap; full passes through untouched. Returns ``(kept,
+    dropped_ids, warnings)``. Never turns a non-empty claim set into an
+    empty one: when filtering would drop everything, the set is kept
+    unfiltered and a warning explains why.
     """
     if claim_scope == "full":
         return claims, [], []
