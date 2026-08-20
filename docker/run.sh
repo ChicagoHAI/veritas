@@ -1239,6 +1239,15 @@ cmd_replicate() {
         contact_flag="-e VERITAS_CONTACT_EMAIL=$VERITAS_CONTACT_EMAIL"
     fi
 
+    # Claim scope: a .env value already arrives via --env-file, but a
+    # host-shell export must win over it (matching cmd_estimate). A direct
+    # -e overrides --env-file, so this carries both cases.
+    local scope_flag=""
+    local claim_scope="${VERITAS_CLAIM_SCOPE:-$(get_env_value VERITAS_CLAIM_SCOPE)}"
+    if [ -n "$claim_scope" ]; then
+        scope_flag="-e VERITAS_CLAIM_SCOPE=\"$claim_scope\""
+    fi
+
     eval "docker run $tty_flag --rm \
         $platform_flag \
         $gpu_flags \
@@ -1248,6 +1257,7 @@ cmd_replicate() {
         $env_keys_flag \
         $model_flag \
         $contact_flag \
+        $scope_flag \
         $MOUNTS \
         -w /workspace \
         \"$IMAGE_NAME\" \
@@ -1426,7 +1436,7 @@ cmd_estimate() {
     local scope_flag=""
     local claim_scope="${VERITAS_CLAIM_SCOPE:-$(get_env_value VERITAS_CLAIM_SCOPE)}"
     if [ -n "$claim_scope" ]; then
-        scope_flag="-e VERITAS_CLAIM_SCOPE=$claim_scope"
+        scope_flag="-e VERITAS_CLAIM_SCOPE=\"$claim_scope\""
     fi
 
     eval "docker run $tty_flag --rm \\
