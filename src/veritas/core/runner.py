@@ -413,9 +413,23 @@ class ReplicationRunner:
         )
 
     def _load_user_claims(self, path: Path) -> PaperClaims:
-        """Validate a user-supplied claims JSON file and copy it into the output tree."""
+        """Validate a user-supplied claims JSON file and copy it into the output tree.
+
+        When the source path is gone but the output tree already holds the
+        validated copy from the original run (a post-hoc pass on a dir whose
+        recorded ``--claims`` path was a container path, or the source file
+        moved), that copy is the same claim set — load it rather than fail.
+        """
         if not path.exists():
-            raise RuntimeError(f"--claims file not found: {path}")
+            copy = self.config.paper_claims_path
+            if copy.exists():
+                print(
+                    f"  --claims source not found at {path}; using the "
+                    f"validated copy at {copy}"
+                )
+                path = copy
+            else:
+                raise RuntimeError(f"--claims file not found: {path}")
         print(f"Loading user-supplied claims from {path}...")
         raw = path.read_text(encoding='utf-8')
         claims = PaperClaims.from_dict(json.loads(raw))

@@ -360,3 +360,26 @@ def test_load_user_claims_missing_file_fails_loudly(tmp_path):
     runner = ReplicationRunner(config)
     with pytest.raises(RuntimeError, match="claims file not found"):
         runner._load_user_claims(config.claims_path)
+
+
+def test_load_user_claims_falls_back_to_output_copy(tmp_path):
+    # Post-hoc pass on a dir whose recorded --claims path no longer exists
+    # (e.g. a container path from a docker run): the validated copy in the
+    # output tree is the same set — load it instead of failing.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = Config(
+        repo_path=repo,
+        output_dir=tmp_path / "out",
+        claims_path=tmp_path / "gone.json",
+    )
+    config.paper_claims_path.parent.mkdir(parents=True)
+    config.paper_claims_path.write_text(
+        '{"claims": [{"id": "C1", "description": "d", "type": "scalar", '
+        '"tier": "headline"}], "scope": "user"}',
+        encoding="utf-8",
+    )
+    runner = ReplicationRunner(config)
+    claims = runner._load_user_claims(config.claims_path)
+    assert [c.id for c in claims.claims] == ["C1"]
+    assert claims.scope == "user"
