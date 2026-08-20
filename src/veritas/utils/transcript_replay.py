@@ -89,14 +89,25 @@ UNKNOWN = _Unknown()
 # A Read result line: `cat -n` numbering, then a tab, then the file's line.
 _READ_LINE = re.compile(r"^\s*(\d+)\t(.*)$")
 
+# Prose the CLI appends when a Read returned only part of the file. The
+# numbered block then starts at line 1 but is a prefix, not the whole file,
+# so it must be rejected rather than stored as complete content.
+_TRUNCATION_HINT = re.compile(
+    r"(truncat|showing\s+(first|lines)|first\s+\d+\s+(of|lines)"
+    r"|use\s+offset|to\s+read\s+more|remaining\s+lines)",
+    re.IGNORECASE,
+)
+
 
 def _denumber_read(text: str) -> Optional[str]:
     """Recover file content from a `cat -n`-formatted Read result.
 
     Returns None when the result isn't a whole-file dump — an empty-file
-    notice, a bare system reminder, an image, or a partial read (an
-    ``offset`` starts the numbering above 1) — so the caller leaves the
-    path UNKNOWN rather than storing prose as if it were content.
+    notice, a bare system reminder, an image, a partial read (an ``offset``
+    starts the numbering above 1), or a dump the CLI truncated (numbering
+    starts at 1 but trailing prose says it stopped early) — so the caller
+    leaves the path UNKNOWN rather than storing a prefix as if it were the
+    whole file.
 
     Content recovered this way is *approximate*: `cat -n` cannot distinguish
     a file ending in a newline from one that doesn't, and a trailing newline
@@ -104,18 +115,26 @@ def _denumber_read(text: str) -> Optional[str]:
     """
     out: List[str] = []
     first_no: Optional[int] = None
-    for line in text.split("\n"):
+    tail: List[str] = []
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
         m = _READ_LINE.match(line)
         if m:
             if first_no is None:
                 first_no = int(m.group(1))
             out.append(m.group(2))
         elif out:
-            break  # trailing reminder / truncation notice — content ended
+            # Content ended. Keep the whole remainder: a truncation notice is
+            # usually separated from the numbered block by a blank line, so
+            # inspecting only this one line would miss it.
+            tail = lines[i:]
+            break
         else:
             return None  # never looked like a file dump
     if first_no != 1:
         return None  # partial read: this is not the whole file
+    if any(_TRUNCATION_HINT.search(t) for t in tail):
+        return None  # truncated dump: the numbered block is a prefix
     return "\n".join(out) + "\n"
 
 
@@ -334,8 +353,17 @@ def replay(
             # or seen but unrecoverable (UNKNOWN). Both cases matter: recovering
             # here is what lets a later Edit on that file replay.
             cur = vfs.get(path)
+            # A bounded Read returns a slice. An offset read is caught by
+            # _denumber_read via its starting line number, but a limit-only
+            # read numbers from 1 and is indistinguishable from a whole-file
+            # dump in the result text alone -- so reject it from the call's
+            # input instead.
+            bounded = (
+                a.input.get("offset") is not None or a.input.get("limit") is not None
+            )
             if (
                 not a.is_error
+                and not bounded
                 and a.result_text is not None
                 and (cur is None or cur is UNKNOWN)
             ):

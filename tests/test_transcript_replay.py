@@ -385,3 +385,46 @@ def test_empty_out_dir_is_accepted(tmp_path):
     transcript = _transcript(tmp_path, events)
     write_outputs(replay(extract_actions(transcript)), out, transcript, 1, None)
     assert (out / "reconstructed" / "a.py").exists()
+
+
+# -- bounded / truncated Reads are not whole-file dumps ---------------------
+
+def test_limited_read_is_not_treated_as_whole_file(tmp_path):
+    # A limit-only Read numbers from 1, so the result text alone is
+    # indistinguishable from a full dump. Accepting it would materialize a
+    # truncated file and label it merely "approximate".
+    path = "/workspace/output/replication/codebase/big.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path, "limit": 2}),
+        _tool_result("t1", _numbered("line1", "line2")),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert "big.py" not in res.reconstructed
+    assert not res.approximate
+
+
+def test_truncated_read_notice_rejects_recovery(tmp_path):
+    # The notice sits behind a blank line, so the check cannot look at only
+    # the first non-numbered line.
+    path = "/workspace/output/replication/codebase/big.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result(
+            "t1",
+            _numbered("l1", "l2")
+            + "\n\n(Showing first 2 of 5000 lines. Use offset to read more.)",
+        ),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert "big.py" not in res.reconstructed
+
+
+def test_trailing_system_reminder_still_recovers(tmp_path):
+    # Non-truncation trailing prose must not block recovery.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("x = 1") + "\n<system-reminder>note</system-reminder>"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.reconstructed["a.py"] == "x = 1\n"
