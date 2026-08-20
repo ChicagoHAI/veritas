@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from veritas.utils.transcript_replay import (
     extract_actions,
     replay,
@@ -326,3 +328,60 @@ def test_traversal_path_is_not_materialized_outside_the_tree(tmp_path):
     assert (out / "reconstructed" / "kept.py").read_text() == "y\n"
     assert not list(tmp_path.parent.glob("escaped.py"))
     assert "escape the output tree" in (out / "report.md").read_text()
+
+
+# -- out_dir is deleted recursively; guard it -------------------------------
+
+def test_refuses_to_delete_unrelated_directory(tmp_path):
+    victim = tmp_path / "important"
+    victim.mkdir()
+    (victim / "thesis.tex").write_text("years of work", encoding="utf-8")
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    res = replay(extract_actions(transcript))
+    with pytest.raises(ValueError, match="refusing to delete"):
+        write_outputs(res, victim, transcript, 1, None)
+    assert (victim / "thesis.tex").exists()
+
+
+def test_force_overwrites_unrelated_directory(tmp_path):
+    victim = tmp_path / "scratch"
+    victim.mkdir()
+    (victim / "stale.txt").write_text("junk", encoding="utf-8")
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    res = replay(extract_actions(transcript))
+    write_outputs(res, victim, transcript, 1, None, force=True)
+    assert not (victim / "stale.txt").exists()
+    assert (victim / "reconstructed" / "a.py").read_text() == "x\n"
+
+
+def test_prior_replay_output_is_overwritten_without_force(tmp_path):
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    res = replay(extract_actions(transcript))
+    out = tmp_path / "out"
+    write_outputs(res, out, transcript, 1, None)
+    write_outputs(res, out, transcript, 1, None)  # re-run must just work
+    assert (out / "reconstructed" / "a.py").read_text() == "x\n"
+
+
+def test_empty_out_dir_is_accepted(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py", "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    write_outputs(replay(extract_actions(transcript)), out, transcript, 1, None)
+    assert (out / "reconstructed" / "a.py").exists()

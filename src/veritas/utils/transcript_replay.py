@@ -72,6 +72,10 @@ STRIP_PREFIXES = (
     "/workspace/repo/",
 )
 
+# Names an out_dir may contain and still be recognized as a prior replay
+# output, i.e. safe for this tool to delete and rewrite.
+_REPLAY_OUTPUT_ENTRIES = {"report.md", "reconstructed"}
+
 
 class _Unknown:
     """Sentinel: file demonstrably exists but its bytes never appear in the log."""
@@ -346,8 +350,23 @@ def replay(
 
 
 def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
-                  n_actions: int, upto: Optional[int]) -> None:
+                  n_actions: int, upto: Optional[int],
+                  force: bool = False) -> None:
+    # out_dir is a bare positional CLI argument and this function deletes it
+    # recursively. Delete only an empty directory or one that looks like a
+    # prior replay output; anything else needs --force. A mistyped path is
+    # otherwise unrecoverable.
     if out_dir.exists():
+        if not out_dir.is_dir():
+            raise ValueError(f"{out_dir} exists and is not a directory")
+        entries = {p.name for p in out_dir.iterdir()}
+        if entries and not entries <= _REPLAY_OUTPUT_ENTRIES and not force:
+            raise ValueError(
+                f"refusing to delete {out_dir}: it is not empty and does not "
+                f"look like a previous replay output (expected only "
+                f"{', '.join(sorted(_REPLAY_OUTPUT_ENTRIES))}). "
+                f"Choose another directory, or pass --force."
+            )
         shutil.rmtree(out_dir)
     tree = out_dir / "reconstructed"
     tree.mkdir(parents=True)
@@ -415,6 +434,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Extra absolute path prefix to strip, repeatable. Needed for "
              "host-mode transcripts, whose paths aren't under /workspace/.",
     )
+    ap.add_argument(
+        "--force", action="store_true",
+        help="Delete OUT_DIR even when it holds files this tool did not write.",
+    )
     args = ap.parse_args(argv)
 
     # Normalize to the trailing-slash form the built-ins use, so a prefix
@@ -426,7 +449,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     actions = extract_actions(args.transcript)
     res = replay(actions, args.seed, args.upto, strip_prefixes)
-    write_outputs(res, args.out_dir, args.transcript, len(actions), args.upto)
+    try:
+        write_outputs(res, args.out_dir, args.transcript, len(actions),
+                      args.upto, force=args.force)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
 
     print(
         f"Actions: {len(actions)}  |  reconstructed files: {len(res.reconstructed)}"
