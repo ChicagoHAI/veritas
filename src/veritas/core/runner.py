@@ -2344,6 +2344,18 @@ class ReplicationRunner:
 
         print(f"WARNING: detected changes since prior run: {all_changes}")
         print(f"  Invalidating stages: {affected_sorted}")
+        # A pre-scope run dir resumed under the new "main" default is the one
+        # invalidation a user is likely to hit without having changed
+        # anything themselves — name the escape hatch explicitly.
+        if (
+            'claim_scope' in config_changes
+            and 'claim_scope' not in (state.state.get('config') or {})
+        ):
+            print(
+                "  Note: the claim-scope default is 'main' (headline claims "
+                "only). This run dir predates claim scope and was "
+                "full-scope; pass --scope full to keep its prior claim set."
+            )
         state.invalidate_stages(affected_sorted)
 
         if input_changes:
