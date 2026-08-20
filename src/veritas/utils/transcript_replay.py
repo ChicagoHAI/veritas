@@ -72,6 +72,11 @@ STRIP_PREFIXES = (
     "/workspace/repo/",
 )
 
+# Input keys under which a tool names the file it acts on. Used to salvage a
+# path from a tool replay does not model, so that file can at least be marked
+# UNKNOWN instead of left holding stale content.
+_PATH_INPUT_KEYS = ("file_path", "notebook_path", "path", "filePath")
+
 # Names an out_dir may contain and still be recognized as a prior replay
 # output, i.e. safe for this tool to delete and rewrite.
 _REPLAY_OUTPUT_ENTRIES = {"report.md", "reconstructed"}
@@ -155,6 +160,11 @@ class ReplayResult:
     sequence: List[str] = field(default_factory=list)
     opaque: List[Tuple[int, str]] = field(default_factory=list)
     broken: List[Tuple[int, str, str]] = field(default_factory=list)
+    # Tool calls replay does not model — anything outside Write/Edit/Bash/Read:
+    # MultiEdit, NotebookEdit, or a Task subagent whose own tool calls never
+    # reach this transcript. Tracked because silently skipping them produces a
+    # confidently wrong tree, which is the opposite of this tool's purpose.
+    unmodeled: List[Tuple[int, str]] = field(default_factory=list)
     # Paths whose content was recovered from a Read result rather than from a
     # Write. Byte-identity is not guaranteed for these: `cat -n` output cannot
     # express whether the file ended in a newline. Kept separate so the report
@@ -372,7 +382,31 @@ def replay(
                     vfs[path] = recovered
                     res.approximate.add(path)
         else:
-            res.sequence.append(f"{a.seq:>4}. [{status}] {a.tool}")
+            # An unmodeled tool. If its input names a file, that file's content
+            # is no longer known -- mark it UNKNOWN so a later Edit reports
+            # UNRECONSTRUCTABLE instead of silently applying to stale bytes.
+            touched = next(
+                (a.input[k] for k in _PATH_INPUT_KEYS
+                 if isinstance(a.input.get(k), str)),
+                None,
+            )
+            res.unmodeled.append((a.seq, a.tool))
+            if touched is not None and not a.is_error:
+                path = norm(touched)
+                vfs[path] = UNKNOWN
+                res.broken.append((
+                    a.seq, path,
+                    f"{a.tool} is not modeled by replay; content after this "
+                    f"action is unknown",
+                ))
+                res.sequence.append(
+                    f"{a.seq:>4}. [{status}] {a.tool}  {path}  "
+                    "(UNMODELED: state unknown)"
+                )
+            else:
+                res.sequence.append(
+                    f"{a.seq:>4}. [{status}] {a.tool}  (UNMODELED)"
+                )
 
     return res
 
@@ -426,6 +460,15 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     report += [f"  action {seq}: {cmd}" for seq, cmd in res.opaque] or ["  (none)"]
     report += ["", "## Unreconstructable edits", ""]
     report += [f"  action {seq}: {path} — {why}" for seq, path, why in res.broken] or ["  (none)"]
+    if res.unmodeled:
+        report += [
+            "", "## Unmodeled tool calls (effect on the tree NOT replayed)", "",
+            "  replay models Write / Edit / Bash / Read. These calls may have",
+            "  changed files in ways this reconstruction does not reflect; a",
+            "  Task subagent's own tool calls never reach this transcript at all.",
+            "",
+        ]
+        report += [f"  action {seq}: {tool}" for seq, tool in res.unmodeled]
     if escaped:
         report += [
             "", "## Paths not materialized (escape the output tree)", "",
@@ -488,6 +531,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"Actions: {len(actions)}  |  reconstructed files: {len(res.reconstructed)}"
         f" ({len(res.approximate)} approximate)"
         f"  |  opaque commands: {len(res.opaque)}  |  broken edits: {len(res.broken)}"
+        f"  |  unmodeled tools: {len(res.unmodeled)}"
     )
     print(f"Report: {args.out_dir / 'report.md'}")
     print(f"Tree:   {args.out_dir / 'reconstructed'}")

@@ -428,3 +428,46 @@ def test_trailing_system_reminder_still_recovers(tmp_path):
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert res.reconstructed["a.py"] == "x = 1\n"
+
+
+# -- tool calls replay does not model ---------------------------------------
+
+def test_unmodeled_tool_marks_its_file_unknown(tmp_path):
+    # MultiEdit is not replayed. Leaving the pre-edit content in place would
+    # produce a confidently wrong tree with nothing in the report to say so.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Write", {"file_path": path, "content": "v1\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "MultiEdit", {"file_path": path, "edits": []}),
+        _tool_result("t2", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.vfs["a.py"] is UNKNOWN
+    assert res.broken and res.broken[0][0] == 2
+    assert res.unmodeled == [(2, "MultiEdit")]
+
+
+def test_unmodeled_pathless_tool_is_still_reported(tmp_path):
+    # A Task subagent's own tool calls never reach this transcript, so its
+    # file effects are invisible; the report must still say it happened.
+    events = [
+        _tool_use("t1", "Task", {"prompt": "go fix the build"}),
+        _tool_result("t1", "done"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.unmodeled == [(1, "Task")]
+    assert not res.broken
+
+
+def test_unmodeled_section_appears_in_report(tmp_path):
+    events = [
+        _tool_use("t1", "NotebookEdit",
+                  {"notebook_path": "/workspace/repo/nb.ipynb", "new_source": "x"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    res = replay(extract_actions(transcript))
+    out = tmp_path / "out"
+    write_outputs(res, out, transcript, 1, None)
+    assert "Unmodeled tool calls" in (out / "report.md").read_text()
