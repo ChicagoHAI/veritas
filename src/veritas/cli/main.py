@@ -425,7 +425,7 @@ def evaluate(
     # letting Config default to "main", which would look like a scope change
     # and invalidate analyze..verify for every such run.
     claim_scope = "full"
-    paper = repo = data = None
+    paper = repo = data = claims = None
     if state_path.exists():
         try:
             st = json.loads(state_path.read_text(encoding="utf-8"))
@@ -436,8 +436,20 @@ def evaluate(
             paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
             repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
             data = Path(inp["data_path"]) if inp.get("data_path") else None
+            # claims_path lives in the recorded config (it is part of the
+            # fingerprint). Recover it verbatim -- no existence filter: on a
+            # docker-created run it is a container path that does not exist
+            # here, but the fingerprint only needs the setting, and a
+            # completed analyze stage never re-reads the file.
+            claims = Path(cfg["claims_path"]) if cfg.get("claims_path") else None
         except (OSError, ValueError):
             pass
+
+    # "user" is the fingerprint's spelling of "a --claims file supplied the
+    # set"; it is not a Config value. Pass None and let the fingerprint
+    # re-derive "user" from the recovered claims_path.
+    if claim_scope == "user":
+        claim_scope = None
 
     if paper is not None and not paper.exists():
         paper = None
@@ -465,6 +477,7 @@ def evaluate(
             provider=provider,
             mode=mode,
             claim_scope=claim_scope,
+            claims_path=claims,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
             generate_pdf=generate_pdf,

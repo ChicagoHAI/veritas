@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from veritas.core.config import Config
 from veritas.core.models.paper_claims import (
     ClaimVerdict,
@@ -293,3 +294,69 @@ def test_tier_normalized_at_parse():
         {"id": "C1", "description": "d", "type": "scalar", "tier": " Headline "}
     )
     assert c.tier == "headline"
+
+
+# -- "user" scope round-trips through post-hoc Config reconstruction --------
+
+def test_fingerprint_user_scope_survives_missing_claims_file(tmp_path):
+    # A post-hoc pass (evaluate) reconstructs Config from the recorded
+    # claims_path, which may not exist in that context (container path).
+    # The fingerprint derives "user" from the setting, not the file.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = Config(
+        repo_path=repo,
+        output_dir=tmp_path / "out",
+        claims_path=tmp_path / "gone.json",
+        claim_scope=None,
+    )
+    fp = ReplicationRunner(config)._config_fingerprint()
+    assert fp["claim_scope"] == "user"
+
+
+def test_user_scope_round_trips_through_reconstruction(tmp_path):
+    # The recorded fingerprint of a --claims run must reconcile clean when a
+    # post-hoc pass rebuilds Config with claim_scope=None + the recorded path.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = Config(
+        repo_path=repo,
+        output_dir=tmp_path / "out",
+        claims_path=tmp_path / "gone.json",
+        claim_scope=None,
+    )
+    fp = ReplicationRunner(config)._config_fingerprint()
+    state = PipelineState(tmp_path)
+    state.record_config(fp)
+    assert state.detect_config_changes(fp) == []
+
+
+def test_detect_config_changes_missing_scope_with_recorded_claims_is_user(tmp_path):
+    # Pre-scope run that used --claims: absent claim_scope derives "user",
+    # not "full", so the first post-upgrade pass doesn't invalidate.
+    state = PipelineState(tmp_path)
+    state.record_config(
+        {"provider": "claude", "mode": "full", "claims_path": "/x/claims.json"}
+    )
+    changes = state.detect_config_changes(
+        {
+            "provider": "claude",
+            "mode": "full",
+            "claims_path": "/x/claims.json",
+            "claim_scope": "user",
+        }
+    )
+    assert "claim_scope" not in changes
+
+
+def test_load_user_claims_missing_file_fails_loudly(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = Config(
+        repo_path=repo,
+        output_dir=tmp_path / "out",
+        claims_path=tmp_path / "gone.json",
+    )
+    runner = ReplicationRunner(config)
+    with pytest.raises(RuntimeError, match="claims file not found"):
+        runner._load_user_claims(config.claims_path)

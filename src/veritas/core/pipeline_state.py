@@ -28,7 +28,8 @@ STATUS_INSUFFICIENT_SPEC = "insufficient_spec"
 # key existed -- not the key's current-code default. ``claim_scope`` was
 # introduced after every prior run always extracted the full claim set
 # (headline + supporting), so an absent recorded value means "full", not the
-# current default "main".
+# current default "main" -- except when the recorded config carries a
+# claims_path, which ``detect_config_changes`` maps to "user" instead.
 CONFIG_DEFAULTS_FOR_ABSENT_KEYS: Dict[str, Any] = {
     'claim_scope': 'full',
 }
@@ -253,7 +254,15 @@ class PipelineState:
         recorded = self.state.get('config') or {}
         changed = []
         for k, current_value in current.items():
-            recorded_value = recorded[k] if k in recorded else CONFIG_DEFAULTS_FOR_ABSENT_KEYS.get(k)
+            if k in recorded:
+                recorded_value = recorded[k]
+            elif k == 'claim_scope' and recorded.get('claims_path'):
+                # A pre-scope run that used --claims: its claim set was
+                # user-supplied, which the fingerprint now spells "user",
+                # not the extraction default "full".
+                recorded_value = "user"
+            else:
+                recorded_value = CONFIG_DEFAULTS_FOR_ABSENT_KEYS.get(k)
             if recorded_value != current_value:
                 changed.append(k)
         return changed

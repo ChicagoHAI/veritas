@@ -395,7 +395,11 @@ class ReplicationRunner:
 
         Raises ``_InsufficientSpec`` when extraction yields 0 claims.
         """
-        if self.config.has_user_claims:
+        # Gate on the setting, not file existence, matching the fingerprint's
+        # "user" derivation: a set-but-missing claims file must fail loudly in
+        # _load_user_claims, never silently fall back to extraction (which
+        # would swap the user's hand-authored claims for extracted ones).
+        if self.config.claims_path is not None:
             return self._load_user_claims(self.config.claims_path)
 
         if self.config.has_paper:
@@ -410,6 +414,8 @@ class ReplicationRunner:
 
     def _load_user_claims(self, path: Path) -> PaperClaims:
         """Validate a user-supplied claims JSON file and copy it into the output tree."""
+        if not path.exists():
+            raise RuntimeError(f"--claims file not found: {path}")
         print(f"Loading user-supplied claims from {path}...")
         raw = path.read_text(encoding='utf-8')
         claims = PaperClaims.from_dict(json.loads(raw))
@@ -2285,8 +2291,12 @@ class ReplicationRunner:
             # With --claims the scope is never consulted (the set is stamped
             # "user"), so record "user" — otherwise changing --scope between
             # --claims runs would invalidate stages for a provable no-op.
+            # Derived from the claims_path SETTING, not file existence: a
+            # post-hoc pass (evaluate) reconstructs Config from the recorded
+            # path, which may not exist in that context (e.g. a container
+            # path), and must still fingerprint as "user".
             'claim_scope': (
-                "user" if self.config.has_user_claims
+                "user" if self.config.claims_path is not None
                 else self.config.claim_scope
             ),
         }
