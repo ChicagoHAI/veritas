@@ -294,7 +294,9 @@ def replay(
                 key = p.relative_to(seed_dir).as_posix()
                 try:
                     vfs[key] = p.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, OSError):
+                    # Binary, unreadable, or a dangling symlink: the file
+                    # exists but its bytes aren't available to seed an Edit.
                     vfs[key] = UNKNOWN
 
     res = ReplayResult(vfs=vfs)

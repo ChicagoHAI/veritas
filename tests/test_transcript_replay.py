@@ -471,3 +471,19 @@ def test_unmodeled_section_appears_in_report(tmp_path):
     out = tmp_path / "out"
     write_outputs(res, out, transcript, 1, None)
     assert "Unmodeled tool calls" in (out / "report.md").read_text()
+
+
+def test_unreadable_seed_file_does_not_crash(tmp_path):
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    ok = seed / "ok.py"
+    ok.write_text("a = 1\n", encoding="utf-8")
+    blocked = seed / "blocked.py"
+    blocked.write_text("secret\n", encoding="utf-8")
+    blocked.chmod(0o000)
+    try:
+        res = replay([], seed_dir=seed)
+    finally:
+        blocked.chmod(0o644)
+    assert res.vfs["ok.py"] == "a = 1\n"
+    assert res.vfs["blocked.py"] is UNKNOWN
