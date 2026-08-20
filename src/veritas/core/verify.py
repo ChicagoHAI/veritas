@@ -80,10 +80,11 @@ def compute_replication_score(
       added.
     - Zero headline claims extracted: score still computes from supporting;
       a flag is added.
-    - Fewer than ``MIN_JUDGEABLE_CLAIMS`` claims counted AND at least one
-      claim dropped out of the denominator: the score still computes but
-      carries a low-confidence flag. A claim set that is small by design
-      (main / numeric claim scope) is not flagged.
+    - Fewer than ``MIN_JUDGEABLE_CLAIMS`` claims counted: the score still
+      computes but carries a low-confidence flag — unless the set was
+      deliberately narrowed (``main`` / numeric / ``user`` claim scope) and
+      nothing dropped out of the denominator. A full-scope or unstamped
+      (pre-scope) set this small keeps the flag.
     """
     verdict_by_id = {v.claim_id: v for v in verdicts}
 
@@ -128,23 +129,35 @@ def compute_replication_score(
     else:
         score = numerator / denominator
 
-    # Low-confidence guard: when claims drop out of the denominator (excluded
-    # as not_applicable / blocked_infra / no_evidence, or missing a verdict)
-    # and few survive, the score is a ratio over a shrunken base and reads as
-    # more authoritative than it is — e.g. a lone surviving match yields 1.0.
-    # A claim set that is *small by design* (main or numeric claim scope) is
-    # not low-confidence by itself, so the flag requires an actual drop-out.
+    # Low-confidence guard: a score over a tiny base reads as more
+    # authoritative than it is — e.g. a lone surviving match yields 1.0.
+    # A base gets tiny two ways: claims dropped out of the denominator
+    # (excluded as not_applicable / blocked_infra / no_evidence, or missing
+    # a verdict), or the set was small to begin with. A set deliberately
+    # narrowed by scope ("main", a numeric N, or a hand-authored "user" set)
+    # is small by design, so it flags only on an actual drop-out; a
+    # full-scope (or pre-scope, unstamped) set this small is a thin base
+    # either way and keeps the flag.
+    dropped_out = counted < len(claims.claims)
+    narrowed = claims.scope is not None and claims.scope != "full"
     if (
         score is not None
         and counted < MIN_JUDGEABLE_CLAIMS
-        and counted < len(claims.claims)
+        and (dropped_out or not narrowed)
     ):
-        flags.append(
-            f"Low-confidence score: only {counted} of {len(claims.claims)} "
-            f"claim(s) counted (min {MIN_JUDGEABLE_CLAIMS} for a reliable "
-            f"score); the rest were excluded (not_applicable / run-limited) "
-            f"or missing. Interpret with caution."
-        )
+        if dropped_out:
+            flags.append(
+                f"Low-confidence score: only {counted} of {len(claims.claims)} "
+                f"claim(s) counted (min {MIN_JUDGEABLE_CLAIMS} for a reliable "
+                f"score); the rest were excluded (not_applicable / run-limited) "
+                f"or missing. Interpret with caution."
+            )
+        else:
+            flags.append(
+                f"Low-confidence score: the claim set holds only {counted} "
+                f"claim(s) (min {MIN_JUDGEABLE_CLAIMS} for a reliable score). "
+                f"Interpret with caution."
+            )
 
     if not claims.by_tier("headline"):
         flags.append(

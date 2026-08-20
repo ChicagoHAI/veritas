@@ -85,22 +85,76 @@ def test_no_low_confidence_flag_when_enough_judgeable():
 # -- low-confidence flag: small-by-design vs exclusion-shrunk ---------------
 
 def test_no_low_confidence_flag_when_small_by_design():
-    # Two claims, both cleanly graded (a main-scope-shaped run): the
-    # denominator is small because the run was scoped small, not because
-    # claims dropped out. No warning.
-    score = _two_claim_score("match", "no_match")
+    # Two main-scope claims, both cleanly graded: the denominator is small
+    # because the run was scoped small, not because claims dropped out.
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+        PaperClaim(id="C2", description="d", type="scalar", tier="headline"),
+    ], scope="main")
+    verdicts = [
+        ClaimVerdict(claim_id="C1", status="match"),
+        ClaimVerdict(claim_id="C2", status="no_match"),
+    ]
+    score = compute_replication_score(claims, verdicts)
     assert score.counted_claims == 2
     assert not any("Low-confidence" in f for f in score.flags)
 
 
 def test_no_low_confidence_flag_single_clean_claim():
+    # Numeric scope 1: a single clean claim is the requested set, no warning.
     claims = PaperClaims(claims=[
         PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
-    ])
+    ], scope="1")
     verdicts = [ClaimVerdict(claim_id="C1", status="match")]
     score = compute_replication_score(claims, verdicts)
     assert score.counted_claims == 1
     assert not any("Low-confidence" in f for f in score.flags)
+
+
+def test_no_low_confidence_flag_user_supplied_set():
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+    ], scope="user")
+    verdicts = [ClaimVerdict(claim_id="C1", status="match")]
+    score = compute_replication_score(claims, verdicts)
+    assert not any("Low-confidence" in f for f in score.flags)
+
+
+def test_low_confidence_flag_small_full_scope_set():
+    # Full scope whose extraction simply found few claims is a thin base:
+    # the flag fires even though nothing dropped out. Same for unstamped
+    # (pre-scope) sets, which were always full-scope.
+    for scope in ("full", None):
+        claims = PaperClaims(claims=[
+            PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+            PaperClaim(id="C2", description="d", type="scalar", tier="supporting"),
+        ], scope=scope)
+        verdicts = [
+            ClaimVerdict(claim_id="C1", status="match"),
+            ClaimVerdict(claim_id="C2", status="match"),
+        ]
+        score = compute_replication_score(claims, verdicts)
+        assert score.counted_claims == 2
+        assert any("Low-confidence" in f for f in score.flags), scope
+
+
+def test_low_confidence_flag_scoped_run_with_dropout():
+    # Small-by-design does not exempt exclusion shrinkage: a main-scope run
+    # that lost a claim to infra still warns about its lone survivor.
+    claims = PaperClaims(claims=[
+        PaperClaim(id="C1", description="d", type="scalar", tier="headline"),
+        PaperClaim(id="C2", description="d", type="scalar", tier="headline"),
+    ], scope="main")
+    verdicts = [
+        ClaimVerdict(claim_id="C1", status="match"),
+        ClaimVerdict(
+            claim_id="C2", status="not_attempted",
+            not_attempted_reason="blocked_infra",
+        ),
+    ]
+    score = compute_replication_score(claims, verdicts)
+    assert score.counted_claims == 1
+    assert any("Low-confidence" in f for f in score.flags)
 
 
 def test_low_confidence_flag_when_verdict_missing():
