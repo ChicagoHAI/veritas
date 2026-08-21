@@ -93,6 +93,7 @@ class PromptGenerator:
         output_dir: Path,
         paper_path: Optional[Path] = None,
         readme_path: Optional[Path] = None,
+        claim_scope: str = "main",
     ) -> str:
         """Generate prompt for paper-claim extraction.
 
@@ -107,6 +108,8 @@ class PromptGenerator:
             "readme_path": str(readme_path) if readme_path else "",
             "has_paper": paper_path is not None,
             "has_repo": repo_path is not None,
+            "claim_scope": claim_scope,
+            "scope_n": int(claim_scope) if claim_scope.isdigit() else None,
         }
         return template.render(**context)
 

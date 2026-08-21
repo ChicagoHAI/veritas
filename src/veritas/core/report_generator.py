@@ -374,7 +374,10 @@ class ReportGenerator:
         # was not run or the output is malformed — the report stays complete).
         evaluation = self._load_evaluation(output_dir)
 
-        report += self._render_executive_summary(score, mode=mode)
+        report += self._render_executive_summary(
+            score, mode=mode,
+            claim_scope=claims.scope if claims is not None else None,
+        )
 
         # Narrative synthesis leads, when available; the deterministic tables
         # below remain the authoritative, auditable record.
@@ -602,10 +605,17 @@ class ReportGenerator:
                 section += "\n"
         return section
 
-    def _render_executive_summary(self, score: Optional[ReplicationScore], mode: Optional[str] = None) -> str:
+    def _render_executive_summary(
+        self,
+        score: Optional[ReplicationScore],
+        mode: Optional[str] = None,
+        claim_scope: Optional[str] = None,
+    ) -> str:
         s = "## Executive Summary\n\n"
         if mode is not None:
             s += f"**Mode:** {mode}\n\n"
+        if claim_scope is not None:
+            s += f"**Claim scope:** {claim_scope}\n\n"
         if score is None or score.score is None:
             s += "**Replication Score: not computable** "
             if score is not None:
@@ -1017,7 +1027,8 @@ class ReportGenerator:
 
         return {
             "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "mode": mode, "paper_title": None,
+            "mode": mode, "claim_scope": claims.scope if claims is not None else None,
+            "paper_title": None,
             "score_pct": score_pct, "score_pct_str": f"{score_pct:.0f}%" if score_pct is not None else "—",
             "verdict_label": verdict_label, "badge_color": badge_color,
             "gauge_dash": round((score_val or 0) * circ, 1), "gauge_circ": round(circ, 1),

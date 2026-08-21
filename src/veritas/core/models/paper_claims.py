@@ -117,7 +117,11 @@ class PaperClaim:
             id=str(data["id"]),
             description=data["description"],
             type=data["type"],
-            tier=data.get("tier", "supporting"),
+            # Normalized: tier now decides whether a claim is in scope (the
+            # main-scope guard matches "headline" exactly), so case/whitespace
+            # variants from the extractor or a hand-authored file must not
+            # silently miss the match.
+            tier=str(data.get("tier", "supporting")).strip().lower(),
             paper_value=data.get("paper_value"),
             units=data.get("units"),
             expected_output_file=data.get("expected_output_file"),
@@ -132,6 +136,10 @@ class PaperClaims:
     """The set of claims extracted from a paper plus light metadata."""
     paper: Dict[str, Any] = field(default_factory=dict)
     claims: List[PaperClaim] = field(default_factory=list)
+    # Which claim scope produced this set: "main" | "full" | a numeric string
+    # ("1", "2", ...) | "user" (user-supplied --claims file). None on files
+    # written before claim scope existed.
+    scope: Optional[str] = None
 
     def claim_ids(self) -> "set[str]":
         return {c.id for c in self.claims}
@@ -149,16 +157,20 @@ class PaperClaims:
         return [c for c in self.claims if c.type == claim_type]
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "paper": self.paper,
             "claims": [c.to_dict() for c in self.claims],
         }
+        if self.scope is not None:
+            d["scope"] = self.scope
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PaperClaims":
         return cls(
             paper=data.get("paper", {}),
             claims=[PaperClaim.from_dict(c) for c in data.get("claims", [])],
+            scope=data.get("scope"),
         )
 
 
@@ -221,9 +233,13 @@ class ReplicationScore:
     counted_claims: int = 0  # excludes ``not_applicable`` from denominator
     missing_verdicts: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
+    # Claim scope of the graded set, copied from ``PaperClaims.scope`` — scores
+    # produced under different scopes are not comparable, so the score artifact
+    # must say which scope produced it. None on scores from before claim scope.
+    scope: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "score": self.score,
             "headline": self.headline,
             "supporting": self.supporting,
@@ -232,6 +248,9 @@ class ReplicationScore:
             "missing_verdicts": self.missing_verdicts,
             "flags": self.flags,
         }
+        if self.scope is not None:
+            d["scope"] = self.scope
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ReplicationScore":
@@ -243,4 +262,5 @@ class ReplicationScore:
             counted_claims=data.get("counted_claims", 0),
             missing_verdicts=data.get("missing_verdicts", []),
             flags=data.get("flags", []),
+            scope=data.get("scope"),
         )

@@ -130,15 +130,15 @@ When a step is genuinely expensive, plan for *efficiency at full scale* instead:
 
 ## Scope
 
-Focus on the paper's **headline and supporting claims**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to a headline claim.
+Focus on the **claims listed above**. Do not attempt to reproduce setup-only assertions, ablation studies, or appendix-only results unless they are essential to one of those claims.
 
 ## Rules
 
 - Order steps logically: setup first, then execution, then verification
-- Include 3-10 steps (enough to cover the headline claims, not exhaustive)
+- Include 3-10 steps (enough to cover the claims, not exhaustive)
 - The agent executing this plan will work on a writable copy of the repo at `{{ codebase_dir }}/`
 - The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
-- If you find multiple entry points or experiments, prioritize the one that targets the headline claim
+- If you find multiple entry points or experiments, prioritize the one that targets the most central claim
 - Every result-producing step MUST have at least one claim ID in `verifies`. Setup-only steps may have an empty `verifies` list.
 - **Validate each `verifies` entry.** For every claim ID you list in a step's `verifies`, re-read that claim's `verification` field. The step's `command_hint` must actually run a workflow that produces the specific evidence the verification field asks the verifier to inspect — not merely touch the same file or codepath. If a step doesn't exercise the claim's specific behavior, either modify `command_hint` to do so, or drop the claim ID from `verifies`. Example of the failure to catch: a claim asks for a comparison between two specific configurations of a procedure (e.g. one parameter fixed vs. that same parameter varied), the step description says only "run the analysis script," and the script hardcodes the fixed-parameter path so it never actually exercises the varied case. The step touches the relevant code area but never runs the second configuration, so the cross-reference is wrong — either modify the step to run both configurations, or drop that claim ID from `verifies`.
 - Step outputs (files the commands produce) belong under the working copy at `{{ codebase_dir }}/`. Do not direct outputs into other pipeline directories (e.g. `{{ output_dir }}/analyze/`).

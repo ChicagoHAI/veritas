@@ -19,7 +19,11 @@ from veritas.core.pipeline_state import PipelineState, STATUS_INSUFFICIENT_SPEC
 from veritas.core.models.replication import ReplicationPlan, ExecutionEvidence
 from veritas.core.models.fix_severity import FixSeverityAssessment
 from veritas.core.models.paper_claims import PaperClaims, PaperClaim, ClaimVerdict, ReplicationScore, NOT_ATTEMPTED_REASONS
-from veritas.core.paper_claims import parse_paper_claims_response
+from veritas.core.paper_claims import (
+    parse_paper_claims_response,
+    enforce_claim_scope,
+    effective_claim_scope,
+)
 from veritas.core.verify import compute_replication_score
 from veritas.core.replication import (
     REPLICATION_LOG_FILE,
@@ -239,18 +243,23 @@ KNOWN_MODEL_PRICING: Dict[str, Tuple[float, float]] = {
 # Per-field stage invalidation rules. When an input or config field changes
 # between runs against the same output dir, the listed stages are dropped from
 # pipeline state so they re-run. Every output-affecting field currently
-# invalidates all four stages — the dict shape is preserved so finer-grained
-# rules can be added later (e.g. a knob that only affects the verify phase).
+# invalidates the same downstream stages; the dict shape is preserved so
+# finer-grained rules can be added later (e.g. a knob that only affects the
+# verify phase). resource_estimate is derived from the plan, so any field that
+# invalidates plan invalidates it too — otherwise a stale estimate from the
+# prior run would be reused (most visibly on `estimate --scope`, whose whole
+# point is comparing compute across scopes on the same paper).
 FINGERPRINT_INVALIDATES: Dict[str, Tuple[str, ...]] = {
     # Inputs
-    'repo_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_path':    ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'paper_sha256':  ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'data_path':     ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'repo_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_path':    ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'paper_sha256':  ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'data_path':     ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
     # Config
-    'provider':      ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'mode':          ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
-    'claims_path':   ('analyze', 'plan', 'replicate', 'assess_fixes', 'verify'),
+    'provider':      ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'mode':          ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'claims_path':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
+    'claim_scope':   ('analyze', 'plan', 'resource_estimate', 'replicate', 'assess_fixes', 'verify'),
 }
 
 
@@ -511,7 +520,11 @@ class ReplicationRunner:
 
         Raises ``_InsufficientSpec`` when extraction yields 0 claims.
         """
-        if self.config.has_user_claims:
+        # Gate on the setting, not file existence, matching the fingerprint's
+        # "user" derivation: a set-but-missing claims file must fail loudly in
+        # _load_user_claims, never silently fall back to extraction (which
+        # would swap the user's hand-authored claims for extracted ones).
+        if self.config.claims_path is not None:
             return self._load_user_claims(self.config.claims_path)
 
         if self.config.has_paper:
@@ -525,12 +538,30 @@ class ReplicationRunner:
         )
 
     def _load_user_claims(self, path: Path) -> PaperClaims:
-        """Validate a user-supplied claims JSON file and copy it into the output tree."""
+        """Validate a user-supplied claims JSON file and copy it into the output tree.
+
+        When the source path is gone but the output tree already holds the
+        validated copy from the original run (a post-hoc pass on a dir whose
+        recorded ``--claims`` path was a container path, or the source file
+        moved), that copy is the same claim set — load it rather than fail.
+        """
+        if not path.exists():
+            copy = self.config.paper_claims_path
+            if copy.exists():
+                print(
+                    f"  --claims source not found at {path}; using the "
+                    f"validated copy at {copy}"
+                )
+                path = copy
+            else:
+                raise RuntimeError(f"--claims file not found: {path}")
         print(f"Loading user-supplied claims from {path}...")
         raw = path.read_text(encoding='utf-8')
         claims = PaperClaims.from_dict(json.loads(raw))
         if len(claims.claims) == 0:
             raise _InsufficientSpec(path, self.config.mode)
+
+        claims.scope = "user"
 
         self.config.paper_claims_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
@@ -586,6 +617,7 @@ class ReplicationRunner:
             output_dir=self.config.output_dir,
             paper_path=self.config.paper_path if self.config.has_paper else None,
             readme_path=readme_path,
+            claim_scope=self.config.claim_scope,
         )
 
         prompt_path = self.config.prompts_dir / "paper_claims_prompt.txt"
@@ -642,6 +674,22 @@ class ReplicationRunner:
         if len(claims.claims) == 0:
             raise _InsufficientSpec(source_for_bail, self.config.mode)
 
+        claims, dropped, scope_warnings = enforce_claim_scope(
+            claims, self.config.claim_scope
+        )
+        for w in scope_warnings:
+            print(f"  Warning: {w}")
+        if dropped:
+            print(
+                f"  Scope {self.config.claim_scope}: dropped {len(dropped)} "
+                f"out-of-scope claim(s): {', '.join(dropped)}"
+            )
+        # Record the scope that actually shaped the set, not the one requested:
+        # a main run that found no headline claims kept every tier and is really
+        # a full-scope set.
+        scope = effective_claim_scope(self.config.claim_scope, claims)
+        claims.scope = scope
+
         output_json_path.write_text(
             json.dumps(claims.to_dict(), indent=2), encoding='utf-8'
         )
@@ -650,7 +698,7 @@ class ReplicationRunner:
         n_s = len(claims.by_tier("supporting"))
         print(
             f"  Extracted {len(claims.claims)} claims "
-            f"({n_h} headline, {n_s} supporting)"
+            f"({n_h} headline, {n_s} supporting) [scope={scope}]"
         )
         return claims
 
@@ -2636,6 +2684,17 @@ class ReplicationRunner:
             'provider': self.config.provider,
             'mode': self.config.mode,
             'claims_path': str(self.config.claims_path) if self.config.claims_path else None,
+            # With --claims the scope is never consulted (the set is stamped
+            # "user"), so record "user" — otherwise changing --scope between
+            # --claims runs would invalidate stages for a provable no-op.
+            # Derived from the claims_path SETTING, not file existence: a
+            # post-hoc pass (evaluate) reconstructs Config from the recorded
+            # path, which may not exist in that context (e.g. a container
+            # path), and must still fingerprint as "user".
+            'claim_scope': (
+                "user" if self.config.claims_path is not None
+                else self.config.claim_scope
+            ),
         }
 
     def _reconcile_with_prior_run(self, state: PipelineState) -> None:
@@ -2667,6 +2726,18 @@ class ReplicationRunner:
 
         print(f"WARNING: detected changes since prior run: {all_changes}")
         print(f"  Invalidating stages: {affected_sorted}")
+        # A pre-scope run dir resumed under the new "main" default is the one
+        # invalidation a user is likely to hit without having changed
+        # anything themselves — name the escape hatch explicitly.
+        if (
+            'claim_scope' in config_changes
+            and 'claim_scope' not in (state.state.get('config') or {})
+        ):
+            print(
+                "  Note: the claim-scope default is 'main' (headline claims "
+                "only). This run dir predates claim scope and was "
+                "full-scope; pass --scope full to keep its prior claim set."
+            )
         state.invalidate_stages(affected_sorted)
 
         if input_changes:

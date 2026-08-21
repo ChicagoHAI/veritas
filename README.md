@@ -115,6 +115,21 @@ Other inputs: `--claims path.json` supplies hand-authored claims and skips
 extraction. `--data dir/` mounts a read-only data directory at `/workspace/data/`
 so the agent uses local files instead of fetching from the network.
 
+### Claim scope
+
+`--scope` controls which of the paper's claims a run extracts, replicates, and
+verifies. The default, `main`, is the paper's central headline claims —
+typically 1-3, not a hard cap. `full` extends extraction to supporting claims
+as well, and a positive integer N extracts exactly the N most central claims.
+A hand-authored `--claims` file bypasses scope entirely. See "Claim types and
+tiers" below for how scope relates to scoring.
+
+```bash
+# Claim scope (default: main — only the paper's central claims)
+./veritas replicate --paper paper.pdf --repo ./my-project --scope full  # headline + supporting claims
+./veritas replicate --paper paper.pdf --repo ./my-project --scope 1    # exactly the single most central claim
+```
+
 ### Citation check (opt-in)
 
 `--check-citations` runs an advisory reference check after verification: it
@@ -208,6 +223,13 @@ Five shape-typed claim categories; each claim carries a tier that sets its weigh
 |------|--------|---------|
 | **headline** | 3 | The paper's central result (usually 1-3 per paper) |
 | **supporting** | 2 | Intermediate measurements, secondary figures |
+
+By default veritas runs in **main scope**: only headline claims are extracted,
+replicated, and verified. `--scope full` extends extraction to supporting
+claims; `--scope N` (a positive integer) extracts exactly the N most central
+claims. The producing scope is stamped into `analyze/paper_claims.json` and
+shown in the report. Scores produced under different scopes are not
+comparable. A hand-authored `--claims` file bypasses scope entirely.
 
 ## Output structure
 

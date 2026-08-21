@@ -61,6 +61,17 @@ def replicate(
             "'repo-only' = repo alone (claims extracted from README)."
         ),
     ),
+    scope: Optional[str] = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Claim scope. 'main' (default) extracts only the paper's central "
+            "claims (headline tier, typically 1-3). 'full' extracts headline "
+            "+ supporting claims. A positive integer N extracts exactly the "
+            "N most central claims. Falls back to VERITAS_CLAIM_SCOPE, else "
+            "'main'. Ignored when --claims supplies a hand-authored file."
+        ),
+    ),
     claims: Optional[Path] = typer.Option(
         None,
         "--claims",
@@ -247,6 +258,7 @@ def replicate(
             citation_timeout=citation_timeout,
             faithfulness_scope=check_citations_faithfulness,
             mode=mode,
+            claim_scope=scope,
             claims_path=claims,
             data_path=data,
         )
@@ -258,6 +270,18 @@ def replicate(
         raise typer.Exit(1)
 
     console.print(f"[blue]Mode:[/blue] {config.mode}")
+    if config.claims_path:
+        # A hand-authored claims file bypasses extraction entirely -- claim_scope
+        # is not consulted, and the run's claims are stamped "user". Print that
+        # instead of config.claim_scope so the banner matches the stamp.
+        if scope is not None:
+            console.print(
+                f"[yellow]WARNING:[/yellow] --scope {scope} is ignored: "
+                f"--claims supplies a hand-authored claims file"
+            )
+        console.print("[blue]Claim scope:[/blue] user (--claims supplied)")
+    else:
+        console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
     if config.max_iters > 1:
         console.print(
             f"[blue]Manager retry loop:[/blue] ON (max {config.max_iters} iterations)"
@@ -289,6 +313,7 @@ def estimate(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     provider: str = typer.Option("claude", "--provider", help="AI provider (claude, codex, gemini)"),
     mode: str = typer.Option("auto", "--mode"),
+    scope: Optional[str] = typer.Option(None, "--scope", help="Claim scope: 'main' (default), 'full', or a positive integer N."),
 ):
     """
     Estimate the compute and cost required to replicate a paper, without running replication.
@@ -309,10 +334,13 @@ def estimate(
         raise typer.Exit(1)
 
     try:
-        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode)
+        config = Config(paper_path=paper, repo_path=repo, output_dir=output_dir, provider=provider, mode=mode, claim_scope=scope)
     except (ValueError, NotImplementedError) as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1)
+
+    console.print(f"[blue]Mode:[/blue] {config.mode}")
+    console.print(f"[blue]Claim scope:[/blue] {config.claim_scope}")
 
     runner = ReplicationRunner(config)
     try:
@@ -405,18 +433,36 @@ def evaluate(
     # patched codebase so evaluation works even if the source inputs moved.
     state_path = replicate_dir / ".veritas" / "pipeline_state.json"
     mode = "auto"
-    paper = repo = data = None
+    # Runs from before --scope existed never recorded claim_scope and were
+    # always full-scope (headline + supporting); recover that instead of
+    # letting Config default to "main", which would look like a scope change
+    # and invalidate analyze..verify for every such run.
+    claim_scope = "full"
+    paper = repo = data = claims = None
     if state_path.exists():
         try:
             st = json.loads(state_path.read_text(encoding="utf-8"))
             cfg = st.get("config") or {}
             inp = st.get("inputs") or {}
             mode = cfg.get("mode", "auto")
+            claim_scope = cfg.get("claim_scope") or "full"
             paper = Path(inp["paper_path"]) if inp.get("paper_path") else None
             repo = Path(inp["repo_path"]) if inp.get("repo_path") else None
             data = Path(inp["data_path"]) if inp.get("data_path") else None
+            # claims_path lives in the recorded config (it is part of the
+            # fingerprint). Recover it verbatim -- no existence filter: on a
+            # docker-created run it is a container path that does not exist
+            # here, but the fingerprint only needs the setting, and a
+            # completed analyze stage never re-reads the file.
+            claims = Path(cfg["claims_path"]) if cfg.get("claims_path") else None
         except (OSError, ValueError):
             pass
+
+    # "user" is the fingerprint's spelling of "a --claims file supplied the
+    # set"; it is not a Config value. Pass None and let the fingerprint
+    # re-derive "user" from the recovered claims_path.
+    if claim_scope == "user":
+        claim_scope = None
 
     if paper is not None and not paper.exists():
         paper = None
@@ -443,6 +489,8 @@ def evaluate(
             output_dir=replicate_dir,
             provider=provider,
             mode=mode,
+            claim_scope=claim_scope,
+            claims_path=claims,
             run_evaluation=True,
             evaluate_timeout=evaluate_timeout,
             generate_pdf=generate_pdf,
