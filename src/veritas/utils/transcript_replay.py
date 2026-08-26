@@ -60,7 +60,10 @@ MUTATING_BASH = re.compile(
     r"(>>?|\btee\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\btouch\b|\bsed\s+-i"
     r"|\bpip3?\s+install|\buv\s+(pip|sync|add|venv)"
     r"|\bgit\s+(apply|am|checkout|reset)"
-    r"|\bpython3?\s+|\bRscript\b|\bmake\b|\bcurl\b|\bwget\b|\btar\b|\bunzip\b)"
+    r"|\bpython3?\s+|\bRscript\b|\bmake\b|\bcurl\b|\bwget\b|\btar\b|\bunzip\b"
+    # Running a script hands the filesystem to code this log never shows:
+    # `bash setup.sh`, `sh build.sh`, `./run.sh`.
+    r"|\b(ba|z)?sh\s+\S|\.{1,2}/\S)"
 )
 
 # Container path prefixes stripped so replayed paths line up with a --seed
@@ -178,6 +181,12 @@ class ReplayResult:
     # never claims exact reconstruction for content it only inferred, and
     # cleared as soon as a Write supplies the exact bytes.
     approximate: Set[str] = field(default_factory=set)
+    # Seed paths whose bytes could not be read (binary, permissions, a
+    # dangling symlink). They are UNKNOWN in the VFS -- an Edit on one still
+    # cannot replay -- but they are not a gap in the *log*: no transcript was
+    # ever supposed to carry them. Kept out of unknown_paths so that section
+    # stays a statement about the log's coverage.
+    seed_unreadable: Set[str] = field(default_factory=set)
 
     @property
     def reconstructed(self) -> Dict[str, str]:
@@ -185,7 +194,19 @@ class ReplayResult:
 
     @property
     def unknown_paths(self) -> List[str]:
-        return sorted(p for p, c in self.vfs.items() if c is UNKNOWN)
+        return sorted(
+            p for p, c in self.vfs.items()
+            if c is UNKNOWN and p not in self.seed_unreadable
+        )
+
+    @property
+    def unreadable_seed_paths(self) -> List[str]:
+        # Computed from the VFS, so a path a later Write supplied bytes for
+        # drops out of here on its own.
+        return sorted(
+            p for p, c in self.vfs.items()
+            if c is UNKNOWN and p in self.seed_unreadable
+        )
 
 
 def iter_events(path: Path) -> Iterator[Dict[str, Any]]:
@@ -308,6 +329,7 @@ def replay(
         return _norm(path_str, strip_prefixes)
 
     vfs: Dict[str, Any] = {}
+    seed_unreadable: Set[str] = set()
     if seed_dir:
         seed_dir = Path(seed_dir)
         if not seed_dir.is_dir():
@@ -317,7 +339,10 @@ def replay(
             # didn't, and dressing the typo up as a finding about the log.
             raise ValueError(f"--seed {seed_dir} is not a directory")
         for p in seed_dir.rglob("*"):
-            if p.is_file():
+            # .git is not part of the tree the agent edits, and a real repo
+            # copy carries thousands of binary objects that would otherwise
+            # each be reported as content the log failed to cover.
+            if p.is_file() and ".git" not in p.relative_to(seed_dir).parts:
                 # as_posix(), not str(): on Windows str() yields backslash
                 # keys that never match _norm's forward-slash transcript keys,
                 # so every seeded Edit would look unreconstructable.
@@ -332,8 +357,9 @@ def replay(
                     # Binary, unreadable, or a dangling symlink: the file
                     # exists but its bytes aren't available to seed an Edit.
                     vfs[key] = UNKNOWN
+                    seed_unreadable.add(key)
 
-    res = ReplayResult(vfs=vfs)
+    res = ReplayResult(vfs=vfs, seed_unreadable=seed_unreadable)
 
     for a in actions:
         if upto is not None and a.seq > upto:
@@ -401,8 +427,12 @@ def replay(
             cmd = a.input.get("command", "")
             first = cmd.splitlines()[0][:90] if cmd else "?"
             mutating = bool(MUTATING_BASH.search(cmd))
-            if mutating and not a.is_error:
-                res.opaque.append((a.seq, first))
+            if mutating:
+                # A non-zero exit is not proof nothing was written: a script
+                # that failed halfway still leaves whatever it wrote first.
+                # Excluding these hid exactly the gap this list exists for.
+                note = " [exited non-zero; may have written before failing]"
+                res.opaque.append((a.seq, first + (note if a.is_error else "")))
             tag = "Bash*" if mutating else "Bash "
             res.sequence.append(f"{a.seq:>4}. [{status}] {tag}  {first}")
         elif a.tool == "Read":
@@ -542,6 +572,14 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     if res.unknown_paths:
         report += ["", "## Files whose content could not be recovered", ""]
         report += [f"  {p}" for p in res.unknown_paths]
+    if res.unreadable_seed_paths:
+        report += [
+            "", "## Seed files whose bytes could not be read", "",
+            "  Binary, unreadable, or a dangling symlink in the --seed tree.",
+            "  Not a gap in the log: no transcript was going to carry these.",
+            "  Listed because an Edit to one of them still cannot replay.", "",
+        ]
+        report += [f"  {p}" for p in res.unreadable_seed_paths]
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
 
 

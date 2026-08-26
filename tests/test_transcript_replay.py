@@ -642,3 +642,86 @@ def test_non_dict_message_is_skipped(tmp_path):
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert res.reconstructed["a.py"] == "x\n"
+
+
+# -- opaque commands: script invocations and partial writes -----------------
+
+@pytest.mark.parametrize(
+    "cmd", ["bash setup.sh", "./run.sh", "sh build.sh", "../tools/gen.sh"]
+)
+def test_script_invocations_are_flagged_opaque(tmp_path, cmd):
+    # Running a script hands the filesystem to code the log never shows.
+    events = [_tool_use("t1", "Bash", {"command": cmd}), _tool_result("t1", "ok")]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert [seq for seq, _ in res.opaque] == [1]
+
+
+@pytest.mark.parametrize("cmd", ["git status", "ls -la", "echo hi", "ssh host ls"])
+def test_read_only_commands_are_not_flagged_opaque(tmp_path, cmd):
+    events = [_tool_use("t1", "Bash", {"command": cmd}), _tool_result("t1", "ok")]
+    assert not replay(extract_actions(_transcript(tmp_path, events))).opaque
+
+
+def test_failed_mutating_command_is_still_opaque(tmp_path):
+    # A non-zero exit is not proof nothing was written: a script that failed
+    # halfway still leaves whatever it wrote first.
+    events = [
+        _tool_use("t1", "Bash", {"command": "python3 gen.py > out.json"}),
+        _tool_result("t1", "Traceback ...", is_error=True),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert [seq for seq, _ in res.opaque] == [1]
+    assert "exited non-zero" in res.opaque[0][1]
+
+
+# -- seed-tree gaps are not log gaps ----------------------------------------
+
+def test_unreadable_seed_files_are_not_reported_as_log_gaps(tmp_path):
+    # A binary seed file is not something any transcript was going to carry,
+    # so listing it under "could not be recovered" misreads the log's coverage.
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "logo.png").write_bytes(b"\x89PNG\x00\xff\xfe")
+    (seed / "ok.py").write_text("a = 1\n", encoding="utf-8")
+    res = replay([], seed_dir=seed)
+    assert res.unknown_paths == []
+    assert res.unreadable_seed_paths == ["logo.png"]
+
+
+def test_git_directory_is_not_seeded(tmp_path):
+    # A real repo copy carries thousands of binary objects; each would
+    # otherwise be reported as content the log failed to cover.
+    seed = tmp_path / "seed"
+    (seed / ".git" / "objects").mkdir(parents=True)
+    (seed / ".git" / "objects" / "ab12").write_bytes(b"\x00\xff")
+    (seed / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    (seed / "ok.py").write_text("a = 1\n", encoding="utf-8")
+    res = replay([], seed_dir=seed)
+    assert set(res.vfs) == {"ok.py"}
+
+
+def test_write_clears_an_unreadable_seed_path(tmp_path):
+    # Once the log supplies the bytes, the path is no longer a seed gap.
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "data.bin").write_bytes(b"\xff\xfe")
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/data.bin",
+                                  "content": "now text\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)), seed_dir=seed)
+    assert res.reconstructed["data.bin"] == "now text\n"
+    assert res.unreadable_seed_paths == []
+
+
+def test_seed_gap_section_appears_in_report(tmp_path):
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "logo.png").write_bytes(b"\x89PNG\x00\xff\xfe")
+    transcript = _transcript(tmp_path, [])
+    out = tmp_path / "out"
+    write_outputs(replay([], seed_dir=seed), out, transcript, 0, None)
+    text = (out / "report.md").read_text()
+    assert "Seed files whose bytes could not be read" in text
+    assert "Files whose content could not be recovered" not in text
