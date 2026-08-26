@@ -1,9 +1,11 @@
 """Transcript replay: rebuild the action sequence and file states from the log alone."""
 
+import builtins
 import json
 
 import pytest
 
+from veritas.utils import transcript_replay
 from veritas.utils.transcript_replay import (
     extract_actions,
     replay,
@@ -488,18 +490,24 @@ def test_unmodeled_section_appears_in_report(tmp_path):
     assert "Unmodeled tool calls" in (out / "report.md").read_text()
 
 
-def test_unreadable_seed_file_does_not_crash(tmp_path):
+def test_unreadable_seed_file_does_not_crash(tmp_path, monkeypatch):
+    # chmod(0o000) does not revoke read access on Windows, so the OSError is
+    # injected rather than produced by permissions -- the behavior under test
+    # is the handler, not the OS's enforcement of file modes.
     seed = tmp_path / "seed"
     seed.mkdir()
-    ok = seed / "ok.py"
-    ok.write_text("a = 1\n", encoding="utf-8")
-    blocked = seed / "blocked.py"
-    blocked.write_text("secret\n", encoding="utf-8")
-    blocked.chmod(0o000)
-    try:
-        res = replay([], seed_dir=seed)
-    finally:
-        blocked.chmod(0o644)
+    (seed / "ok.py").write_text("a = 1\n", encoding="utf-8")
+    (seed / "blocked.py").write_text("secret\n", encoding="utf-8")
+
+    real_open = builtins.open
+
+    def fake_open(file, *args, **kwargs):
+        if str(file).endswith("blocked.py"):
+            raise PermissionError("permission denied")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(transcript_replay, "open", fake_open, raising=False)
+    res = replay([], seed_dir=seed)
     assert res.vfs["ok.py"] == "a = 1\n"
     assert res.vfs["blocked.py"] is UNKNOWN
 
