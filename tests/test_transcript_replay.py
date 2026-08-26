@@ -116,9 +116,19 @@ def _init():
     return {"type": "system", "subtype": "init"}
 
 
-def _numbered(*lines):
-    """A Read result in the CLI's `cat -n` format."""
-    return "\n".join(f"{i:>6}\t{ln}" for i, ln in enumerate(lines, 1))
+def _numbered(content):
+    """A Read result in the CLI's `cat -n` format, built the way the tool does.
+
+    The tool numbers ``content.split("\\n")``, so a newline-terminated file
+    emits a *final empty numbered entry* -- that entry is how the format
+    expresses the trailing newline. A fixture that omits it lets a
+    de-numbering bug and the tests agree with each other, which is what hid
+    the appended-newline bug for three review rounds. Pass whole file content
+    here, trailing newline included or not, exactly as it is on disk.
+    """
+    return "\n".join(
+        f"{i:>6}\t{ln}" for i, ln in enumerate(content.split("\n"), 1)
+    )
 
 
 def test_read_recovers_content_for_a_later_edit_without_seed(tmp_path):
@@ -127,7 +137,7 @@ def test_read_recovers_content_for_a_later_edit_without_seed(tmp_path):
     path = "/workspace/output/replication/codebase/pre.py"
     events = [
         _tool_use("t1", "Read", {"file_path": path}),
-        _tool_result("t1", _numbered("a = 1", "b = 2")),
+        _tool_result("t1", _numbered("a = 1\nb = 2\n")),
         _tool_use("t2", "Edit", {"file_path": path,
                                  "old_string": "b = 2", "new_string": "b = 3"}),
         _tool_result("t2", "ok"),
@@ -145,7 +155,7 @@ def test_read_content_is_denumbered(tmp_path):
     path = "/workspace/output/replication/codebase/pre.py"
     events = [
         _tool_use("t1", "Read", {"file_path": path}),
-        _tool_result("t1", _numbered("x = 1", "", "y = 2")),
+        _tool_result("t1", _numbered("x = 1\n\ny = 2\n")),
     ]
     actions = extract_actions(_transcript(tmp_path, events))
     assert replay(actions).reconstructed["pre.py"] == "x = 1\n\ny = 2\n"
@@ -189,7 +199,7 @@ def test_read_does_not_clobber_known_content(tmp_path):
         _tool_use("t1", "Write", {"file_path": path, "content": "exact\n"}),
         _tool_result("t1", "ok"),
         _tool_use("t2", "Read", {"file_path": path}),
-        _tool_result("t2", _numbered("exact")),
+        _tool_result("t2", _numbered("exact\n")),
     ]
     actions = extract_actions(_transcript(tmp_path, events))
     res = replay(actions)
@@ -396,7 +406,9 @@ def test_limited_read_is_not_treated_as_whole_file(tmp_path):
     path = "/workspace/output/replication/codebase/big.py"
     events = [
         _tool_use("t1", "Read", {"file_path": path, "limit": 2}),
-        _tool_result("t1", _numbered("line1", "line2")),
+        # A bounded read is a prefix of the file, so there is no final empty
+        # entry to mark a trailing newline -- it stops mid-file.
+        _tool_result("t1", _numbered("line1\nline2")),
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert "big.py" not in res.reconstructed
@@ -411,7 +423,7 @@ def test_truncated_read_notice_rejects_recovery(tmp_path):
         _tool_use("t1", "Read", {"file_path": path}),
         _tool_result(
             "t1",
-            _numbered("l1", "l2")
+            _numbered("l1\nl2")
             + "\n\n(Showing first 2 of 5000 lines. Use offset to read more.)",
         ),
     ]
@@ -424,7 +436,10 @@ def test_trailing_system_reminder_still_recovers(tmp_path):
     path = "/workspace/output/replication/codebase/a.py"
     events = [
         _tool_use("t1", "Read", {"file_path": path}),
-        _tool_result("t1", _numbered("x = 1") + "\n<system-reminder>note</system-reminder>"),
+        _tool_result(
+            "t1",
+            _numbered("x = 1\n") + "\n<system-reminder>note</system-reminder>",
+        ),
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert res.reconstructed["a.py"] == "x = 1\n"
@@ -487,3 +502,20 @@ def test_unreadable_seed_file_does_not_crash(tmp_path):
         blocked.chmod(0o644)
     assert res.vfs["ok.py"] == "a = 1\n"
     assert res.vfs["blocked.py"] is UNKNOWN
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["a = 1\nb = 2\n", "a = 1\nb = 2", "one line\n", "one line", "", "\n"],
+)
+def test_read_recovery_round_trips_the_real_read_format(tmp_path, content):
+    # The Read tool numbers content.split("\n"), so a newline-terminated file
+    # emits a final empty numbered entry. Joining the recovered lines is exact
+    # in both directions; appending a newline double-counts that entry.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered(content)),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.reconstructed["pre.py"] == content

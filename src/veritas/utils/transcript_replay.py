@@ -114,9 +114,16 @@ def _denumber_read(text: str) -> Optional[str]:
     leaves the path UNKNOWN rather than storing a prefix as if it were the
     whole file.
 
-    Content recovered this way is *approximate*: `cat -n` cannot distinguish
-    a file ending in a newline from one that doesn't, and a trailing newline
-    is assumed. Callers should record the path in ``ReplayResult.approximate``.
+    Content recovered this way is *approximate*: the result is the CLI's
+    rendering of the file, not its bytes, so whatever that rendering
+    normalizes or elides is lost. Callers should record the path in
+    ``ReplayResult.approximate``.
+
+    Trailing-newline state is *not* part of that approximation. The tool
+    numbers ``content.split("\\n")``, so a newline-terminated file emits a
+    final empty numbered entry, which this function keeps: joining the
+    recovered lines is exact in both directions, and appending a newline
+    would double-count that entry.
     """
     out: List[str] = []
     first_no: Optional[int] = None
@@ -140,7 +147,7 @@ def _denumber_read(text: str) -> Optional[str]:
         return None  # partial read: this is not the whole file
     if any(_TRUNCATION_HINT.search(t) for t in tail):
         return None  # truncated dump: the numbered block is a prefix
-    return "\n".join(out) + "\n"
+    return "\n".join(out)
 
 
 @dataclass
@@ -166,8 +173,8 @@ class ReplayResult:
     # confidently wrong tree, which is the opposite of this tool's purpose.
     unmodeled: List[Tuple[int, str]] = field(default_factory=list)
     # Paths whose content was recovered from a Read result rather than from a
-    # Write. Byte-identity is not guaranteed for these: `cat -n` output cannot
-    # express whether the file ended in a newline. Kept separate so the report
+    # Write. Byte-identity is not guaranteed for these: a Read result is the
+    # CLI's rendering of the file, not its bytes. Kept separate so the report
     # never claims exact reconstruction for content it only inferred.
     approximate: Set[str] = field(default_factory=set)
 
@@ -481,9 +488,9 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
     if res.approximate:
         report += [
             "", "## Files recovered from Read output (approximate)", "",
-            "  Content came from a Read result, not a logged Write. The `cat -n`",
-            "  format cannot express whether the file ended in a newline, so one",
-            "  is assumed; these may differ from the original by that byte.", "",
+            "  Content came from a Read result, not a logged Write: it is the",
+            "  CLI's rendering of the file rather than its bytes, so anything",
+            "  that rendering normalizes or elides does not survive.", "",
         ]
         report += [f"  {p}" for p in sorted(res.approximate)]
     if res.unknown_paths:
