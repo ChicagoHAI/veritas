@@ -21,13 +21,22 @@ def sum_tokens_from_transcript(transcript_path: Path) -> tuple[int, int]:
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
+                # JSONDecodeError is a ValueError, but json.loads can also
+                # raise bare ValueError (>4300-digit ints, Py3.11+) and
+                # RecursionError (deep nesting); all just skip the line.
                 continue
+            if not isinstance(event, dict):
+                continue
+            # A JSONL line is whatever the provider wrote. Every level here is
+            # type-checked rather than assumed: `message` can be absent, null,
+            # or a bare string, and a token count that raised AttributeError
+            # would abort the whole tally over one odd line.
+            message = event.get("message")
             usage = (
-                event.get("message", {}).get("usage")
-                or event.get("usage")
-            )
-            if usage:
+                message.get("usage") if isinstance(message, dict) else None
+            ) or event.get("usage")
+            if isinstance(usage, dict):
                 last_input = usage.get("input_tokens", last_input)
                 total_output += usage.get("output_tokens", 0)
     return last_input, total_output
