@@ -175,7 +175,8 @@ class ReplayResult:
     # Paths whose content was recovered from a Read result rather than from a
     # Write. Byte-identity is not guaranteed for these: a Read result is the
     # CLI's rendering of the file, not its bytes. Kept separate so the report
-    # never claims exact reconstruction for content it only inferred.
+    # never claims exact reconstruction for content it only inferred, and
+    # cleared as soon as a Write supplies the exact bytes.
     approximate: Set[str] = field(default_factory=set)
 
     @property
@@ -223,7 +224,12 @@ def extract_actions(transcript_path: Path) -> List[Action]:
     by_id: Dict[str, Action] = {}
     seen_ids: set[str] = set()
     for event in iter_events(transcript_path):
-        msg = event.get("message") or {}
+        # `message` is a dict in the claude format, but the docstring invites
+        # other providers' transcripts and a stray string would otherwise
+        # raise AttributeError on .get; core/diligence.py guards the same way.
+        msg = event.get("message")
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content")
         if not isinstance(content, list):
             continue
@@ -303,14 +309,25 @@ def replay(
 
     vfs: Dict[str, Any] = {}
     if seed_dir:
-        for p in Path(seed_dir).rglob("*"):
+        seed_dir = Path(seed_dir)
+        if not seed_dir.is_dir():
+            # rglob on a missing directory yields nothing, so a typo would
+            # report every Edit as broken with reason "file pre-existed
+            # without --seed" -- telling a user who did pass one that they
+            # didn't, and dressing the typo up as a finding about the log.
+            raise ValueError(f"--seed {seed_dir} is not a directory")
+        for p in seed_dir.rglob("*"):
             if p.is_file():
                 # as_posix(), not str(): on Windows str() yields backslash
                 # keys that never match _norm's forward-slash transcript keys,
                 # so every seeded Edit would look unreconstructable.
                 key = p.relative_to(seed_dir).as_posix()
                 try:
-                    vfs[key] = p.read_text(encoding="utf-8")
+                    # newline="": universal-newline translation would turn a
+                    # CRLF file into LF, so a later Edit anchored on CRLF
+                    # would miss. Path.read_text gained newline= only in 3.13.
+                    with open(p, encoding="utf-8", newline="") as f:
+                        vfs[key] = f.read()
                 except (UnicodeDecodeError, OSError):
                     # Binary, unreadable, or a dangling symlink: the file
                     # exists but its bytes aren't available to seed an Edit.
@@ -328,6 +345,9 @@ def replay(
             body = a.input.get("content", "")
             if not a.is_error:
                 vfs[path] = body
+                # These are the exact bytes. If an earlier Read had only
+                # inferred this file, the inference no longer applies.
+                res.approximate.discard(path)
             res.sequence.append(
                 f"{a.seq:>4}. [{status}] Write  {path}  ({len(body.splitlines())} lines)"
             )
@@ -345,6 +365,7 @@ def replay(
                     "or was created by a command)",
                 ))
                 vfs[path] = UNKNOWN
+                res.approximate.discard(path)
                 res.sequence.append(
                     f"{a.seq:>4}. [{status}] Edit   {path}  "
                     "(UNRECONSTRUCTABLE: prior content unknown)"
@@ -369,6 +390,7 @@ def replay(
                     # bytes would materialize a file we know is wrong while
                     # the "could not be recovered" section stayed empty.
                     vfs[path] = UNKNOWN
+                    res.approximate.discard(path)
                     res.sequence.append(
                         f"{a.seq:>4}. [{status}] Edit   {path}  (MISMATCH: old_string not found)"
                     )
@@ -422,6 +444,7 @@ def replay(
             if touched is not None and not a.is_error:
                 path = norm(touched)
                 vfs[path] = UNKNOWN
+                res.approximate.discard(path)
                 res.broken.append((
                     a.seq, path,
                     f"{a.tool} is not modeled by replay; content after this "
@@ -474,7 +497,11 @@ def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
             escaped.append(path)
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
+        # newline="": the default translates "\n" to the platform separator,
+        # so on Windows every materialized file would gain CRLF and the
+        # docstring's `diff -r` check would call every one of them different.
+        with open(dest, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
 
     upto_note = f" (state as of action {upto})" if upto else ""
     report: List[str] = [
@@ -547,8 +574,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ) + STRIP_PREFIXES
 
     actions = extract_actions(args.transcript)
-    res = replay(actions, args.seed, args.upto, strip_prefixes)
     try:
+        res = replay(actions, args.seed, args.upto, strip_prefixes)
         write_outputs(res, args.out_dir, args.transcript, len(actions),
                       args.upto, force=args.force)
     except ValueError as e:

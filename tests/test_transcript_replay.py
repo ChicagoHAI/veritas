@@ -572,3 +572,65 @@ def test_duplicate_tool_result_does_not_clobber_the_original(tmp_path):
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert res.reconstructed["pre.py"] == "a = 1\nb = 2\nc = 3\n"
+
+
+# -- byte-exactness and unusable inputs -------------------------------------
+
+def test_missing_seed_dir_is_an_error(tmp_path):
+    # rglob on a nonexistent path yields nothing, so a typo would silently
+    # produce a fully-unreconstructable report that reads like a real finding
+    # about the log rather than like a mistyped flag.
+    with pytest.raises(ValueError, match="--seed"):
+        replay([], seed_dir=tmp_path / "typo")
+
+
+def test_seed_preserves_crlf_line_endings(tmp_path):
+    # Universal-newline translation would rewrite CRLF to LF, so an Edit
+    # anchored on a CRLF line would miss and report a spurious MISMATCH.
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "pre.py").write_bytes(b"a = 1\r\nb = 2\r\n")
+    assert replay([], seed_dir=seed).vfs["pre.py"] == "a = 1\r\nb = 2\r\n"
+
+
+def test_materialized_files_keep_their_own_line_endings(tmp_path):
+    # write_text would translate "\n" to the platform separator, making every
+    # file differ from the original under the docstring's `diff -r` check.
+    events = [
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py",
+                                  "content": "x\ny\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    transcript = _transcript(tmp_path, events)
+    out = tmp_path / "out"
+    write_outputs(replay(extract_actions(transcript)), out, transcript, 1, None)
+    assert (out / "reconstructed" / "a.py").read_bytes() == b"x\ny\n"
+
+
+def test_write_after_read_clears_the_approximate_flag(tmp_path):
+    # Once a Write supplies the exact bytes, the earlier inference no longer
+    # applies -- leaving the flag set understates what is known exactly.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("old = 1\n")),
+        _tool_use("t2", "Write", {"file_path": path, "content": "new = 1\n"}),
+        _tool_result("t2", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.reconstructed["a.py"] == "new = 1\n"
+    assert not res.approximate
+
+
+def test_non_dict_message_is_skipped(tmp_path):
+    # The docstring invites other providers' transcripts; a stray string
+    # message would otherwise raise AttributeError on .get.
+    events = [
+        {"type": "assistant", "message": "not a dict"},
+        {"type": "user", "message": ["also not a dict"]},
+        _tool_use("t1", "Write", {"file_path": "/workspace/repo/a.py",
+                                  "content": "x\n"}),
+        _tool_result("t1", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.reconstructed["a.py"] == "x\n"
