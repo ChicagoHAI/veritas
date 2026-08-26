@@ -251,6 +251,13 @@ def extract_actions(transcript_path: Path) -> List[Action]:
                 action = by_id.get(block.get("tool_use_id", ""))
                 if action is None:
                     continue
+                if action.result_text is not None:
+                    # The tool_use dedup above is one-sided: a resumed session
+                    # re-emits its results too, and those still resolve through
+                    # by_id. First result wins -- a replay can carry a
+                    # shortened form of the same output, and letting it
+                    # overwrite would discard content the original recovered.
+                    continue
                 rc = block.get("content")
                 if isinstance(rc, list):
                     texts = [c.get("text", "") for c in rc if isinstance(c, dict)]
@@ -276,7 +283,10 @@ def _norm(path_str: str, strip_prefixes: Sequence[str] = STRIP_PREFIXES) -> str:
 
 
 def _apply_edit(content: str, old: str, new: str, replace_all: bool) -> Optional[str]:
-    if old not in content:
+    # An empty old_string is never a legitimate anchor, but str.replace treats
+    # it as a match at offset 0 -- so an Edit whose old_string is missing from
+    # the log would silently prepend new_string and report no problem.
+    if not old or old not in content:
         return None
     return content.replace(old, new) if replace_all else content.replace(old, new, 1)
 
@@ -340,16 +350,25 @@ def replay(
                     "(UNRECONSTRUCTABLE: prior content unknown)"
                 )
             else:
+                old = a.input.get("old_string", "")
                 new = _apply_edit(
                     cur,
-                    a.input.get("old_string", ""),
+                    old,
                     a.input.get("new_string", ""),
                     a.input.get("replace_all", False),
                 )
                 if new is None:
-                    res.broken.append(
-                        (a.seq, path, "old_string not found in reconstructed content")
-                    )
+                    res.broken.append((
+                        a.seq, path,
+                        "edit has no old_string to anchor on"
+                        if not old else
+                        "old_string not found in reconstructed content",
+                    ))
+                    # The edit demonstrably landed on the real file, so the
+                    # content we hold has diverged from it. Keeping those
+                    # bytes would materialize a file we know is wrong while
+                    # the "could not be recovered" section stayed empty.
+                    vfs[path] = UNKNOWN
                     res.sequence.append(
                         f"{a.seq:>4}. [{status}] Edit   {path}  (MISMATCH: old_string not found)"
                     )

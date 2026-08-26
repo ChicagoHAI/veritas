@@ -519,3 +519,56 @@ def test_read_recovery_round_trips_the_real_read_format(tmp_path, content):
     ]
     res = replay(extract_actions(_transcript(tmp_path, events)))
     assert res.reconstructed["pre.py"] == content
+
+
+# -- content the replay knows is wrong must not be presented as recovered ----
+
+def test_mismatched_edit_marks_the_file_unknown(tmp_path):
+    # The edit landed on the real file, so the bytes we hold have diverged
+    # from it. Keeping them materializes a file we know is wrong while the
+    # "could not be recovered" section stays empty.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Write", {"file_path": path, "content": "v1\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "Edit", {"file_path": path,
+                                 "old_string": "NOPE", "new_string": "v2"}),
+        _tool_result("t2", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.vfs["a.py"] is UNKNOWN
+    assert "a.py" not in res.reconstructed
+    assert res.unknown_paths == ["a.py"]
+    assert res.broken and res.broken[0][0] == 2
+
+
+def test_edit_without_old_string_is_broken_not_a_prepend(tmp_path):
+    # "" is never a legitimate anchor, but str.replace matches it at offset 0,
+    # so the edit would silently prepend new_string and report no problem.
+    path = "/workspace/output/replication/codebase/a.py"
+    events = [
+        _tool_use("t1", "Write", {"file_path": path, "content": "v1\n"}),
+        _tool_result("t1", "ok"),
+        _tool_use("t2", "Edit", {"file_path": path, "new_string": "INJECTED"}),
+        _tool_result("t2", "ok"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.vfs["a.py"] is UNKNOWN
+    assert res.broken and "old_string" in res.broken[0][2]
+
+
+def test_duplicate_tool_result_does_not_clobber_the_original(tmp_path):
+    # A resumed session re-emits results as well as calls. The replayed copy
+    # can be a shortened form of the same output; letting it win would lose
+    # content the first result already recovered.
+    path = "/workspace/output/replication/codebase/pre.py"
+    events = [
+        _init(),
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("a = 1\nb = 2\nc = 3\n")),
+        _init(),
+        _tool_use("t1", "Read", {"file_path": path}),
+        _tool_result("t1", _numbered("a = 1\n")),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.reconstructed["pre.py"] == "a = 1\nb = 2\nc = 3\n"
