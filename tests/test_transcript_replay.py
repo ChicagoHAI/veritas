@@ -465,6 +465,26 @@ def test_unmodeled_tool_marks_its_file_unknown(tmp_path):
     assert res.unmodeled == [(2, "MultiEdit")]
 
 
+def test_search_tools_do_not_poison_the_tree(tmp_path):
+    # Grep and Glob carry `path` as the directory they scan, not a file they
+    # touch. Treating that scope as a touched file would inject a phantom
+    # UNKNOWN entry and a broken record for every search the agent ran.
+    events = [
+        _tool_use("t1", "Grep", {
+            "pattern": "x",
+            "path": "/workspace/output/replication/codebase/src"}),
+        _tool_result("t1", "3 matches"),
+        _tool_use("t2", "Glob", {
+            "pattern": "*.py",
+            "path": "/workspace/output/replication/codebase"}),
+        _tool_result("t2", "a.py"),
+    ]
+    res = replay(extract_actions(_transcript(tmp_path, events)))
+    assert res.unknown_paths == []
+    assert not res.broken
+    assert res.unmodeled == [(1, "Grep"), (2, "Glob")]
+
+
 def test_unmodeled_pathless_tool_is_still_reported(tmp_path):
     # A Task subagent's own tool calls never reach this transcript, so its
     # file effects are invisible; the report must still say it happened.

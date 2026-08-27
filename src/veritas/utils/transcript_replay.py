@@ -77,8 +77,10 @@ STRIP_PREFIXES = (
 
 # Input keys under which a tool names the file it acts on. Used to salvage a
 # path from a tool replay does not model, so that file can at least be marked
-# UNKNOWN instead of left holding stale content.
-_PATH_INPUT_KEYS = ("file_path", "notebook_path", "path", "filePath")
+# UNKNOWN instead of left holding stale content. "path" is deliberately absent:
+# search tools (Grep, Glob) use it for the directory they scan, not a file they
+# touch, and honoring it would inject a phantom UNKNOWN entry per search call.
+_PATH_INPUT_KEYS = ("file_path", "notebook_path", "filePath")
 
 # Names an out_dir may contain and still be recognized as a prior replay
 # output, i.e. safe for this tool to delete and rewrite.
