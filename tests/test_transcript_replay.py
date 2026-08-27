@@ -98,10 +98,17 @@ def test_edit_without_prior_content_is_reported_broken(tmp_path):
     assert res.broken and res.broken[0][1] == "pre.py"
 
 
+def _seed_file(path, content):
+    # write_bytes, not write_text: text mode translates "\n" to the platform
+    # separator on disk, and the seed loader reads bytes verbatim -- so on
+    # Windows a write_text fixture would seed CRLF against an LF assertion.
+    path.write_bytes(content.encode("utf-8"))
+
+
 def test_seed_dir_supplies_prior_content_for_edits(tmp_path):
     seed = tmp_path / "seed"
     seed.mkdir()
-    (seed / "pre.py").write_text("a = 1\n", encoding="utf-8")
+    _seed_file(seed / "pre.py", "a = 1\n")
     events = [
         _tool_use("t1", "Edit", {"file_path": "/workspace/output/replication/codebase/pre.py",
                                  "old_string": "a = 1", "new_string": "a = 2"}),
@@ -215,7 +222,7 @@ def test_nested_seed_entry_matches_transcript_path(tmp_path):
     # backslashes on Windows); they must agree or the Edit looks broken.
     seed = tmp_path / "seed"
     (seed / "pkg").mkdir(parents=True)
-    (seed / "pkg" / "mod.py").write_text("a = 1\n", encoding="utf-8")
+    _seed_file(seed / "pkg" / "mod.py", "a = 1\n")
     events = [
         _tool_use("t1", "Edit", {
             "file_path": "/workspace/output/replication/codebase/pkg/mod.py",
@@ -516,8 +523,8 @@ def test_unreadable_seed_file_does_not_crash(tmp_path, monkeypatch):
     # is the handler, not the OS's enforcement of file modes.
     seed = tmp_path / "seed"
     seed.mkdir()
-    (seed / "ok.py").write_text("a = 1\n", encoding="utf-8")
-    (seed / "blocked.py").write_text("secret\n", encoding="utf-8")
+    _seed_file(seed / "ok.py", "a = 1\n")
+    _seed_file(seed / "blocked.py", "secret\n")
 
     real_open = builtins.open
 
