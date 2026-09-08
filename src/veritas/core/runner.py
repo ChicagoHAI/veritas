@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import sys
-import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -55,8 +54,9 @@ from veritas.core.research import (
     split_requests,
 )
 from veritas.core.report_generator import ReportGenerator
+from veritas.llm import AgentRequest, AgentResult, SessionRequest, create_agent_backend
 from veritas.templates.prompt_generator import PromptGenerator
-from veritas.utils.security import sanitize_logs_directory, sanitize_text
+from veritas.utils.security import sanitize_logs_directory
 
 
 # Wall-clock cost of the veritas scaffolding itself, as (low, high) minutes per
@@ -151,54 +151,6 @@ class _InsufficientSpec(Exception):
         self.mode = mode
 
 
-# Provider invocation tables. Each provider has a CLI command (cli name plus
-# any required positional subcommand or print flag), a transcript-output flag
-# set (so the JSONL stream lands on stdout for capture), and a permission
-# flag set (so non-interactive runs don't block on confirmation prompts).
-CLI_COMMANDS: Dict[str, Tuple[str, ...]] = {
-    "claude": ("claude", "-p"),
-    "codex":  ("codex", "exec"),
-    "gemini": ("gemini",),
-}
-
-TRANSCRIPT_FLAGS: Dict[str, Tuple[str, ...]] = {
-    "claude": ("--verbose", "--output-format", "stream-json"),
-    "codex":  ("--json",),
-    "gemini": ("--output-format", "stream-json"),
-}
-
-PERMISSION_FLAGS: Dict[str, Tuple[str, ...]] = {
-    "claude": ("--dangerously-skip-permissions",),
-    # codex: --full-auto is deprecated and keeps the network-blocking
-    # sandbox, which would break replicate-phase pip installs and data
-    # downloads. Full bypass matches the trust already granted to claude;
-    # the container is the isolation boundary. --skip-git-repo-check:
-    # phase working dirs are not git repos and codex refuses to start
-    # there without it.
-    "codex":  ("--dangerously-bypass-approvals-and-sandbox",
-               "--skip-git-repo-check"),
-    "gemini": ("--yolo", "--skip-trust"),
-}
-
-# Trailing positional args appended after all flags. codex exec only reads
-# the prompt from stdin when given the `-` sentinel; claude (-p) and gemini
-# read piped stdin natively.
-PROMPT_STDIN_ARGS: Dict[str, Tuple[str, ...]] = {
-    "claude": (),
-    "codex":  ("-",),
-    "gemini": (),
-}
-
-# Providers whose CLI can resume a conversation by session ID (verified for
-# claude via `claude --help`: --session-id / --resume, and empirically —
-# killing a session with SIGTERM and resuming it recovers full context.
-# codex/gemini are unconfirmed, so treated as unsupported until checked; the
-# replicate heartbeat loop falls back to a single uninterrupted invocation
-# for any provider not listed here as True.
-RESUME_CAPABLE: Dict[str, bool] = {"claude": True, "codex": False, "gemini": False}
-SESSION_ID_FLAG: Dict[str, Tuple[str, ...]] = {"claude": ("--session-id",)}
-RESUME_FLAG: Dict[str, Tuple[str, ...]] = {"claude": ("--resume",)}
-
 # Magentic-One's stall threshold (arXiv:2411.04468): keep resuming normally
 # while consecutive no-progress heartbeats stay at or below this; once
 # exceeded, switch the resume instruction from "continue" to a stuck-nudge.
@@ -279,6 +231,7 @@ class ReplicationRunner:
 
     def __init__(self, config: Config):
         self.config = config
+        self._agent_backend = create_agent_backend(config.provider)
         self.prompt_generator = PromptGenerator()
         self.report_generator = ReportGenerator()
         # Last-computed objective execution facts from the most recent
@@ -286,11 +239,6 @@ class ReplicationRunner:
         # replicate runs). These are facts, not a diligence verdict — the
         # manager does the judging.
         self._last_facts: Optional[ExecutionFacts] = None
-        # Set by _invoke_provider on every call: True if that invocation was
-        # ended by the watchdog rather than exiting on its own. Consumed by
-        # _replicate_with_heartbeat to tell "ran out of time this tick" apart
-        # from a real crash.
-        self._last_invocation_timed_out: bool = False
 
     def run(self, dry_run: bool = False) -> RunResult:
         """Run the full pipeline: analyze -> replicate -> assess fixes -> verify -> report.
@@ -975,12 +923,11 @@ class ReplicationRunner:
         prompt_path = self.config.prompts_dir / "replication_session_prompt.txt"
         prompt_path.write_text(session_instructions, encoding='utf-8')
 
-        provider = self.config.provider.lower()
         budget = self.config.replicate_timeout
         terminated_early = False
         termination_reason = ""
 
-        if not RESUME_CAPABLE.get(provider, False) or budget is None:
+        if not self._agent_backend.capabilities.supports_resume or budget is None:
             # No resume support for this provider, or no budget configured:
             # unchanged single-invocation behavior.
             success = self._invoke_provider(
@@ -997,7 +944,6 @@ class ReplicationRunner:
                 session_instructions=session_instructions,
                 log_path=log_path,
                 replication_plan=replication_plan,
-                provider=provider,
                 budget=budget,
             )
 
@@ -1039,14 +985,13 @@ class ReplicationRunner:
         session_instructions: str,
         log_path: Path,
         replication_plan: ReplicationPlan,
-        provider: str,
         budget: int,
     ) -> Tuple[bool, str]:
         """Run replicate as a series of resumed invocations instead of one
         uninterrupted call, so a time-budget cutoff ends in a clean hand-off
         instead of a silent kill.
 
-        Only called for providers in ``RESUME_CAPABLE`` with a configured
+        Only called for backends that support session resume with a configured
         ``replicate_timeout``. Each tick runs for up to
         ``replicate_heartbeat`` (floored at ``MIN_HEARTBEAT_SECONDS``);
         when a tick times out, the loop checks the real elapsed time against
@@ -1115,26 +1060,26 @@ class ReplicationRunner:
 
             tick_timeout = min(heartbeat, max(remaining, 1))
             if start_new_session:
-                extra = (*SESSION_ID_FLAG[provider], session_id)
+                session = SessionRequest(session_id, "start")
                 msg = session_instructions
                 if recovered:
                     msg += "\n\n" + self.prompt_generator.generate_heartbeat_prompt(
                         "fresh_session"
                     )
             else:
-                extra = (*RESUME_FLAG[provider], session_id)
+                session = SessionRequest(session_id, "resume")
                 msg = self.prompt_generator.generate_heartbeat_prompt(
                     "stuck" if stall_count > STALL_THRESHOLD else "continue"
                 )
 
             start = time.monotonic()
-            success = self._invoke_provider(
+            result = self._invoke_agent(
                 prompt=msg,
                 working_dir=self.config.effective_repo_path,
                 log_path=log_path,
                 timeout=tick_timeout,
                 expose_api_keys=True,
-                extra_cli_args=extra,
+                session=session,
                 append=transcript_started,
             )
             elapsed += time.monotonic() - start
@@ -1143,10 +1088,10 @@ class ReplicationRunner:
             start_new_session = False
             transcript_started = True
 
-            if success:
+            if result.success:
                 return False, ""  # finished on its own
 
-            if not self._last_invocation_timed_out:
+            if not result.timed_out:
                 if was_first_call:
                     # Nothing ran and nothing was produced: this is the agent
                     # failing, not the session mechanism. Unchanged behavior.
@@ -1205,13 +1150,13 @@ class ReplicationRunner:
         # no live session to resume — a replacement id that no invocation has
         # used yet would just fail the same way the resume did.
         if not start_new_session:
-            self._invoke_provider(
+            self._invoke_agent(
                 prompt=self.prompt_generator.generate_heartbeat_prompt("wrap_up"),
                 working_dir=self.config.effective_repo_path,
                 log_path=log_path,
                 timeout=min(WRAP_UP_MAX_SECONDS, heartbeat),
                 expose_api_keys=True,
-                extra_cli_args=(*RESUME_FLAG[provider], session_id),
+                session=SessionRequest(session_id, "resume"),
                 append=True,
             )
         return True, reason
@@ -2799,159 +2744,41 @@ class ReplicationRunner:
         prompt: str,
         working_dir: Path,
         log_path: Path,
-        timeout: Optional[int],
+        timeout: Optional[float],
         append: bool = False,
         expose_api_keys: bool = False,
-        extra_cli_args: Tuple[str, ...] = (),
     ) -> bool:
-        """Run the configured provider as a subprocess; stream its JSONL
-        transcript to ``log_path``; return True on success.
+        """Run a fresh agent invocation; the agent writes results to known disk paths."""
+        return self._invoke_agent(
+            prompt=prompt,
+            working_dir=working_dir,
+            log_path=log_path,
+            timeout=timeout,
+            append=append,
+            expose_api_keys=expose_api_keys,
+        ).success
 
-        The agent is expected to write its actual results (paper-claims JSON,
-        replication-plan JSON, per-claim verdict JSON, etc.) to known disk paths during the run.
-        ``log_path`` only captures the conversation transcript — it is
-        never the source of the agent's answer.
+    def _invoke_agent(
+        self,
+        prompt: str,
+        working_dir: Path,
+        log_path: Path,
+        timeout: Optional[float],
+        append: bool = False,
+        expose_api_keys: bool = False,
+        session: Optional[SessionRequest] = None,
+    ) -> AgentResult:
+        """Apply phase credential policy and delegate execution to the backend.
 
-        Wall-clock timeout enforcement uses a daemon ``threading.Timer``.
-        It sends SIGTERM first (``process.terminate()``), not SIGKILL —
-        SIGTERM is catchable, so a resume-capable CLI gets a chance to flush
-        its session state before exiting (confirmed empirically: a plain
-        SIGKILL never leaves a resumable session; SIGTERM does, once the
-        session has had its brief warm-up — see ``_replicate_with_heartbeat``).
-        A second timer force-kills with SIGKILL only if the process ignores
-        SIGTERM for 5s. POSIX only: on Windows ``terminate()`` is
-        ``TerminateProcess``, which cannot be caught, so the CLI gets no
-        chance to flush and the resumable-session property is lost — the
-        heartbeat loop still runs there, but each tick starts from a colder
-        session than it does on Linux/macOS. A plain
-        ``process.wait(timeout=...)`` after a
-        streaming loop does not enforce a wall-clock limit on its own, since
-        the loop blocks until the subprocess closes stdout (which happens
-        when it exits anyway) — the watchdog is what actually bounds it.
-
-        With ``append=True`` the transcript file is opened in append mode,
-        which is used by the repair-re-invocation path so the original
-        failed attempt and the repair attempt land in one transcript file.
-
-        ``expose_api_keys=True`` lets the subprocess inherit the
-        replication API keys (the vars listed in
-        ``VERITAS_ENV_FILE_KEYS``). Only the replicate phase should set
-        this — paper code it runs needs the keys. All other phases must
-        keep the default ``False`` so the keys are not exposed to
-        analyze/plan/codegen/assess/verify subprocesses.
-
-        ``extra_cli_args`` is spliced in before the trailing stdin sentinel
-        args — used by the replicate heartbeat loop to pass
-        ``--session-id``/``--resume`` (see ``SESSION_ID_FLAG``/``RESUME_FLAG``).
-
-        Sets ``self._last_invocation_timed_out`` before returning, so a
-        caller can tell a timeout apart from a real failure (a non-zero exit
-        that wasn't the watchdog).
+        Only replication exposes the paper's API keys. Transcripts capture the
+        conversation; phase outputs are still read from the agent-written files.
         """
-        provider = self.config.provider.lower()
-        if provider not in CLI_COMMANDS:
-            raise ValueError(f"Unknown provider: {provider}")
-
-        try:
-            cli = self._resolve_cli(CLI_COMMANDS[provider][0])
-        except FileNotFoundError as e:
-            print(f"  {e}")
-            return False
-
-        cmd: List[str] = [
-            cli,
-            *CLI_COMMANDS[provider][1:],
-            *TRANSCRIPT_FLAGS[provider],
-            *PERMISSION_FLAGS[provider],
-            *extra_cli_args,
-            *PROMPT_STDIN_ARGS[provider],
-        ]
-
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        open_mode = "a" if append else "w"
-
-        # Default: strip replication API keys (sourced from .env via --env-file)
-        # so non-replicate phases don't see them. _replicate opts in via
-        # expose_api_keys=True since the paper code it runs needs the keys.
-        env = None if expose_api_keys else self._stripped_env()
-
-        try:
-            process = subprocess.Popen(
-                cmd,
-                cwd=working_dir,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-                env=env,
-            )
-        except FileNotFoundError as e:
-            print(f"  {e}")
-            return False
-        except Exception as e:
-            print(f"  Error invoking {provider}: {e}")
-            return False
-
-        process.stdin.write(prompt)
-        process.stdin.close()
-
-        timed_out = False
-        watchdog: Optional[threading.Timer] = None
-        if timeout is not None and timeout > 0:
-            def _kill_on_timeout() -> None:
-                nonlocal timed_out
-                timed_out = True
-                try:
-                    process.terminate()
-                except Exception:
-                    pass
-
-                def _force_kill() -> None:
-                    try:
-                        if process.poll() is None:
-                            process.kill()
-                    except Exception:
-                        pass
-
-                force_kill_timer = threading.Timer(5, _force_kill)
-                force_kill_timer.daemon = True
-                force_kill_timer.start()
-
-            watchdog = threading.Timer(timeout, _kill_on_timeout)
-            watchdog.daemon = True
-            watchdog.start()
-
-        try:
-            with open(log_path, open_mode, encoding="utf-8") as log_f:
-                for line in iter(process.stdout.readline, ""):
-                    line = sanitize_text(line)
-                    print(line, end="")
-                    log_f.write(line)
-            return_code = process.wait()
-        finally:
-            if watchdog is not None:
-                watchdog.cancel()
-                watchdog.join()
-
-        self._last_invocation_timed_out = timed_out
-
-        if return_code == 0:
-            return True
-        if timed_out:
-            print(f"  Timeout after {timeout}s")
-            return False
-        return False
-
-    @staticmethod
-    def _resolve_cli(name: str) -> str:
-        """Resolve a CLI tool name to its full path.
-
-        On Windows, npm installs .cmd shims that subprocess can't find
-        without shell=True. This resolves the full path instead.
-        """
-        resolved = shutil.which(name)
-        if resolved is None:
-            raise FileNotFoundError(f"{name} CLI not found on PATH")
-        return resolved
+        return self._agent_backend.invoke(AgentRequest(
+            prompt=prompt,
+            working_dir=working_dir,
+            transcript_path=log_path,
+            timeout=timeout,
+            append=append,
+            env=None if expose_api_keys else self._stripped_env(),
+            session=session,
+        ))
