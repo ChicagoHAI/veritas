@@ -178,6 +178,109 @@ def test_real_subprocess_nonzero_exit_is_not_a_timeout(tmp_path, monkeypatch):
     assert result.exit_code == 7
 
 
+@pytest.mark.parametrize("existing_transcript", [False, True])
+@pytest.mark.parametrize("exit_code", [0, 23])
+@pytest.mark.parametrize("append", [False, True])
+def test_early_exit_retains_diagnostics_when_large_prompt_cannot_be_delivered(
+    tmp_path, monkeypatch, capsys, existing_transcript, exit_code, append,
+):
+    key = "sk-or-v1-" + "b" * 32
+    diagnostic = f"provider startup rejected credential {key}"
+    backend = python_backend(
+        monkeypatch,
+        f"import sys; print({diagnostic!r}, file=sys.stderr, flush=True); sys.exit({exit_code})",
+    )
+    transcript = tmp_path / "transcript.jsonl"
+    if existing_transcript:
+        transcript.write_text("previous invocation\n", encoding="utf-8")
+
+    result = backend.invoke(request_for(
+        tmp_path,
+        prompt="Prompt larger than the operating system pipe buffer.\n" * 40_000,
+        transcript_path=transcript,
+        append=append,
+        timeout=10,
+    ))
+
+    assert result.success is False, "an incomplete prompt is a failed invocation even on exit 0"
+    assert result.timed_out is False
+    assert result.exit_code == exit_code
+    assert result.error
+    logged = transcript.read_text(encoding="utf-8")
+    displayed = capsys.readouterr().out
+    sanitized = "provider startup rejected credential [REDACTED_OPENROUTER_KEY]"
+    assert sanitized in logged
+    assert sanitized in displayed
+    assert key not in logged
+    assert key not in displayed
+    if existing_transcript:
+        assert logged.startswith("previous invocation\n")
+
+
+def test_buffered_stdin_close_failure_preserves_transcript_and_drains_diagnostics(
+    tmp_path, monkeypatch, capsys,
+):
+    key = "sk-or-v1-" + "c" * 32
+
+    class BufferedStdin(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.accepted_prompt = None
+
+        def write(self, prompt):
+            self.accepted_prompt = prompt
+            return super().write(prompt)
+
+        def close(self):
+            if not self.closed:
+                super().close()
+                raise BrokenPipeError("provider closed stdin before buffered input was flushed")
+
+    class EarlyExitProcess:
+        def __init__(self):
+            self.stdin = BufferedStdin()
+            self.stdout = io.StringIO(f"provider startup failed with {key}\n")
+            self.returncode = None
+            self.killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self):
+            if self.returncode is None:
+                self.returncode = 23
+            return self.returncode
+
+    process = EarlyExitProcess()
+    monkeypatch.setattr(cli_mod, "_resolve_cli", lambda name: name)
+    monkeypatch.setattr(cli_mod.subprocess, "Popen", lambda *args, **kwargs: process)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text("previous invocation\n", encoding="utf-8")
+    request = request_for(tmp_path, transcript_path=transcript, append=False)
+
+    result = create_agent_backend("claude").invoke(request)
+
+    assert process.stdin.accepted_prompt == request.prompt
+    assert result.success is False
+    assert result.timed_out is False
+    assert result.exit_code == 23
+    assert result.error
+    assert process.killed is False
+    assert process.stdin.closed
+    assert process.stdout.closed
+    logged = transcript.read_text(encoding="utf-8")
+    displayed = capsys.readouterr().out
+    assert logged.startswith("previous invocation\n")
+    assert "provider startup failed with [REDACTED_OPENROUTER_KEY]" in logged
+    assert "provider startup failed with [REDACTED_OPENROUTER_KEY]" in displayed
+    assert key not in logged
+    assert key not in displayed
+
+
 def test_timeout_does_not_carry_into_a_later_startup_failure(tmp_path, monkeypatch):
     backend = python_backend(monkeypatch, "import sys, time; sys.stdin.read(); time.sleep(30)")
     timed_out = backend.invoke(request_for(tmp_path, timeout=0.2))

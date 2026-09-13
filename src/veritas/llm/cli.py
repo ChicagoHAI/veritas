@@ -146,11 +146,17 @@ class CliAgentBackend:
                 watchdog.daemon = True
                 watchdog.start()
 
-            # A failed launch must leave any prior attempt's transcript intact.
-            mode = "a" if request.append else "w"
-            with open(request.transcript_path, mode, encoding="utf-8") as log_f:
+            delivery_error = None
+            try:
                 process.stdin.write(request.prompt)
                 process.stdin.close()
+            except BrokenPipeError as exc:
+                # An early rejection can leave diagnostics on stdout/stderr.
+                delivery_error = exc
+
+            # Incomplete prompt delivery must not erase the prior attempt's log.
+            mode = "a" if request.append or delivery_error is not None else "w"
+            with open(request.transcript_path, mode, encoding="utf-8") as log_f:
                 for line in iter(process.stdout.readline, ""):
                     line = sanitize_text(line)
                     print(line, end="")
@@ -158,6 +164,10 @@ class CliAgentBackend:
                 return_code = process.wait()
             if timed_out:
                 print(f"  Timeout after {request.timeout}s")
+            if delivery_error is not None:
+                return self._failure(
+                    delivery_error, timed_out=timed_out, exit_code=return_code,
+                )
             return AgentResult(
                 success=return_code == 0,
                 timed_out=timed_out,
