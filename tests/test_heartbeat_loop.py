@@ -2,12 +2,12 @@
 
 The loop turns one uninterrupted agent call into a series of resumed ones so a
 time-budget cutoff ends in a hand-off rather than a silent kill. Its decisions
-are pure control flow over `_invoke_provider`'s outcome, so they are driven
+are pure control flow over `_invoke_agent`'s outcome, so they are driven
 here with a scripted fake provider and a fake clock — no subprocess, no agent.
 
 What these pin down:
 
-  - which CLI flags each call gets (start a session vs. resume one)
+  - which session operation each call requests (start vs. resume)
   - which check-in message each call carries (continue / stuck / wrap-up)
   - that a failed resume is recovered from rather than ending the phase
   - that the transcript is never truncated after the first call
@@ -30,6 +30,7 @@ from veritas.core.runner import (
     WRAP_UP_MAX_SECONDS,
     ReplicationRunner,
 )
+from veritas.llm import AgentResult
 from veritas.templates.prompt_generator import PromptGenerator
 
 SESSION_INSTRUCTIONS = "<<full session instructions>>"
@@ -56,10 +57,9 @@ class FakeClock:
 
 
 class FakeProvider:
-    """Scripted stand-in for `_invoke_provider`, recording every call."""
+    """Scripted stand-in for `_invoke_agent`, recording every call."""
 
-    def __init__(self, runner, clock, script):
-        self.runner = runner
+    def __init__(self, clock, script):
         self.clock = clock
         self.script = list(script)
         self.calls = []
@@ -75,8 +75,7 @@ class FakeProvider:
         # only way the budget can run out while no session is live.
         burns_the_tick = kind in (TIMEOUT, FAILED_SLOW)
         self.clock.now += (kwargs.get("timeout") or 0) if burns_the_tick else 0.0
-        self.runner._last_invocation_timed_out = kind == TIMEOUT
-        return kind == SUCCESS
+        return AgentResult(success=kind == SUCCESS, timed_out=kind == TIMEOUT)
 
     # -- accessors the assertions read ------------------------------------
 
@@ -84,17 +83,14 @@ class FakeProvider:
     def prompts(self):
         return [c["prompt"] for c in self.calls]
 
-    def flags(self, i):
-        return self.calls[i]["extra_cli_args"]
-
     def session_id(self, i):
-        return self.calls[i]["extra_cli_args"][1]
+        return self.calls[i]["session"].session_id
 
     def starts_session(self, i):
-        return self.calls[i]["extra_cli_args"][0] == "--session-id"
+        return self.calls[i]["session"].operation == "start"
 
     def resumes(self, i):
-        return self.calls[i]["extra_cli_args"][0] == "--resume"
+        return self.calls[i]["session"].operation == "resume"
 
 
 @pytest.fixture
@@ -122,8 +118,8 @@ def drive(tmp_path, monkeypatch, budget, script=(), heartbeat=MIN_HEARTBEAT_SECO
     clock = FakeClock()
     monkeypatch.setattr(runner_mod.time, "monotonic", clock.monotonic)
 
-    fake = FakeProvider(runner, clock, script)
-    monkeypatch.setattr(runner, "_invoke_provider", fake)
+    fake = FakeProvider(clock, script)
+    monkeypatch.setattr(runner, "_invoke_agent", fake)
 
     plan = ReplicationPlan(
         environment={},
@@ -134,7 +130,6 @@ def drive(tmp_path, monkeypatch, budget, script=(), heartbeat=MIN_HEARTBEAT_SECO
         session_instructions=SESSION_INSTRUCTIONS,
         log_path=tmp_path / "transcript.jsonl",
         replication_plan=plan,
-        provider="claude",
         budget=budget,
     )
     return result, fake

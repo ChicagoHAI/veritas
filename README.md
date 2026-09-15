@@ -266,6 +266,13 @@ pytest
 The suite covers the deterministic layers — the score computation, the
 bibliographic resolver, the manager loop, and the execution-facts pass.
 
+Agent execution is accessed through `veritas.llm.create_agent_backend`.
+Backend requests carry the prompt, working directory, transcript destination,
+environment, timeout, and optional session operation. The factory currently
+provides Claude, Codex, and Gemini CLI adapters; the pipeline owns artifact
+parsing, scoring, and retry policy. Runtime tests also cover command construction,
+environment handling, transcript capture, and session continuation.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE). Veritas bundles third-party components

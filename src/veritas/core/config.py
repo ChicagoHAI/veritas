@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from veritas.core.config_env import _env_int, _env_opt_int, _env_str
+from veritas.llm import SUPPORTED_PROVIDERS
 
 
 # All valid AI providers
-VALID_PROVIDERS = ["claude", "codex", "gemini"]
+VALID_PROVIDERS = list(SUPPORTED_PROVIDERS)
 
 # Input mode literal
 InputMode = Literal["full", "paper-only", "repo-only"]
@@ -135,7 +136,7 @@ class Config:
     # Per-phase timeouts (seconds); None disables the timeout for that phase.
     # Defaults are None — killing a hung run discards partial progress, which
     # is worse than letting it finish. For replicate, this is mitigated by the
-    # session-resume heartbeat loop (see runner.py::_replicate, RESUME_CAPABLE)
+    # session-resume heartbeat loop (see runner.py::_replicate)
     # when the provider supports it; other phases still have no checkpoint and
     # should stay None unless a mechanism to recover the work exists for them.
     #
@@ -149,8 +150,8 @@ class Config:
     evaluate_timeout: Optional[int] = None
 
     # How often the replicate heartbeat loop checks in when replicate_timeout
-    # is set and the provider supports session resume (see runner.py::_replicate,
-    # RESUME_CAPABLE). Clamped up to MIN_HEARTBEAT_SECONDS at use — a killed
+    # is set and the backend supports session resume (see runner.py::_replicate).
+    # Clamped up to MIN_HEARTBEAT_SECONDS at use — a killed
     # session needs a brief warm-up before it's resumable at all, so an
     # interval much shorter than that risks losing a tick's work outright.
     #
