@@ -1,0 +1,637 @@
+"""Reconstruct the agent's action sequence and file states from a provider
+transcript (the raw stream-json JSONL veritas saves for each phase).
+
+This is the executable form of the observation-package completeness test:
+"can the whole run be rebuilt from the log alone?" It answers two questions:
+
+  1. SEQUENCE — the exact ordered list of actions (reads, edits, writes,
+     commands), i.e. the sequence of writing code.
+  2. STATE — the content of every agent-edited file after any action N
+     (``--upto N``), including files outside the codebase (e.g. memory or
+     evidence files), since those flow through the same logged tool calls.
+
+It also reports what it provably CANNOT rebuild: files created by *executed
+commands* (a script the agent ran writing ``results.json``) exist in the log
+only as the command line, not as bytes. Such commands are flagged OPAQUE, and
+any final file not accounted for by a Write/Edit traces back to one of them.
+
+Currently parses the claude CLI stream-json format (``type: assistant`` events
+carrying ``tool_use`` blocks; ``type: user`` events carrying ``tool_result``).
+Codex/gemini transcripts need their own adapters.
+
+Usage:
+    python -m veritas.utils.transcript_replay TRANSCRIPT.jsonl OUT_DIR \
+        [--seed DIR] [--upto N] [--strip-prefix PREFIX]
+
+    --seed DIR   initial file tree (e.g. a reconstructed codegen tree, or the
+                 pre-run repo copy); edits to pre-existing files can only be
+                 replayed when their prior content is known.
+    --upto N     materialize state as of action N instead of the end.
+    --strip-prefix PREFIX
+                 extra absolute path prefix to strip, repeatable. The built-in
+                 prefixes are the docker-mode container paths; a host-mode
+                 transcript records that host's own absolute paths, which need
+                 stripping here to line up with --seed and the codebase copy.
+
+Validation against a real run: reconstruct codegen, then replicate seeded on
+it, then diff against the run's final codebase::
+
+    python -m veritas.utils.transcript_replay \
+        <run>/replication/codegen_transcript.jsonl /tmp/rc
+    python -m veritas.utils.transcript_replay \
+        <run>/replication/replication_transcript.jsonl /tmp/rf \
+        --seed /tmp/rc/reconstructed
+    diff -r /tmp/rf/reconstructed <run>/replication/codebase
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
+
+# Commands that plausibly mutate the filesystem -> flagged opaque. Heuristic
+# by design: over-flagging costs a false warning, under-flagging hides a gap.
+MUTATING_BASH = re.compile(
+    r"(>>?|\btee\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\btouch\b|\bsed\s+-i"
+    r"|\bpip3?\s+install|\buv\s+(pip|sync|add|venv)"
+    r"|\bgit\s+(apply|am|checkout|reset)"
+    r"|\bpython3?\s+|\bRscript\b|\bmake\b|\bcurl\b|\bwget\b|\btar\b|\bunzip\b"
+    # Running a script hands the filesystem to code this log never shows:
+    # `bash setup.sh`, `sh build.sh`, `./run.sh`.
+    r"|\b(ba|z)?sh\s+\S|\.{1,2}/\S)"
+)
+
+# Container path prefixes stripped so replayed paths line up with a --seed
+# tree and with the on-host copy of the codebase. These are docker-mode paths;
+# a host-mode run's transcript carries whatever absolute paths that host used,
+# so it needs --strip-prefix to line up the same way.
+STRIP_PREFIXES = (
+    "/workspace/output/replication/codebase/",
+    "/workspace/repo/",
+)
+
+# Input keys under which a tool names the file it acts on. Used to salvage a
+# path from a tool replay does not model, so that file can at least be marked
+# UNKNOWN instead of left holding stale content. "path" is deliberately absent:
+# search tools (Grep, Glob) use it for the directory they scan, not a file they
+# touch, and honoring it would inject a phantom UNKNOWN entry per search call.
+_PATH_INPUT_KEYS = ("file_path", "notebook_path", "filePath")
+
+# Names an out_dir may contain and still be recognized as a prior replay
+# output, i.e. safe for this tool to delete and rewrite.
+_REPLAY_OUTPUT_ENTRIES = {"report.md", "reconstructed"}
+
+
+class _Unknown:
+    """Sentinel: file demonstrably exists but its bytes never appear in the log."""
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "<unknown content>"
+
+
+UNKNOWN = _Unknown()
+
+# A Read result line: `cat -n` numbering, then a tab, then the file's line.
+_READ_LINE = re.compile(r"^\s*(\d+)\t(.*)$")
+
+# Prose the CLI appends when a Read returned only part of the file. The
+# numbered block then starts at line 1 but is a prefix, not the whole file,
+# so it must be rejected rather than stored as complete content.
+_TRUNCATION_HINT = re.compile(
+    r"(truncat|showing\s+(first|lines)|first\s+\d+\s+(of|lines)"
+    r"|use\s+offset|to\s+read\s+more|remaining\s+lines)",
+    re.IGNORECASE,
+)
+
+
+def _denumber_read(text: str) -> Optional[str]:
+    """Recover file content from a `cat -n`-formatted Read result.
+
+    Returns None when the result isn't a whole-file dump — an empty-file
+    notice, a bare system reminder, an image, a partial read (an ``offset``
+    starts the numbering above 1), or a dump the CLI truncated (numbering
+    starts at 1 but trailing prose says it stopped early) — so the caller
+    leaves the path UNKNOWN rather than storing a prefix as if it were the
+    whole file.
+
+    Content recovered this way is *approximate*: the result is the CLI's
+    rendering of the file, not its bytes, so whatever that rendering
+    normalizes or elides is lost. Callers should record the path in
+    ``ReplayResult.approximate``.
+
+    Trailing-newline state is *not* part of that approximation. The tool
+    numbers ``content.split("\\n")``, so a newline-terminated file emits a
+    final empty numbered entry, which this function keeps: joining the
+    recovered lines is exact in both directions, and appending a newline
+    would double-count that entry.
+    """
+    out: List[str] = []
+    first_no: Optional[int] = None
+    tail: List[str] = []
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = _READ_LINE.match(line)
+        if m:
+            if first_no is None:
+                first_no = int(m.group(1))
+            out.append(m.group(2))
+        elif out:
+            # Content ended. Keep the whole remainder: a truncation notice is
+            # usually separated from the numbered block by a blank line, so
+            # inspecting only this one line would miss it.
+            tail = lines[i:]
+            break
+        else:
+            return None  # never looked like a file dump
+    if first_no != 1:
+        return None  # partial read: this is not the whole file
+    if any(_TRUNCATION_HINT.search(t) for t in tail):
+        return None  # truncated dump: the numbered block is a prefix
+    return "\n".join(out)
+
+
+@dataclass
+class Action:
+    """One tool call, in stream order."""
+
+    seq: int
+    tool: str
+    input: Dict[str, Any]
+    result_text: Optional[str] = None
+    is_error: bool = False
+
+
+@dataclass
+class ReplayResult:
+    vfs: Dict[str, Any]                       # path -> content str | UNKNOWN
+    sequence: List[str] = field(default_factory=list)
+    opaque: List[Tuple[int, str]] = field(default_factory=list)
+    broken: List[Tuple[int, str, str]] = field(default_factory=list)
+    # Tool calls replay does not model — anything outside Write/Edit/Bash/Read:
+    # MultiEdit, NotebookEdit, or a Task subagent whose own tool calls never
+    # reach this transcript. Tracked because silently skipping them produces a
+    # confidently wrong tree, which is the opposite of this tool's purpose.
+    unmodeled: List[Tuple[int, str]] = field(default_factory=list)
+    # Paths whose content was recovered from a Read result rather than from a
+    # Write. Byte-identity is not guaranteed for these: a Read result is the
+    # CLI's rendering of the file, not its bytes. Kept separate so the report
+    # never claims exact reconstruction for content it only inferred, and
+    # cleared as soon as a Write supplies the exact bytes.
+    approximate: Set[str] = field(default_factory=set)
+    # Seed paths whose bytes could not be read (binary, permissions, a
+    # dangling symlink). They are UNKNOWN in the VFS -- an Edit on one still
+    # cannot replay -- but they are not a gap in the *log*: no transcript was
+    # ever supposed to carry them. Kept out of unknown_paths so that section
+    # stays a statement about the log's coverage.
+    seed_unreadable: Set[str] = field(default_factory=set)
+
+    @property
+    def reconstructed(self) -> Dict[str, str]:
+        return {p: c for p, c in self.vfs.items() if c is not UNKNOWN}
+
+    @property
+    def unknown_paths(self) -> List[str]:
+        return sorted(
+            p for p, c in self.vfs.items()
+            if c is UNKNOWN and p not in self.seed_unreadable
+        )
+
+    @property
+    def unreadable_seed_paths(self) -> List[str]:
+        # Computed from the VFS, so a path a later Write supplied bytes for
+        # drops out of here on its own.
+        return sorted(
+            p for p, c in self.vfs.items()
+            if c is UNKNOWN and p in self.seed_unreadable
+        )
+
+
+def iter_events(path: Path) -> Iterator[Dict[str, Any]]:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (ValueError, RecursionError):
+                # JSONDecodeError is a ValueError, but json.loads also raises
+                # bare ValueError (>4300-digit ints, Py3.11+) and RecursionError
+                # (deep nesting); a malformed line just gets skipped.
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
+
+def extract_actions(transcript_path: Path) -> List[Action]:
+    """Flatten a claude stream-json transcript into ordered tool actions.
+
+    Order is the order of ``tool_use`` blocks in the event stream; array
+    order within one assistant message preserves issue order for parallel
+    calls. Results are attached by ``tool_use_id``.
+
+    One transcript file legitimately holds several appended provider
+    invocations (a JSON-repair re-prompt, a heartbeat session resume), each
+    opening with a ``system``/``init`` line and each capable of re-emitting
+    ``tool_use`` blocks the earlier session already carried. A block id is
+    honored once: a duplicate would take a fresh sequence number, inflating
+    the action count and replaying its Edit a second time against content
+    that already has it applied.
+    """
+    actions: List[Action] = []
+    by_id: Dict[str, Action] = {}
+    seen_ids: set[str] = set()
+    for event in iter_events(transcript_path):
+        # `message` is a dict in the claude format, but the docstring invites
+        # other providers' transcripts and a stray string would otherwise
+        # raise AttributeError on .get; core/diligence.py guards the same way.
+        msg = event.get("message")
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        if event.get("type") == "assistant":
+            for block in content:
+                if block.get("type") == "tool_use":
+                    block_id = block.get("id") or ""
+                    if block_id and block_id in seen_ids:
+                        continue
+                    action = Action(
+                        seq=len(actions) + 1,
+                        tool=block.get("name", "?"),
+                        input=block.get("input", {}),
+                    )
+                    actions.append(action)
+                    # Index only real ids: keying id-less blocks on "" made
+                    # them share one slot, cross-attaching their results.
+                    if block_id:
+                        seen_ids.add(block_id)
+                        by_id[block_id] = action
+        elif event.get("type") == "user":
+            for block in content:
+                if block.get("type") != "tool_result":
+                    continue
+                action = by_id.get(block.get("tool_use_id", ""))
+                if action is None:
+                    continue
+                if action.result_text is not None:
+                    # The tool_use dedup above is one-sided: a resumed session
+                    # re-emits its results too, and those still resolve through
+                    # by_id. First result wins -- a replay can carry a
+                    # shortened form of the same output, and letting it
+                    # overwrite would discard content the original recovered.
+                    continue
+                rc = block.get("content")
+                if isinstance(rc, list):
+                    texts = [c.get("text", "") for c in rc if isinstance(c, dict)]
+                    action.result_text = "\n".join(t for t in texts if t)
+                elif isinstance(rc, str):
+                    action.result_text = rc
+                action.is_error = bool(block.get("is_error"))
+    return actions
+
+
+def _norm(path_str: str, strip_prefixes: Sequence[str] = STRIP_PREFIXES) -> str:
+    # Transcript paths are posix in docker mode but can carry backslashes when
+    # the agent ran on a Windows host. Normalize before matching so prefixes
+    # still strip, and so VFS keys never disagree with the posix keys built
+    # from a --seed tree (or materialize as one filename containing "\").
+    p = path_str.replace("\\", "/")
+    # Longest first, so a caller who passes both a run root and its codebase
+    # subdirectory gets the more specific match.
+    for prefix in sorted(strip_prefixes, key=len, reverse=True):
+        if p.startswith(prefix):
+            return p[len(prefix):]
+    return p
+
+
+def _apply_edit(content: str, old: str, new: str, replace_all: bool) -> Optional[str]:
+    # An empty old_string is never a legitimate anchor, but str.replace treats
+    # it as a match at offset 0 -- so an Edit whose old_string is missing from
+    # the log would silently prepend new_string and report no problem.
+    if not old or old not in content:
+        return None
+    return content.replace(old, new) if replace_all else content.replace(old, new, 1)
+
+
+def replay(
+    actions: List[Action],
+    seed_dir: Optional[Path] = None,
+    upto: Optional[int] = None,
+    strip_prefixes: Sequence[str] = STRIP_PREFIXES,
+) -> ReplayResult:
+    """Replay file-editing actions into a virtual file tree."""
+    def norm(path_str: str) -> str:
+        return _norm(path_str, strip_prefixes)
+
+    vfs: Dict[str, Any] = {}
+    seed_unreadable: Set[str] = set()
+    if seed_dir:
+        seed_dir = Path(seed_dir)
+        if not seed_dir.is_dir():
+            # rglob on a missing directory yields nothing, so a typo would
+            # report every Edit as broken with reason "file pre-existed
+            # without --seed" -- telling a user who did pass one that they
+            # didn't, and dressing the typo up as a finding about the log.
+            raise ValueError(f"--seed {seed_dir} is not a directory")
+        for p in seed_dir.rglob("*"):
+            # .git is not part of the tree the agent edits, and a real repo
+            # copy carries thousands of binary objects that would otherwise
+            # each be reported as content the log failed to cover.
+            if p.is_file() and ".git" not in p.relative_to(seed_dir).parts:
+                # as_posix(), not str(): on Windows str() yields backslash
+                # keys that never match _norm's forward-slash transcript keys,
+                # so every seeded Edit would look unreconstructable.
+                key = p.relative_to(seed_dir).as_posix()
+                try:
+                    # newline="": universal-newline translation would turn a
+                    # CRLF file into LF, so a later Edit anchored on CRLF
+                    # would miss. Path.read_text gained newline= only in 3.13.
+                    with open(p, encoding="utf-8", newline="") as f:
+                        vfs[key] = f.read()
+                except (UnicodeDecodeError, OSError):
+                    # Binary, unreadable, or a dangling symlink: the file
+                    # exists but its bytes aren't available to seed an Edit.
+                    vfs[key] = UNKNOWN
+                    seed_unreadable.add(key)
+
+    res = ReplayResult(vfs=vfs, seed_unreadable=seed_unreadable)
+
+    for a in actions:
+        if upto is not None and a.seq > upto:
+            break
+        status = "ERR" if a.is_error else "ok"
+
+        if a.tool == "Write":
+            path = norm(a.input.get("file_path", "?"))
+            body = a.input.get("content", "")
+            if not a.is_error:
+                vfs[path] = body
+                # These are the exact bytes. If an earlier Read had only
+                # inferred this file, the inference no longer applies.
+                res.approximate.discard(path)
+            res.sequence.append(
+                f"{a.seq:>4}. [{status}] Write  {path}  ({len(body.splitlines())} lines)"
+            )
+        elif a.tool == "Edit":
+            path = norm(a.input.get("file_path", "?"))
+            cur = vfs.get(path)
+            if a.is_error:
+                res.sequence.append(
+                    f"{a.seq:>4}. [ERR] Edit   {path}  (edit failed, no state change)"
+                )
+            elif cur is None or cur is UNKNOWN:
+                res.broken.append((
+                    a.seq, path,
+                    "no known prior content (file pre-existed without --seed, "
+                    "or was created by a command)",
+                ))
+                vfs[path] = UNKNOWN
+                res.approximate.discard(path)
+                res.sequence.append(
+                    f"{a.seq:>4}. [{status}] Edit   {path}  "
+                    "(UNRECONSTRUCTABLE: prior content unknown)"
+                )
+            else:
+                old = a.input.get("old_string", "")
+                new = _apply_edit(
+                    cur,
+                    old,
+                    a.input.get("new_string", ""),
+                    a.input.get("replace_all", False),
+                )
+                if new is None:
+                    res.broken.append((
+                        a.seq, path,
+                        "edit has no old_string to anchor on"
+                        if not old else
+                        "old_string not found in reconstructed content",
+                    ))
+                    # The edit demonstrably landed on the real file, so the
+                    # content we hold has diverged from it. Keeping those
+                    # bytes would materialize a file we know is wrong while
+                    # the "could not be recovered" section stayed empty.
+                    vfs[path] = UNKNOWN
+                    res.approximate.discard(path)
+                    res.sequence.append(
+                        f"{a.seq:>4}. [{status}] Edit   {path}  (MISMATCH: old_string not found)"
+                    )
+                else:
+                    vfs[path] = new
+                    res.sequence.append(f"{a.seq:>4}. [{status}] Edit   {path}")
+        elif a.tool == "Bash":
+            cmd = a.input.get("command", "")
+            first = cmd.splitlines()[0][:90] if cmd else "?"
+            mutating = bool(MUTATING_BASH.search(cmd))
+            if mutating:
+                # A non-zero exit is not proof nothing was written: a script
+                # that failed halfway still leaves whatever it wrote first.
+                # Excluding these hid exactly the gap this list exists for.
+                note = " [exited non-zero; may have written before failing]"
+                res.opaque.append((a.seq, first + (note if a.is_error else "")))
+            tag = "Bash*" if mutating else "Bash "
+            res.sequence.append(f"{a.seq:>4}. [{status}] {tag}  {first}")
+        elif a.tool == "Read":
+            path = norm(a.input.get("file_path", "?"))
+            res.sequence.append(f"{a.seq:>4}. [{status}] Read   {path}")
+            # A successful Read recovers the content of a file we don't have
+            # bytes for -- either never seen (None: pre-existed without --seed)
+            # or seen but unrecoverable (UNKNOWN). Both cases matter: recovering
+            # here is what lets a later Edit on that file replay.
+            cur = vfs.get(path)
+            # A bounded Read returns a slice. An offset read is caught by
+            # _denumber_read via its starting line number, but a limit-only
+            # read numbers from 1 and is indistinguishable from a whole-file
+            # dump in the result text alone -- so reject it from the call's
+            # input instead.
+            bounded = (
+                a.input.get("offset") is not None or a.input.get("limit") is not None
+            )
+            if (
+                not a.is_error
+                and not bounded
+                and a.result_text is not None
+                and (cur is None or cur is UNKNOWN)
+            ):
+                recovered = _denumber_read(a.result_text)
+                if recovered is not None:
+                    vfs[path] = recovered
+                    res.approximate.add(path)
+        else:
+            # An unmodeled tool. If its input names a file, that file's content
+            # is no longer known -- mark it UNKNOWN so a later Edit reports
+            # UNRECONSTRUCTABLE instead of silently applying to stale bytes.
+            touched = next(
+                (a.input[k] for k in _PATH_INPUT_KEYS
+                 if isinstance(a.input.get(k), str)),
+                None,
+            )
+            res.unmodeled.append((a.seq, a.tool))
+            if touched is not None and not a.is_error:
+                path = norm(touched)
+                vfs[path] = UNKNOWN
+                res.approximate.discard(path)
+                res.broken.append((
+                    a.seq, path,
+                    f"{a.tool} is not modeled by replay; content after this "
+                    f"action is unknown",
+                ))
+                res.sequence.append(
+                    f"{a.seq:>4}. [{status}] {a.tool}  {path}  "
+                    "(UNMODELED: state unknown)"
+                )
+            else:
+                res.sequence.append(
+                    f"{a.seq:>4}. [{status}] {a.tool}  (UNMODELED)"
+                )
+
+    return res
+
+
+def write_outputs(res: ReplayResult, out_dir: Path, transcript: Path,
+                  n_actions: int, upto: Optional[int],
+                  force: bool = False) -> None:
+    # out_dir is a bare positional CLI argument and this function deletes it
+    # recursively. Delete only an empty directory or one that looks like a
+    # prior replay output; anything else needs --force. A mistyped path is
+    # otherwise unrecoverable.
+    if out_dir.exists():
+        if not out_dir.is_dir():
+            raise ValueError(f"{out_dir} exists and is not a directory")
+        entries = {p.name for p in out_dir.iterdir()}
+        if entries and not entries <= _REPLAY_OUTPUT_ENTRIES and not force:
+            raise ValueError(
+                f"refusing to delete {out_dir}: it is not empty and does not "
+                f"look like a previous replay output (expected only "
+                f"{', '.join(sorted(_REPLAY_OUTPUT_ENTRIES))}). "
+                f"Choose another directory, or pass --force."
+            )
+        shutil.rmtree(out_dir)
+    tree = out_dir / "reconstructed"
+    tree.mkdir(parents=True)
+
+    # VFS keys come from the transcript, i.e. from agent-authored tool input.
+    # A key containing ".." (or an absolute path no prefix stripped) would
+    # resolve outside the output tree -- and this function rmtree's its
+    # destination, so a stray write here lands in an already-destructive
+    # context. Materialize only what stays inside the tree; report the rest.
+    tree_resolved = tree.resolve()
+    escaped: List[str] = []
+    for path, content in sorted(res.reconstructed.items()):
+        dest = tree / path.lstrip("/")
+        if not dest.resolve().is_relative_to(tree_resolved):
+            escaped.append(path)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # newline="": the default translates "\n" to the platform separator,
+        # so on Windows every materialized file would gain CRLF and the
+        # docstring's `diff -r` check would call every one of them different.
+        with open(dest, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+
+    upto_note = f" (state as of action {upto})" if upto else ""
+    report: List[str] = [
+        f"# Replay report{upto_note}", "",
+        f"Transcript: {transcript}",
+        f"Actions found: {n_actions}", "",
+        "## Action sequence", "",
+    ]
+    report += res.sequence
+    report += ["", "## Opaque commands (may have written files NOT captured in the log)", ""]
+    report += [f"  action {seq}: {cmd}" for seq, cmd in res.opaque] or ["  (none)"]
+    report += ["", "## Unreconstructable edits", ""]
+    report += [f"  action {seq}: {path} — {why}" for seq, path, why in res.broken] or ["  (none)"]
+    if res.unmodeled:
+        report += [
+            "", "## Unmodeled tool calls (effect on the tree NOT replayed)", "",
+            "  replay models Write / Edit / Bash / Read. These calls may have",
+            "  changed files in ways this reconstruction does not reflect; a",
+            "  Task subagent's own tool calls never reach this transcript at all.",
+            "",
+        ]
+        report += [f"  action {seq}: {tool}" for seq, tool in res.unmodeled]
+    if escaped:
+        report += [
+            "", "## Paths not materialized (escape the output tree)", "",
+            "  Reconstructed, but the path resolves outside the output "
+            "directory.", "",
+        ]
+        report += [f"  {p}" for p in escaped]
+    if res.approximate:
+        report += [
+            "", "## Files recovered from Read output (approximate)", "",
+            "  Content came from a Read result, not a logged Write: it is the",
+            "  CLI's rendering of the file rather than its bytes, so anything",
+            "  that rendering normalizes or elides does not survive.", "",
+        ]
+        report += [f"  {p}" for p in sorted(res.approximate)]
+    if res.unknown_paths:
+        report += ["", "## Files whose content could not be recovered", ""]
+        report += [f"  {p}" for p in res.unknown_paths]
+    if res.unreadable_seed_paths:
+        report += [
+            "", "## Seed files whose bytes could not be read", "",
+            "  Binary, unreadable, or a dangling symlink in the --seed tree.",
+            "  Not a gap in the log: no transcript was going to carry these.",
+            "  Listed because an Edit to one of them still cannot replay.", "",
+        ]
+        report += [f"  {p}" for p in res.unreadable_seed_paths]
+    (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    # The opening sentence wraps across lines; collapse the whole first
+    # paragraph so --help doesn't print a truncated fragment of it.
+    ap = argparse.ArgumentParser(
+        description=" ".join(__doc__.split("\n\n")[0].split())
+    )
+    ap.add_argument("transcript", type=Path)
+    ap.add_argument("out_dir", type=Path)
+    ap.add_argument("--seed", type=Path, default=None)
+    ap.add_argument("--upto", type=int, default=None)
+    ap.add_argument(
+        "--strip-prefix", action="append", default=[], metavar="PREFIX",
+        help="Extra absolute path prefix to strip, repeatable. Needed for "
+             "host-mode transcripts, whose paths aren't under /workspace/.",
+    )
+    ap.add_argument(
+        "--force", action="store_true",
+        help="Delete OUT_DIR even when it holds files this tool did not write.",
+    )
+    args = ap.parse_args(argv)
+
+    # Normalize to the trailing-slash form the built-ins use, so a prefix
+    # given without one still strips the separator instead of leaving a
+    # leading "/" that would make the key look absolute.
+    strip_prefixes = tuple(
+        p.replace("\\", "/").rstrip("/") + "/" for p in args.strip_prefix
+    ) + STRIP_PREFIXES
+
+    actions = extract_actions(args.transcript)
+    try:
+        res = replay(actions, args.seed, args.upto, strip_prefixes)
+        write_outputs(res, args.out_dir, args.transcript, len(actions),
+                      args.upto, force=args.force)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
+
+    print(
+        f"Actions: {len(actions)}  |  reconstructed files: {len(res.reconstructed)}"
+        f" ({len(res.approximate)} approximate)"
+        f"  |  opaque commands: {len(res.opaque)}  |  broken edits: {len(res.broken)}"
+        f"  |  unmodeled tools: {len(res.unmodeled)}"
+    )
+    print(f"Report: {args.out_dir / 'report.md'}")
+    print(f"Tree:   {args.out_dir / 'reconstructed'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
