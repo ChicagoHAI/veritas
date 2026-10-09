@@ -135,7 +135,6 @@ Focus on the **claims listed above**. Do not attempt to reproduce setup-only ass
 ## Rules
 
 - Order steps logically: setup first, then execution, then verification
-- Include 3-10 steps (enough to cover the claims, not exhaustive)
 - The agent executing this plan will work on a writable copy of the repo at `{{ codebase_dir }}/`
 - The agent may fix issues in the code to keep replication going (deprecated APIs, missing imports, configuration problems)
 - If you find multiple entry points or experiments, prioritize the one that targets the most central claim
